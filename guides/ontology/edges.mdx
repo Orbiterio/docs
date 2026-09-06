@@ -3422,94 +3422,187 @@ Before enabling any theatre graph slice, verify:
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span>
+## Media edges
 
-A person's appearance in a podcast episode, YouTube video, or conference session — the `MediaAppearance` node introduced by the media lane and shared with the podcast lane. Weight is set by the relationship class the appearance implies: an interview binds host and guest tightly (`COLLABORATORS`-class), a panel loosely, a conference hardly at all (a hub).
+<a id="media-edges" />
 
-| | |
-|---|---|
-| **Pattern** | `(Person)-[APPEARED_IN]->(MediaAppearance)` |
-| **Weight** | **15** interview host / guest · **20** panelist · **45** conference speaker (**15** when the event is below the speaker-count hub threshold, default 50) |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+**Go proposal revised 2026-09-06; no writer is implemented by this documentation pass.** [Media build plan](/guides/open-work/roadmap/media-co-occurrence) · [Node contracts](/guides/ontology/nodes#media-appearances). Keep the 15/20/45 appearance and 55 news bands; propose `SESSION_OF` at 30 to resolve the old media `PART_OF` collision with the settled project reservation. All source/graph/scoring flags start disabled.
 
-| Relationship class | Derivation | Weight per edge | Pair |
-|---|---|---|---|
-| Interview host ↔ guest | Two `APPEARED_IN` on one interview appearance | **15** (`COLLABORATORS`-grade per edge) | 30 — two 15s through a degree-3 episode node, no hub risk |
-| Co-panelists, same session | Two `APPEARED_IN {role: panelist}` on one session | **20** | 40 (`CO_NOMINATED_WITH`-grade) |
-| Co-speakers, same conference | Shared `Event` via `PART_OF` | **45** at hub-scale events (speaker count ≥ threshold, default 50); **15** below it | evidence only (the `PERFORMED_AT` analogue). Same rule as [`SPOKE_AT`](#spoke_at), reconciled 2026-09-05 |
+### Shared media edge envelope
 
-**Description template:** `{Person} appeared in {title} as {role}.` — `"…on {show}"` appended for podcast episodes.
+All three contracts below require this envelope. Examples show edge-specific properties **in addition** to it. Use deterministic descriptions, bounded scalar arrays and permitted evidence; full JSON claims, source text and per-group role history remain SQL-side.
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `role` | enum `host` \| `guest` \| `panelist` \| `speaker` | ✓ | Drives pair derivation and the weight |
-| `mention_ref` | id | ✓ | Audit link to `media_appearance_mention` |
-| `source_urls`, `confidence` | | ✓ | Provenance \+ resolution outcome |
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `uuid` | UUID string · required | Stable relationship identity. Never keyed by title, current role, weight, URL or retry. |
+| `created_at`, `updated_at` | RFC3339 UTC strings · required | Preserve creation time; update when accepted material inputs change. |
+| `description`, `description_generated_at` | string/timestamp · required | Explain the supported relationship without asserting contact, friendship or endorsement. Timestamp changes when the description is regenerated. |
+| `weight` | integer · required | Locked 1–100 convention; weights alone do not authorize scoring. |
+| `source`, `source_names`, `source_urls` | string / bounded string arrays · required | `source=media` or `media_news`; actual permitted supporting sources and URLs retained separately. |
+| `evidence_refs`, `provenance_ref` | bounded string array / string · required | Accepted mention/article evidence and a revisioned manifest for complete permitted detail. |
+| `chosen_fact_id`, `projection_revision`, `policy_version` | UUID string / integer / string · required | Elected entity-to-entity claim, desired data revision and applied policy. |
+| `source_observed_at` | timestamp · required | Observation time, not inferred appearance time. |
+| `layer`, `excluded_from_scoring` | enum / boolean · required | `appearance` for verified participation or `evidence` for context. Every media edge initially excluded; only approved interaction memberships may later change eligibility. |
+| `temporal_basis`, `valid_from`, `valid_to` | enum / date or timestamp · basis required; dates optional | `source_occurrence|source_publication|unknown`. Actual precision carried in `date_precision`; never turn an upload/capture time or year-only evidence into attendance dates. |
+| `date_precision` | enum · required when temporal dates are present | `timestamp|day|month|year`; partial date strings retain their source precision. Omit dates when unknown. |
 
-**Deep Bio mapping (decided 2026-09-05).** The Deep Bio ledger's `works[].type = podcast` rows (3 in the first batch: two guests, one host) are written as this edge: `role` from the row, weight **15** (an episode is an interview-class appearance), target `MediaAppearance {source: "podcast"}` keyed on the episode URL (`episode_ref`), title and year from the row, and the ledger's `source_urls`, `evidence` and `mention_ref` as provenance. The interim ledger name `APPEARED_ON` is retired; the gate vocabulary in orbiter-universe `deepbio/edges.go` follows in a code change.
-
-**Example** — real Deep Bio ledger row, 2026-09-05 batch, shown as an `APPEARED_IN` edge:
+**Synthetic shared envelope:**
 
 ```json
 {
-  "description": "Will Misselbrook appeared in \"How Great Brands Earn Your Attention\" as guest, on FocusMatters.",
-  "role": "guest",
+  "uuid": "00000000-0000-4000-8000-000000000201",
+  "created_at": "2026-09-06T12:00:00Z",
+  "updated_at": "2026-09-06T12:05:00Z",
+  "description": "Example Guest appeared in Example publisher interview as guest.",
+  "description_generated_at": "2026-09-06T12:05:00Z",
   "weight": 15,
-  "confidence": "confirmed",
-  "source_urls": ["https://podcasts.apple.com/us/podcast/focusmatters/id1844946598", "https://www.iheart.com/podcast/1333-focusmatters-299422657/"],
-  "evidence": [
-    "Noah and Will explore the dynamics of attention in the marketing and sports industries.",
-    "How Great Brands Earn Your Attention with Will Misselbrook. January 6, 2026 • 66 mins."
-  ],
-  "source_published": ["2026-01-06", "2026-01-06"],
-  "mention_ref": "deep_bio:01a070ef-9842-7495-b6a8-5d070869925c:works[0]",
-  "_target": { "label": "MediaAppearance", "source": "podcast", "title": "How Great Brands Earn Your Attention", "valid_from": "2026-01-06", "episode_ref": "https://podcasts.apple.com/us/podcast/focusmatters/id1844946598" }
+  "source": "media",
+  "source_names": ["example_publisher"],
+  "source_urls": ["https://publisher.example/episodes/42"],
+  "evidence_refs": ["media-mention:example-guest"],
+  "provenance_ref": "media:membership:201:revision:7",
+  "chosen_fact_id": "00000000-0000-4000-8000-000000000301",
+  "projection_revision": 7,
+  "policy_version": "media-v1-proposed",
+  "source_observed_at": "2026-09-06T12:00:00Z",
+  "layer": "appearance",
+  "excluded_from_scoring": true,
+  "temporal_basis": "source_publication",
+  "valid_from": "2026-08-12",
+  "date_precision": "day"
 }
 ```
 
----
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span>
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>PART_OF</span>
+<a id="appeared_in" />
 
-Structural containment: a conference session belongs to its conference. Exists so session-level and conference-level co-occurrence stay distinguishable at query time. Traversal weight **30**, the `RECORDING_OF` analogue; no band. The media lane sketched a minimal `Event` node for the target — that folds into the shipped `Event:Live_*` family ([node model](/guides/ontology/nodes#live_event)), which already carries `event_type`, dates, venue and city. Pattern-distinct from the reserved user-graph project `PART_OF`.
+**Pattern:** `Person → APPEARED_IN → Entity:MediaAppearance`. **Identity:** one canonical person/appearance membership. **Writer:** proposed media facts-elected replay. Multiple supporting sources or roles enrich this membership; they do not create duplicate edges.
 
-| | |
-|---|---|
-| **Pattern** | `(MediaAppearance)-[PART_OF]->(Event:Live_*)` |
-| **Weight** | **30** |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `membership_id`, `mention_ref` | UUID/string · required | Durable membership and chosen supporting mention. Other corroborating mentions remain in `evidence_refs`/manifest. |
+| `role`, `roles` | enum / enum array · required | `host|guest|panelist|moderator|speaker`. Moderator is a proposed explicit addition. Preserve raw source roles relationally. Primary role chosen deterministically from current accepted role claims; group-specific roles govern pair scoring. |
+| `appearance_kind`, `occurrence_status` | enum / `confirmed` · required | Kind from Node Types; scheduled/unknown/cancelled billing does not emit this edge. |
+| `interaction_group_refs` | bounded string array · required, may be empty | Verified shared interaction groups. Empty means no eligible pair. Never infer a group from being in one compilation or on one conference roster. |
+| `identity_confidence`, `identity_basis` | float / enum · required | Separate identity result: `verified_identifier|adjudicated|reviewed`. Name-only or model confidence alone cannot pass. |
+| `speaker_count`, `speaker_count_complete`, `speaker_hub_threshold` | integer/boolean/integer · required for speaker band selection when applicable | Event-level deduplicated count; threshold 50. Unknown or partial count uses 45; verified complete count below 50 uses 15. |
+| `pair_policy_version` | string · required | Pair-aware reader policy, independent of raw edge weight. |
 
-**Description template:** `{Session title} was a session at {Event name} ({year}).`
+| Role/context | Weight | Eligible pair only after reader/source release gates |
+| --- | --- | --- |
+| Interview host or guest | 15 | Host ↔ guest in the same confirmed interaction group; two hops total 30. No guest clique or cohost inference. |
+| Panelist or panel moderator | 20 | Panelist ↔ panelist or moderator ↔ panelist in the same confirmed group; two hops total 40. |
+| Speaker / solo talk | 15 below a complete verified 50-speaker event threshold; otherwise 45 | No inferred close pair with other speakers. Conference-wide adjacency stays evidence. |
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `session_ref` | string |  | Conference agenda anchor, when the appearance carries one |
-| `source_urls` | string\[\] | ✓ | Provenance |
+For multiple accepted roles, use the lowest applicable band from supported role claims as the primary edge weight, with deterministic role-name ordering for ties. **This is display/traversal metadata only:** pair eligibility and per-role pair weights come from the two accepted group memberships, so an interview role cannot cheapen a separate panel or create a cross-segment tie.
 
----
+Proposed scoring group cap: 12 confirmed participants; unknown completeness/oversized groups remain evidence pending a scoped rule. All flags start excluded. Generic paths must exclude raw media paths unless they implement these rules; only the pair-aware adapter may expose eligible encounters. `SESSION_OF` is always excluded from scoring, so neither small nor large conference hubs produce cross-session shortcuts.
+
+**Deep Bio mapping:** `works[].type=podcast` remains an `APPEARED_IN` candidate, with its original ledger reference preserved. Verify a specific episode anchor, participant role and occurrence first. The former Will Misselbrook example used show-level Apple/iHeart URLs: those are discovery references, not sufficient episode IDs. A year-only ledger date stays year-only. Talk rows remain the Live Events owner's `SPOKE_AT` candidates. No code vocabulary changes are made here.
+
+**Synthetic edge-specific example**, combined with the shared envelope above:
+
+```json
+{
+  "membership_id": "00000000-0000-4000-8000-000000000201",
+  "mention_ref": "media-mention:example-guest",
+  "role": "guest",
+  "roles": ["guest"],
+  "appearance_kind": "interview",
+  "occurrence_status": "confirmed",
+  "interaction_group_refs": ["appearance:41:interview:1"],
+  "identity_confidence": 0.97,
+  "identity_basis": "adjudicated",
+  "pair_policy_version": "media-pairs-v1-proposed",
+  "weight": 15,
+  "layer": "appearance",
+  "excluded_from_scoring": true,
+  "description": "Example Guest appeared in Example publisher interview as guest."
+}
+```
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>SESSION_OF</span>
+
+<a id="session_of" />
+<a id="part_of" />
+
+**New proposed name replacing the unbuilt media `PART_OF` proposal.** The old anchor is retained for existing documentation links. User-graph project `PART_OF` remains unchanged; `SUB_EVENT_OF` still connects one live event to another.
+
+**Pattern:** `Entity:MediaAppearance → SESSION_OF → Entity:Event:Live_*`. **Weight: 30; evidence only, always excluded from scoring.** A source must identify the exact session and edition; a video recorded at a conference does not automatically identify a session. The media event-association ledger and event owner resolve the target, then chosen-fact replay writes the edge.
+
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `association_id` | UUID string · required | Durable session/edition relationship identity and revision fence. |
+| `session_ref`, `event_source_ref` | strings · required | Exact source-scoped session and edition anchors; names/year alone insufficient. |
+| `association_basis` | enum · required | `organizer_session_id|verified_session_page|reviewed_association`. |
+| `source_capture_at` | timestamp · optional | Archive capture time when applicable; not event date. |
+
+**Synthetic properties**, plus the shared envelope with this edge's source and fact references:
+
+```json
+{
+  "association_id": "00000000-0000-4000-8000-000000000401",
+  "session_ref": "example-organizer::london-2026::session-12",
+  "event_source_ref": "example-organizer::london-2026",
+  "association_basis": "organizer_session_id",
+  "weight": 30,
+  "layer": "evidence",
+  "excluded_from_scoring": true,
+  "temporal_basis": "unknown",
+  "description": "Example panel was a session at Example Summit — London 2026."
+}
+```
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>CO_MENTIONED_WITH</span>
 
-Two people who co-appear in news coverage over a rolling window. **Evidence layer, excluded from scoring** — co-mention is corroboration, not closeness. Written once per pair in canonical uuid order, updated by the daily batch, retired when the window drops the pair below floor.
+<a id="co_mentioned_with" />
 
-| | |
-|---|---|
-| **Pattern** | `(Person)-[CO_MENTIONED_WITH]->(Person)` — symmetric, once per pair |
-| **Weight** | **55** *(traversal only; `excluded_from_scoring: true`)* |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+**Pattern:** `Person → CO_MENTIONED_WITH → Person`, symmetric evidence stored once in canonical UUID order, no self-pair. **Weight: 55; `layer=evidence`, `excluded_from_scoring=true` always in v1.** Writer is facts-elected media news replay over accepted article contributions. Both canonical people must predate the frozen batch index; no person creation or entity-enrichment queue admission.
 
-**Description template:** `{A} and {B} co-appear in news coverage ({article_count} articles, {first_seen}–{last_seen}).`
+[GDELT is a candidate index](/guides/open-work/roadmap/media-co-occurrence#closed-world-news-verification-and-aggregation), not identity evidence on its own. Both article-person matches require independent verification; names plus an employer anywhere in the document are insufficient. Canonical URLs/articles, syndicated story clusters and verified publisher groups prevent duplicated reporting from satisfying the floor.
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `article_count` | integer | ✓ | Distinct articles in the window |
-| `window` | string | ✓ | `24mo` rolling |
-| `window_counts` | json | ✓ | Per-quarter breakdown for decay visibility |
-| `first_seen` / `last_seen` | date | ✓ | |
-| `top_source_domains` | string\[\] | ✓ | Floor requires ≥ 2 |
-| `evidence_refs` | id\[\] | ✓ | Rows in `news_comention_rollup`; article detail stays relational |
-| `layer` | `evidence` | ✓ | |
-| `excluded_from_scoring` | boolean `true` | ✓ | Hard flag scoring respects |
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `rollup_id`, `index_version` | UUID/string · required | Durable pair rollup and frozen tracked-person index lineage. |
+| `article_count`, `source_domain_count` | integers · required | At least 3 accepted distinct canonical articles and 2 registrable domains. Repeated GKG records/offsets do not increase them. |
+| `independent_story_count`, `publisher_group_count` | integers · required | Proposed additional floors 3 and 2; hold ambiguous independence in review. |
+| `window`, `window_start`, `window_end` | string / timestamps · required | `24mo`; exact UTC half-open interval using 24 calendar months. |
+| `window_counts_json` | serialized JSON string · required | Bounded quarter counts; arbitrary JSON objects are not graph-native property maps. Relational/API contract exposes typed `window_counts`. |
+| `first_seen`, `last_seen`, `date_basis` | dates / enum · required | Accepted article publication bounds; `publisher_verified|gdelt_reported|mixed`. Observation time is separate; unknown dates do not enter rollups. |
+| `top_source_domains` | bounded string array · required | Evidence display, not the full domain-count authority; complete manifest in SQL. |
+| `coverage` | enum · required | `complete|partial|unknown` for the admitted discovery window; incomplete discovery is not absence. |
+
+**Synthetic properties**, plus the shared envelope (source `media_news`, rollup evidence refs and chosen fact):
+
+```json
+{
+  "rollup_id": "00000000-0000-4000-8000-000000000501",
+  "index_version": "news-index-fixture-4",
+  "article_count": 4,
+  "source_domain_count": 2,
+  "independent_story_count": 3,
+  "publisher_group_count": 2,
+  "window": "24mo",
+  "window_start": "2024-09-06T00:00:00Z",
+  "window_end": "2026-09-06T00:00:00Z",
+  "window_counts_json": "{\"2026-Q2\":1,\"2026-Q3\":3}",
+  "first_seen": "2026-06-10",
+  "last_seen": "2026-08-28",
+  "date_basis": "publisher_verified",
+  "top_source_domains": ["publisher-a.example", "publisher-b.example"],
+  "coverage": "partial",
+  "weight": 55,
+  "layer": "evidence",
+  "excluded_from_scoring": true,
+  "temporal_basis": "source_publication",
+  "description": "Example A and Example B were both mentioned in four verified articles from two publisher groups between June and August 2026."
+}
+```
+
+Window expiry, identity corrections, publisher clustering changes and source removals recompute desired counts; they do not add/subtract untracked counters. A pair below any gate is retracted with a surviving revision fence. Daily expiry continues when ingestion is paused. The 60-day/100-pair/90%-precision audit is a prerequisite for a separate future scoring decision; it never flips the flag automatically. Narratives must describe coverage, not infer a personal tie or endorsement.
+
+**Replay acceptance for every media edge:** creation time/UUID stable on retry; target-scoped claim correction preserves unrelated evidence; both endpoints canonicalized on merge; missing endpoints defer; expired workers cannot write old revisions; deleted edges cannot be resurrected by stale replay; consumer packages carry the current revision/tombstone and source policy. No source text or per-edge LLM is needed to build deterministic descriptions.
 
 ---
 
@@ -3722,7 +3815,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>REPORTED_TO</span> (Person report → Person manager) | **15** current · **25** past |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLABORATORS</span> (Person ↔ Person) | **15** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>RELATED_PERSON_OF</span> (Person → issuer Company) | **15** officer / director · **20** promoter |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (Person → `MediaAppearance`) | **15** interview · **20** panelist · **45** conference speaker (15 below the hub threshold) |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (Person → `MediaAppearance`) | **15** interview · **20** panelist/moderator · **45** speaker (15 below a verified complete hub threshold; pair-aware policy required) |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLEAGUES_AT</span> (Person ↔ Person) | **16 / 24** board peers · **20 / 28** colleagues (current / past) |
 | `SUPPORTING_MUSICIAN_FOR` | **18** |
 | `JUDGED_AT` (Person → `Event:Live_*`) | **18** |
@@ -3754,7 +3847,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `EXHIBITED_AT` (Company → `Event:Live_*`) | **30** |
 | `HELD_AT` | **30** |
 | `HELD_IN` (`Event:Live_*` → City) | **30** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>PART_OF</span> (`MediaAppearance` → `Event:Live_*`) | **30** |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>SESSION_OF</span> (`MediaAppearance` → `Event:Live_*`) | **30** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>SUCCEEDED_BY</span> (Person predecessor → Person successor) | **30** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>DONOR_TO</span> (Person\|Company → institution) | **30 / 33 / 36** person by amount · **30–40** foundation · **35** corporate · **38 / 48** derived · **50** reserved |
 | `HEADLINED` | **35** |
