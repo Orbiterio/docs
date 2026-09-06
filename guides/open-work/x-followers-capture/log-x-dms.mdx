@@ -6,14 +6,14 @@ icon: "comments"
 ---
 
 <Info>
-  **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none scheduled, called by anything, or read by the app: tables `x_dm_activity` (789) and `x_dm_sync_run` (790); read-only harnesses `twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403); reference writers `twitter-api-sync-dms` (13402, legacy DMs) and `twitter-api-sync-chats` (13404, encrypted chats). `x_oauth_token` (788) holds two real user tokens: row 2 @Orbiter_io and row 3 @Mark_L_Pederson, both with `dm.read`. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**.
+  **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none scheduled, called by anything, or read by the app: tables `x_dm_activity` (789) and `x_dm_sync_run` (790); read-only harnesses `twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403); reference writers `twitter-api-sync-dms` (13402, legacy DMs) and `twitter-api-sync-chats` (13404, encrypted chats). `x_oauth_token` (788) holds two real user tokens: row 2 @Orbiter_io and row 3 @Mark_L_Pederson, both with `dm.read`. Table 789 holds 81 smoke-test rows for Mark (3 legacy, 78 chat) and 790 holds 10 runs. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**.
 </Info>
 
 <Warning>
   **Charles, read this first.** In late 2025 X replaced Direct Messages with end-to-end encrypted **Chat**. That splits the feature into two sources that land in one table:
 
   1. **Legacy DMs** through `GET /2/dm_events`: conversations that were never upgraded to encryption. Full text, last 30 days only. Proven: 3 of Mark's conversations logged.
-  2. **Encrypted chats** through the **X Chat API**: every new conversation. The API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body only as ciphertext that decrypts on the user's device. Proven: Mark's 6 chat events with @jasondiamond logged as metadata rows.
+  2. **Encrypted chats** through the **X Chat API**: every new conversation. The API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body only as ciphertext that decrypts on the user's device. Proven: a full walk of Mark's 499-conversation list logged 78 chat events across 16 conversations, back to November 2025, as metadata rows.
 
   **Decision taken for this spec: Phase 1 logs encrypted chats as metadata-only rows (`text` empty) and never holds user keys or PINs server-side. Knowing that a conversation is happening, with whom, in which direction and how recently is the value for Orbiter's interaction log and KNOWS edges. Phase 2, message text through on-device decryption in the Orbiter client, is scoped as the last step of the build plan.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
 </Warning>
@@ -42,7 +42,7 @@ Work top to bottom. Each step names its acceptance check.
     At connect time create Activity API subscriptions for the user: `POST /2/activity/subscriptions` with `{"event_type": "chat.received", "filter": {"user_id": "<x_user_id>"}}` and the same for `chat.sent` (free) and `chat.conversation_join` (free). Run a Cloud Run receiver that answers the CRC challenge (HMAC-SHA256 of the token with the consumer secret) and, on delivery, writes one metadata row: `source = 'xchat'`, `event_uuid` from the envelope, `conversation_id` (hyphen form), `sender_id`, `conversation_key_version`, `direction` from sender versus connected account, `card_descriptor` from a cached handle. Dedupe on `event_uuid`, never decrypt `encoded_event`. **Check:** send one chat to a subscribed account and see the row within a minute. Each `chat.received` costs $0.010.
   </Step>
   <Step title="5. Encrypted chats: initial import and reconciliation">
-    Port `twitter-api-sync-chats` (13404): `GET /2/chat/conversations?max_results=50` newest first, then `GET /2/chat/conversations/{id}/events?max_results=100` per conversation, one `GET /2/users?ids=` batch for handles, upsert on `(user_id, dm_event_id)`. Budget per user: 50 list and 30 events requests per 15 minutes, so a first import of a busy account spans several windows; checkpoint per conversation and resume. Stop paging a conversation on the first already-logged event (incremental) or on an empty page (X can answer `has_more: true` and then return an empty page). Run the reconciliation daily per account. **Check:** re-running the import inserts zero rows.
+    Port `twitter-api-sync-chats` (13404): `GET /2/chat/conversations?max_results=50` newest first, then `GET /2/chat/conversations/{id}/events?max_results=100` per conversation, one `GET /2/users?ids=` batch for handles, upsert on `(user_id, dm_event_id)`. Budget per user: 50 list and 30 events requests per 15 minutes, so a first import of a busy account spans several windows; checkpoint per conversation and resume with `skip_conversations`, and refresh the token before every batch (a 2-hour token expires mid-walk; the Xano reference refuses a token inside its 5-minute margin and lost one batch that way). Stop paging a conversation on the first already-logged event (incremental) or on an empty page (X can answer `has_more: true` and then return an empty page). **Stop the walk after 28 consecutive conversations with zero events**: the list is ordered by last activity, encrypted Chat began in November 2025, and everything older can only have legacy events. Mark's list has 499 conversations; the first 84 held every chat event and the next 56 held none. Run the reconciliation daily per account over the newest conversations only. **Check:** re-running the import inserts zero rows.
   </Step>
   <Step title="6. Legacy DMs: dispatcher and worker">
     Port `twitter-api-sync-dms` (13402) for the pre-Chat conversations. Cloud Scheduler ticks every 15 minutes and a dispatcher enqueues only accounts whose `next_sync_at` has passed (default cadence every 4 hours, see [Cost, rate limits, and cadence](#cost-rate-limits-and-cadence)); a worker pages `GET /2/dm_events` newest first, stops at the first known event, fills sent-message counterpart handles with a `GET /2/users?ids=` batch, and sets `next_sync_at`. 15 requests per 15 minutes per user; on 429 read `x-rate-limit-reset`. **Check:** the cadence table's floor cost holds in the run rows for a week.
@@ -310,7 +310,10 @@ Shape facts the capture confirmed:
 2. **`participant_ids` on the list excludes the caller**, so a direct conversation has exactly one participant and the counterpart needs no derivation.
 3. **Paging can lie once.** The first events page said `has_more: true` with 6 events; the next two pages were empty. Stop on an empty page as well as on a missing `next_token`.
 4. **Nothing in the metadata is sensitive to store**, but `encoded_event`, `conversation_token` and `message_event_signature` are bulky and useless without keys; the writer strips them before saving `raw`.
-5. **Handles need one extra call.** Neither endpoint expands users; a single `GET /2/users?ids=` batch per run covers senders and counterparts.
+5. **Handles need one extra call.** Neither endpoint expands users; a single `GET /2/users?ids=` batch per run covers senders and counterparts. One of Mark's 140 walked conversations resolved to no user at all (deleted or suspended account); its rows keep the raw id.
+6. **Chat history is not capped at 30 days.** The oldest event logged is from 2025-11-15, the month X switched DMs to Chat. The 30-day window belongs to the legacy DM endpoint only.
+7. **Legacy-only threads return zero chat events.** Of the newest 140 conversations, 16 had chat events and 124 had none; the two sources do not overlap, so both loggers are needed and neither double-counts.
+8. **The list is large and all direct.** 499 conversations for Mark, none of type `group`; 11 list pages at 50 per page.
 
 ## Reference tables
 
@@ -370,7 +373,7 @@ All four read the token row in their own stack and make no nested `function.run`
 {"sync_run_id": 3, "mode": "initial", "status": "complete", "account_id": "16826747", "username": "Mark_L_Pederson", "events_seen": 3, "events_new": 3, "events_updated": 0, "pages_fetched": 1, "next_token": "", "newest_event_id": "2094441574411420111", "rate_limited": false}
 ```
 
-**`twitter-api-sync-chats` (13404), encrypted-chat writer.** Inputs `user_id`, `x_user_id`, `conversation_id` (one conversation, else walk the list), `max_conversations` (default 10), `max_pages_per_conversation` (default 2), the same activity-type and data-source ids. Lists conversations, resolves handles with one users batch, pages events per conversation, upserts 789 with `source = xchat`, `text` empty and `raw` stripped of ciphertext, checkpoints 790 per conversation. Real response from run 5:
+**`twitter-api-sync-chats` (13404), encrypted-chat writer.** Inputs `user_id`, `x_user_id`, `conversation_id` (one conversation, else walk the list), `max_conversations` (default 10), `skip_conversations` (batch offset for walks that span rate-limit windows), `max_pages_per_conversation` (default 2), the same activity-type and data-source ids. Lists conversations, resolves handles with one users batch, pages events per conversation, upserts 789 with `source = xchat`, `text` empty and `raw` stripped of ciphertext, checkpoints 790 per conversation. Real response from run 5:
 
 ```json
 {"sync_run_id": 5, "status": "complete", "account_id": "16826747", "username": "Mark_L_Pederson", "conversations_seen": 1, "events_seen": 6, "events_new": 6, "events_updated": 0, "requests": 3, "users_resolved": 1, "rate_limited": false, "last_status": 200, "conversations": [{"conversation_id": "14382995-16826747", "is_group": false, "counterpart": "14382995", "counterpart_username": "jasondiamond", "events_seen": 6, "events_new": 6, "pages": 3}]}
@@ -463,6 +466,9 @@ All on 2026-09-06, Xano workspace 3, live data source.
 | 13:33 | @Mark_L_Pederson, consent flow | legacy | Run 3 `initial`: 3 rows (2 received, 1 sent). Run 4 `incremental`: 0 new, 3 updated. |
 | 14:05 | @Mark_L_Pederson | chat | Conversation list: 48 per page, `has_message_requests: true`. Events for the Jason Diamond conversation: 6, four from that afternoon. |
 | 14:15 | @Mark_L_Pederson | chat | Run 5, 13404 on `14382995-16826747`: 6 rows, `DM from @jasondiamond` and `DM to @jasondiamond`, `text` empty, `raw` stripped. |
+| 14:33 | @Mark_L_Pederson | chat | Run 6, newest 28 conversations, one page each, 13 seconds: 70 events, 64 new (busiest: @nicalo06 25, @neiltak 12, @JoinTheBNC 8, @_gbalaji 7). 16 of the 28 returned zero events. |
+| 14:48 to 15:37 | @Mark_L_Pederson | chat | Runs 7 to 10 in the background, one 28-conversation batch per rate-limit window (`skip_conversations` 28, 56, 84, 112): 3, 5, 0 and 0 events. A fifth batch at 15:35 threw the token-expiry guard and was re-run after `twitter-api-token` refreshed row 3. |
+| 15:40 | @Mark_L_Pederson | chat | List paged to the end: 499 conversations, all direct. Walk stopped at 140 because conversations 85 to 140 held nothing and the rest are older. **Final table: 81 rows, 3 legacy and 78 chat, 16 conversations, 37 sent and 44 received, oldest 2025-11-15, newest 2026-09-06.** |
 
 **Lessons that go straight into the Go build**
 
@@ -488,6 +494,10 @@ xano function run twitter-api-sync-dms -w 3 --no-input-check --json '{"user_id":
 # encrypted chats: one conversation, or omit conversation_id to walk the newest 10
 xano function run twitter-api-sync-chats -w 3 --no-input-check --json '{"user_id":12,"x_user_id":"16826747","conversation_id":"14382995-16826747","max_pages_per_conversation":3}'
 
+# full walk in 28-conversation batches, one per 15-minute window; refresh the token first each time
+xano function run twitter-api-token -w 3 --no-input-check --json '{"token_type":"user","x_user_id":"16826747"}'
+xano function run twitter-api-sync-chats -w 3 --no-input-check --json '{"user_id":12,"x_user_id":"16826747","max_conversations":28,"max_pages_per_conversation":1,"skip_conversations":0}'
+
 # raw look at any Chat endpoint
 xano function run twitter-api-chat-events -w 3 --no-input-check --json '{"x_user_id":"16826747","path":"/2/chat/conversations?max_results=50"}'
 
@@ -502,7 +512,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H "X-Data-Source: live" \
 
 <Accordion title="XanoScript — twitter-api-sync-chats (13404), encrypted-chat writer">
 ````xanoscript
-// v1.0 (2026-09-06): REFERENCE IMPLEMENTATION for Charles's Go/GCP build of the encrypted-chat logger (docs: Open Work > X Followers Capture > Log X DMs). X replaced DMs with end-to-end encrypted Chat; GET /2/dm_events cannot see those conversations, but the X Chat API exposes their METADATA to the user's own OAuth token without any keys: GET /2/chat/conversations lists the user's conversations (id, type, participant_ids) and GET /2/chat/conversations/{id}/events pages each conversation's events with id, sender_id and created_at in the clear next to the ciphertext. This function logs one x_dm_activity (789) row per event with source = xchat, direction, counterpart, card_descriptor and sender handle (resolved through GET /2/users?ids=), and leaves text, snippet and attachments empty because the body is encrypted for the user's device only; a x_dm_sync_run (790) row records the attempt. Ciphertext, conversation tokens and signatures are stripped before raw is stored. Reads the token in this stack (no nested function.run, CLI-runnable), requires dm.read, never decrypts anything. Rate limits per user: conversations 50 and events 30 per 15 minutes.
+// v1.1 (2026-09-06): skip_conversations input so a full walk can continue across 15-minute rate-limit windows. v1.0 (2026-09-06): REFERENCE IMPLEMENTATION for Charles's Go/GCP build of the encrypted-chat logger (docs: Open Work > X Followers Capture > Log X DMs). X replaced DMs with end-to-end encrypted Chat; GET /2/dm_events cannot see those conversations, but the X Chat API exposes their METADATA to the user's own OAuth token without any keys: GET /2/chat/conversations lists the user's conversations (id, type, participant_ids) and GET /2/chat/conversations/{id}/events pages each conversation's events with id, sender_id and created_at in the clear next to the ciphertext. This function logs one x_dm_activity (789) row per event with source = xchat, direction, counterpart, card_descriptor and sender handle (resolved through GET /2/users?ids=), and leaves text, snippet and attachments empty because the body is encrypted for the user's device only; a x_dm_sync_run (790) row records the attempt. Ciphertext, conversation tokens and signatures are stripped before raw is stored. Reads the token in this stack (no nested function.run, CLI-runnable), requires dm.read, never decrypts anything. Rate limits per user: conversations 50 and events 30 per 15 minutes.
 function "twitter-api-sync-chats" {
   input {
     // Orbiter user the rows belong to (x_dm_activity.user_id).
@@ -516,6 +526,9 @@ function "twitter-api-sync-chats" {
   
     // How many conversations to walk when conversation_id is empty (the list is newest first).
     int max_conversations?=10 filters=min:1|max:50
+  
+    // Skip this many conversations from the top of the list before walking, so batches can continue across rate-limit windows.
+    int skip_conversations? filters=min:0
   
     // Event pages per conversation, 100 events each. The events endpoint allows 30 requests per 15 minutes per user.
     int max_pages_per_conversation?=2 filters=min:1|max:10
@@ -696,6 +709,22 @@ function "twitter-api-sync-chats" {
           value = true
         }
       
+        var $list_index {
+          value = 0
+        }
+      
+        var $skip {
+          value = $input.skip_conversations
+        }
+      
+        conditional {
+          if ($skip == null) {
+            var.update $skip {
+              value = 0
+            }
+          }
+        }
+      
         while ($list_more) {
           each {
             var $list_url {
@@ -780,11 +809,15 @@ function "twitter-api-sync-chats" {
                         }
                       
                         conditional {
-                          if ($conv_count < $input.max_conversations) {
+                          if (($list_index >= $skip) && ($conv_count < $input.max_conversations)) {
                             var.update $conversations {
                               value = $conversations|push:$conv
                             }
                           }
+                        }
+                      
+                        var.update $list_index {
+                          value = $list_index + 1
                         }
                       }
                     }
@@ -2761,7 +2794,7 @@ Created 2026-09-06 as references for the Go build. Nothing is scheduled, called 
 x_dm_activity — 789
 ```
 
-Reference table, columns as above including `source`, `conversation_key_version` and `event_uuid`. Unique on `(user_id, dm_event_id)`; btree on `(user_id, activity_timestamp)`, `dm_conversation_id`, `my_person_id`. Holds 9 smoke-test rows for user 12: 3 legacy, 6 chat.
+Reference table, columns as above including `source`, `conversation_key_version` and `event_uuid`. Unique on `(user_id, dm_event_id)`; btree on `(user_id, activity_timestamp)`, `dm_conversation_id`, `my_person_id`. Holds 81 smoke-test rows for user 12: 3 legacy, 78 chat.
 
 </Card>
 
@@ -2771,7 +2804,7 @@ Reference table, columns as above including `source`, `conversation_key_version`
 x_dm_sync_run — 790
 ```
 
-Reference companion table with `source`, `mode`, `status`, counts, `next_token` and `newest_event_id`. Btree on `status` and `(user_id, created_at)`. Five smoke-test runs.
+Reference companion table with `source`, `mode`, `status`, counts, `next_token` and `newest_event_id`. Btree on `status` and `(user_id, created_at)`. Ten smoke-test runs.
 
 </Card>
 
@@ -2781,7 +2814,7 @@ Reference companion table with `source`, `mode`, `status`, counts, `next_token` 
 twitter-api-sync-chats — 13404
 ```
 
-Encrypted-chat writer: conversation list, users batch, events per conversation, metadata rows with `source = xchat`, checkpointed run row. Never decrypts.
+Encrypted-chat writer (v1.1): conversation list with `skip_conversations` batching, users batch, events per conversation, metadata rows with `source = xchat`, checkpointed run row. Never decrypts.
 
 </Card>
 
