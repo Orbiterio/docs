@@ -1,0 +1,1738 @@
+---
+title: "Log X DMs"
+sidebarTitle: "Log X DMs"
+description: "Spec for Charles's Go build that imports an OAuthed user's X (Twitter) direct messages into x_dm_activity the way email_activity logs email: the extra dm.read consent, GET /2/dm_events and its 30-day window, the Xano reference tables and functions, rate limits and pay-per-use cost, a suggested GCP build plan with sync cadence, and the smoke test against Mark's account."
+icon: "comments"
+---
+
+<Info>
+  **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none of them wired to anything live: the tables `x_dm_activity` (789) and `x_dm_sync_run` (790) with their indexes, the read-only harness `twitter-api-dm-events` (13401), and the reference writer `twitter-api-sync-dms` (13402) that populates 789 and 790 from a real account. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**. Anything marked TODO needs confirming before it is coded.
+</Info>
+
+<Warning>
+  **Smoke-test finding, 2026-09-06: the DM API cannot see X's new encrypted chats.** In late 2025 X replaced Direct Messages with **Chat**, which is end-to-end encrypted for new conversations. `GET /2/dm_events` returns only legacy, unencrypted DMs. A conversation that starts today, or an old one a user "upgrades", is invisible to the API. X staff on the developer forum say API support for encrypted Chat is being explored; an XChat webhook exists but delivers encrypted payloads and the decryption SDK (`chat-xdk`) was unreleased as of June 2026. Verified live both ways: @Mark_L_Pederson's three legacy conversations from the last 30 days came back and were logged, while the new DM sent to @Orbiter_io during the test never appeared (HTTP 200, `result_count` 0). **Decide whether to build against a shrinking legacy set or wait for X before Charles writes a line of Go.** Details under [Smoke test](#smoke-test-with-marks-account).
+</Warning>
+
+## What this delivers
+
+When a user connects X to Orbiter **with DM consent**, we pull every direct-message event X will give us (the last 30 days, across 1-to-1 and group conversations) and log one row per event in a new `x_dm_activity` table, then keep it current on a schedule. Each row carries what the X API returns for the event (text, conversation, sender, participants, attachments) plus the Orbiter fields that make it behave like `email_activity`: `user_id`, `my_person_id`, `activity_type_id`, `card_descriptor`, `activity_timestamp`, and an explicit `direction`.
+
+Downstream, DM rows are just another activity source: the interaction-log job counts them next to email and calendar, and the same resolver CRON that turns `x_follower` rows into people and KNOWS edges can resolve DM counterparties. Nothing here touches the graph.
+
+<Warning>
+  **X only serves the last 30 days of DM events.** There is no historical backfill through the API. A user who connects today gets their DMs from the last 30 days and nothing older, and a sync that lapses for more than 30 days loses the gap permanently. The Nylas email import has no such limit, so this is the biggest behavioural difference from email.
+</Warning>
+
+<Steps>
+  <Step title="Ask for dm.read at connect time">
+    The DM lookup needs the `dm.read` scope alongside `tweet.read` and `users.read`. Add it to the scopes the X Followers Capture flow already requests (`users.read`, `tweet.read`, `follows.read`, `offline.access`) so one consent screen covers both features. Two consequences:
+
+    - The X app's **User authentication settings** in the developer portal must be set to *Read and write and Direct message*. With *Read* only, the authorize call rejects `dm.read`. TODO(Mark): confirm the app permission level.
+    - Anyone who connected before `dm.read` was added must consent again. `x_oauth_token.scope` records what was granted, so the sync can skip rows without `dm.read` and the app can prompt for re-consent.
+  </Step>
+  <Step title="Exchange the code and store the token">
+    Unchanged from the parent page: the callback calls `twitter-api-oauth-exchange` (13390), which exchanges the code at `/2/oauth2/token`, looks the account up at `/2/users/me`, and upserts `x_oauth_token` keyed by `x_user_id`. The row's `scope` now contains `dm.read`. The `entity_id` change from the parent page applies here too.
+  </Step>
+  <Step title="First import">
+    On a successful exchange, queue the proposed `twitter-api-sync-dms` for the user. It pages `GET /2/dm_events` newest-first at 100 events per request and upserts one `x_dm_activity` row per event until X returns no `next_token` or the 15-request window is spent. A run row records `next_token` so a large inbox resumes on the next window.
+  </Step>
+  <Step title="Keep it current">
+    A scheduled task re-runs the sync per connected account. Because X has no `since_id` on the DM lookup, each poll re-reads the newest events and **stops at the first event id already logged**. That bounds both the requests and the pay-per-use cost to genuinely new events plus one page of overlap. See [Rate limits, cost, and cadence](#rate-limits-cost-and-cadence) for why polling should be conservative and why the webhook is the eventual answer.
+  </Step>
+  <Step title="Resolve counterparties later">
+    <Warning>
+      **The sync does not resolve, enrich, or write graph data.** It writes `x_dm_activity` rows with the sender's X id and handle and leaves `my_person_id` at 0. The same scheduled CRON described in [Resolving Followers to Edges in User Graph](/guides/open-work/x-followers-capture#resolving-followers-to-edges-in-user-graph) picks up unresolved DM counterparties by `sender_profile_url`, resolves them, and back-fills `my_person_id`. Only then do the KNOWS pairs get fanned out, the way `known/ingest/_fanout_email_pairs` (12781) does for email.
+    </Warning>
+  </Step>
+</Steps>
+
+## How email does it today
+
+The DM design mirrors the email path, so here is the chain it copies, with what each step becomes for DMs.
+
+| Email today | Where | X DM equivalent |
+| --- | --- | --- |
+| Nylas `message.created` webhook fires per message | `mvp/nylas-webhook/message-created` (180) | No webhook in phase 1. A scheduled poll of `GET /2/dm_events`. X does sell a `dm.received` webhook event; see cost notes. |
+| Dedupe on `(grant_id, message_id)` before logging | `mvp/activity/message-created-parse` (1913) | Dedupe on `(user_id, dm_event_id)`, enforced by a unique index |
+| Direction: `from.email == grant.email_account` means sent | `parse-from` (2126) / `parse-to` | `sender_id == connected x_user_id` means sent |
+| One `email_activity` row **per participant** with `activity_type_id` 1 to 4 (`email_from`, `email_to`, `email_cc`, `email_bcc`) | `mvp/activity/log-participant-activity` (12773) | One row **per event** with two new `activity_type` rows, `x_dm_from` and `x_dm_to`. Group DMs keep `participant_ids` on the row instead of fanning out. |
+| Counterparty resolved at write time by email address into `my_person_id` | `mvp/identity/check-identity-email-to` inside 12773 | No email to key on. Store `sender_x_user_id` and `sender_profile_url`; `my_person_id` is filled later by the resolver CRON. |
+| `card_descriptor` text like "from Emery Wells" | 12773 | "DM from @handle", "DM to @handle", "Group DM (4)" |
+| `data_source_id` 14 (NylasEmail), master person source 47 / 48 | `data_source` (161) | New `data_source` row "X DM Sync". Rows 7 (Twitter) and 41 (Twitter Resolve) exist but mean profile enrichment, not activity. |
+| KNOWS fan-out per sender/recipient pair | `known/ingest/_fanout_email_pairs` (12781) | Same call, made by the resolver CRON once `my_person_id` is known, never by the sync |
+| Interaction-log counts read `email_activity` by `my_person_id` and `direction` | [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) | Add `x_dm_activity` as a fourth activity source; `direction` is a first-class column from day one |
+
+`email_activity` (597) columns for reference: `user_id`, `my_person_id`, `activity_type_id`, `card_descriptor`, `activity_timestamp`, `subject`, `grant_id`, `thread_id`, `message_id`, `snippet`, `unread`, `interlocutor_email`, `participant_count`, `data_source_id`, `temp_email_body`, `clean_message`. The DM table keeps every one that has an X analogue and drops `subject`, `unread` (X does not expose read state), and `interlocutor_email`.
+
+## X API: the DM lookup
+
+Verified against docs.x.com on 2026-09-06.
+
+| | |
+| --- | --- |
+| Endpoint | `GET https://api.x.com/2/dm_events` (all conversations the user is in). Also `GET /2/dm_conversations/with/:participant_id/dm_events` for one 1-to-1 thread and `GET /2/dm_conversations/:dm_conversation_id/dm_events` for one group. |
+| Auth | OAuth 2.0 user context (PKCE). App-only bearer is rejected. |
+| Scopes | `dm.read`, `tweet.read`, `users.read`; add `offline.access` for the refresh token |
+| Window | Events from up to **30 days** ago. Newest first. No `since_id` or `start_time`. |
+| Paging | `max_results` 1 to 100 (default 100); `pagination_token` from `meta.next_token` |
+| `event_types` | `MessageCreate`, `ParticipantsJoin`, `ParticipantsLeave`; omit the parameter to get all three |
+| `dm_event.fields` | `id`, `text`, `event_type`, `created_at`, `dm_conversation_id`, `sender_id`, `participant_ids`, `referenced_tweets`, `attachments` |
+| `expansions` | `sender_id`, `participant_ids` (user objects in `includes.users`), `attachments.media_keys` (`includes.media`), `referenced_tweets.id` (`includes.tweets`) |
+| Rate limit | **15 requests per 15 minutes per user** on every DM lookup endpoint. At 100 events per request that is 1,500 events per window per user. Confirmed in the response headers: `x-rate-limit-limit: 15`. |
+| Encrypted Chat | **Not returned.** Only legacy unencrypted DMs come back. See the warning at the top and the smoke-test notes. |
+| Field names | The current reference lists `referenced_posts` and `entities` in `dm_event.fields`; the harness still sends `referenced_tweets` and X accepts it with HTTP 200. Use `referenced_posts` in the Go build. |
+
+**Example request (curl)**
+
+```bash
+curl "https://api.x.com/2/dm_events?max_results=100&dm_event.fields=id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids,referenced_tweets,attachments&expansions=sender_id,participant_ids,referenced_tweets.id,attachments.media_keys&user.fields=id,username,name,profile_image_url,verified,protected&media.fields=media_key,type,url,preview_image_url&tweet.fields=id,text,author_id,created_at" \
+  -H "Authorization: Bearer $X_USER_ACCESS_TOKEN"
+```
+
+Subsequent pages repeat the request with `pagination_token` set to the previous `meta.next_token`, until a response comes back with no `meta.next_token`.
+
+**Response, captured live on 2026-09-06 for @Mark_L_Pederson** (message text redacted; everything else verbatim):
+
+```json
+{
+  "data": [
+    {
+      "created_at": "2026-08-31T15:05:58.000Z",
+      "dm_conversation_id": "16826747-1250774754799149056",
+      "event_type": "MessageCreate",
+      "id": "2094441574411420111",
+      "sender_id": "1250774754799149056",
+      "text": "[redacted]"
+    },
+    {
+      "created_at": "2026-08-26T23:01:45.000Z",
+      "dm_conversation_id": "16826747-1750448588969185280",
+      "event_type": "MessageCreate",
+      "id": "2092749367405093024",
+      "sender_id": "1750448588969185280",
+      "text": "[redacted]"
+    },
+    {
+      "created_at": "2026-08-11T02:00:01.000Z",
+      "dm_conversation_id": "16826747-18799825",
+      "event_type": "MessageCreate",
+      "id": "2086996024565150097",
+      "sender_id": "16826747",
+      "text": "[redacted]"
+    }
+  ],
+  "includes": {
+    "users": [
+      {
+        "id": "1250774754799149056",
+        "username": "MikeTheElite",
+        "name": "Mike James",
+        "verified": false,
+        "protected": false
+      },
+      {
+        "id": "1750448588969185280",
+        "username": "DonnaHill529169",
+        "name": "Donna Hill",
+        "verified": false,
+        "protected": false
+      },
+      {
+        "id": "16826747",
+        "username": "Mark_L_Pederson",
+        "name": "Mark L. Pederson",
+        "verified": false,
+        "protected": false
+      }
+    ]
+  },
+  "meta": {
+    "result_count": 3
+  }
+}
+```
+
+Three shape facts the capture confirmed:
+
+1. **1-to-1 conversation ids are the two user ids joined by a hyphen** (`16826747-1250774754799149056`). The sync derives the counterparty by removing the connected account's id and the hyphen, and that produced the right `counterpart_x_user_id` on all three rows. Group ids are a single snowflake; `participant_ids` is only needed for groups.
+2. **Optional fields are omitted, not nulled.** `participant_ids`, `attachments` and `referenced_tweets` are absent from the event object when empty, even though they were requested in `dm_event.fields`. Read them with a default.
+3. **`includes.users` covers senders only.** For a message the connected account *sent*, the recipient is not in `includes.users` (the third event above: sender is Mark, the counterpart `18799825` has no user object), so the sync wrote `card_descriptor = "DM to 18799825"`. The Go build needs a `GET /2/users/:id` lookup, or a cache keyed by X id, to fill the handle for sent messages. Received messages carry the sender's user object.
+
+## Reference table: x_dm_activity (789)
+
+Built in Xano as the reference schema Charles mirrors in AlloyDB (DDL in the [build plan](#suggested-build-plan-for-charles)). Empty until the smoke test writes to it. One row per DM event per Orbiter user. Two users in the same group conversation each get their own row for the same event, which is why the unique key includes `user_id`.
+
+<Warning>
+  X ids (users, events, conversations) are 64-bit snowflakes and exceed the safe integer range. Store every X id as **text**, never int, the same rule as `x_follower`.
+</Warning>
+
+| Column | Type | Source | Notes |
+| --- | --- | --- | --- |
+| <code style={{color: "#16a34a"}}>id</code> | int | GCP | Primary key |
+| <code style={{color: "#16a34a"}}>created_at</code> | timestamp | GCP | Row created |
+| <code style={{color: "#16a34a"}}>updated_at</code> | timestamp | GCP | Row last written |
+| <code style={{color: "#16a34a"}}>user_id</code> | int | Orbiter | The Orbiter user whose DM this is. Same meaning as `email_activity.user_id`. Required. |
+| <code style={{color: "#16a34a"}}>my_person_id</code> | int | Orbiter | `contacts.id` of the counterparty. 0 until the resolver CRON fills it. |
+| <code style={{color: "#16a34a"}}>activity_type_id</code> | int | Orbiter | New `activity_type` rows `x_dm_from` (received) and `x_dm_to` (sent). Ids assigned when the rows are inserted; 11 and 14 are gaps in the table and must not be reused. |
+| <code style={{color: "#16a34a"}}>direction</code> | enum | derived | `sent` when `sender_id` equals the connected `x_user_id`, else `received`. Join and leave events take `received`. |
+| <code style={{color: "#16a34a"}}>card_descriptor</code> | text | derived | "DM from @handle", "DM to @handle", "Group DM (n)" |
+| <code style={{color: "#16a34a"}}>activity_timestamp</code> | timestamp | API `created_at` | When the event happened on X |
+| <code style={{color: "#16a34a"}}>x_user_id</code> | text | token row | The connected account. The `grant_id` analogue. |
+| `dm_event_id` | text | API `id` | Unique with `user_id`. The `message_id` analogue. |
+| `dm_conversation_id` | text | API `dm_conversation_id` | The `thread_id` analogue |
+| `event_type` | enum | API `event_type` | `MessageCreate`, `ParticipantsJoin`, `ParticipantsLeave` |
+| `text` | text | API `text` | Full message body. Empty on join and leave events. The `clean_message` analogue. |
+| <code style={{color: "#16a34a"}}>snippet</code> | text | derived | First 160 characters of `text` |
+| `sender_x_user_id` | text | API `sender_id` | |
+| `sender_username` | text | `includes.users` | Handle without the `@` |
+| <code style={{color: "#16a34a"}}>sender_profile_url</code> | text | derived | `https://x.com/{username}`. The resolver's input, same as `x_follower.profile_url`. |
+| <code style={{color: "#16a34a"}}>counterpart_x_user_id</code> | text | derived | 1-to-1 only: the other id in the hyphenated conversation id. Empty for groups. |
+| `participant_ids` | json | API `participant_ids` | Group join and leave events only |
+| <code style={{color: "#16a34a"}}>participant_count</code> | int | derived | 2 for 1-to-1, else the conversation's member count. Same role as `email_activity.participant_count`. |
+| <code style={{color: "#16a34a"}}>is_group</code> | bool | derived | `participant_count > 2` |
+| `referenced_tweets` | json | API `referenced_tweets` | Posts shared into the DM, with `includes.tweets` merged in |
+| `attachments` | json | API `attachments` | `media_keys` plus the matching `includes.media` objects |
+| `raw` | json | API | The event object as returned, so nothing is lost if the field list changes |
+| <code style={{color: "#16a34a"}}>data_source_id</code> | int | Orbiter | New `data_source` row "X DM Sync" |
+| <code style={{color: "#16a34a"}}>sync_run_id</code> | int | sync | Run that wrote or last touched the row |
+
+Indexes, created on 789:
+
+- unique on `(user_id, dm_event_id)`, which makes the upsert idempotent and is the stop condition for incremental polls
+- btree on `(user_id, activity_timestamp)` for the interaction-log reader
+- btree on `dm_conversation_id` for thread views
+- btree on `my_person_id` for the resolver sweep of unresolved rows
+
+### Companion table: x_dm_sync_run (790)
+
+Built alongside 789, with btree indexes on `status` and `(user_id, created_at)`. One row per sync attempt, so a large inbox can resume across rate-limit windows and so the incremental poll knows where it stopped.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | int | Primary key |
+| `created_at`, `updated_at` | timestamp | |
+| `user_id` | int | Orbiter user |
+| `x_user_id` | text | The connected account |
+| `mode` | enum | `initial`, `incremental` |
+| `status` | enum | `running`, `paused_rate_limit`, `complete`, `failed` |
+| `events_seen` | int | Events returned by X across pages |
+| `events_new` | int | Rows inserted |
+| `pages_fetched` | int | |
+| `next_token` | text | Empty when complete |
+| `newest_event_id` | text | Highest `dm_event_id` seen this run; the next incremental poll stops when it reaches it |
+| `started_at`, `finished_at` | timestamp | |
+| `error_message` | text | Last error, if any |
+
+## Reference function: twitter-api-sync-dms (13402)
+
+Built in Xano as the reference implementation Charles ports to Go. It is a leaf function that reads the token row in its own stack and makes no nested `function.run`, so the CLI runner can execute it end to end. It writes 789 and 790 and nothing else. Source is in the [accordion below](#reference-source-twitter-api-sync-dms-13402).
+
+**Inputs**
+
+| Input | Type | Notes |
+| --- | --- | --- |
+| `user_id` | int | Required. The Orbiter user the rows belong to. Mark is 12. |
+| `x_user_id` | text | Optional. Picks a specific user-context token row; defaults to the newest. |
+| `mode` | text | `initial` pages until X runs out of the 30-day window. `incremental` (default) stops after the first page that contained an already-logged event. |
+| `sync_run_id` | int | Optional. Resume a paused run from its stored `next_token`. |
+| `max_pages` | int | Default 15, the per-window budget. |
+| `max_results` | int | Default 100. |
+| `activity_type_from`, `activity_type_to` | int | Default 0 until the `x_dm_from` / `x_dm_to` rows exist in `activity_type`. |
+| `data_source_id` | int | Default 0 until the "X DM Sync" row exists in `data_source`. |
+
+**What it does**
+
+1. Loads the `x_oauth_token` row (`grant_type = user`). Throws `XScopeError` when `scope` lacks `dm.read`, and `XTokenError` when the row is missing or expires within 5 minutes (run `twitter-api-token` first; there is no nested refresh by design).
+2. Confirms the token at `/2/users/me` and takes the account id and handle from it.
+3. Creates an `x_dm_sync_run` row with `status = running`, or resumes the one in `sync_run_id`.
+4. Pages `GET /2/dm_events` with the field and expansion lists above, accumulating `includes.users` for handle lookups. The first event of a fresh run becomes `newest_event_id`.
+5. Per event: `direction` is `sent` when `sender_id` is the connected account and the type is `MessageCreate`; a hyphen in `dm_conversation_id` marks a 1-to-1 thread, and the counterpart is the id left after removing the account id and the hyphen; `participant_count` is 2 for 1-to-1, else the length of `participant_ids` when present; `card_descriptor` is "DM from @handle", "DM to @handle" or "Group DM (n)"; `snippet` is the first 160 characters. Then a query on `(user_id, dm_event_id)` decides between `db.add` and `db.edit`. An edit in `incremental` mode sets the stop flag.
+6. After every page it checkpoints counts, `next_token` and `newest_event_id` on the run row, so a crash loses at most one page.
+7. On HTTP 429 it stops and leaves the run `paused_rate_limit` with `next_token` for resume. Any other non-200 marks the run `failed` with the body in `error_message` and throws. A clean finish sets `complete`.
+
+**Response**
+
+```json
+{
+  "sync_run_id": 1,
+  "mode": "initial",
+  "status": "complete",
+  "account_id": "944480690",
+  "username": "markpederson",
+  "events_seen": 312,
+  "events_new": 312,
+  "events_updated": 0,
+  "pages_fetched": 4,
+  "next_token": "",
+  "newest_event_id": "1962831234567890123",
+  "rate_limited": false,
+  "users_seen": []
+}
+```
+
+**What is deliberately missing.** No schedule, no `log_crash` write (the enum has no X phase yet), no resolver call, no graph write, no `activity_type` or `data_source` rows. Those are Charles's to add in Go per the build plan; the Xano function stays a reference and a smoke-test tool.
+
+## Rate limits, cost, and cadence
+
+{/* TODO(Mark): confirm the Orbiter app's plan and the DM read price in the developer portal before choosing the cadence. */}
+
+- **Rate limit.** 15 requests per 15 minutes per user on `GET /2/dm_events`. A first import of a heavy inbox (1,500 events per window) finishes in one window; the resume task covers anything larger.
+- **Pricing is pay-per-use, not tiered.** As of 2026-09-06, docs.x.com describes a single pay-per-use plan with no subscriptions or tiers. DM event **reads bill at $0.010 per resource**, DM creates at $0.015 per request, and the `dm.received` webhook event at $0.010 per event delivered. The older Basic and Pro tiers referenced on the parent page no longer appear there.
+- **Per-resource pricing punishes naive polling.** Because there is no `since_id`, every poll re-reads the newest page and pays for every event on it, new or not. Hourly polls at 100 events per page could cost up to $1.00 per poll per user. Keep incremental polls at `max_results = 20`, stop at the first known event, and start with a daily cadence (worst case about $6 per user per month). Tune from the run rows.
+- **The webhook is the email-shaped answer.** A `dm.received` webhook only bills for new events and removes the 30-day gap risk. It is not scoped here because it needs an Account Activity subscription per user and a public receiver. Revisit once the poll has run for a few weeks.
+- Rate limits are per connected user, so many users syncing at once do not contend with each other. Cap concurrent runs on the resume task anyway.
+
+## Suggested build plan for Charles
+
+The short answer to "a cron every 15 minutes that updates all users who have authorized DMs": **tick every 15 minutes, but sync each account only when it is due.** The X rate limit would allow a 15-minute sweep, but X bills every event a request returns, and there is no `since_id`, so each poll costs at least one event. A sweep of every account every 15 minutes is a floor of about $29 per connected user per month before a single new message. Sync on connect, then at a per-account cadence that starts at every 4 hours, and let the 15-minute tick do dispatch and retries only.
+
+| Poll cadence per account | Polls per month | Floor cost per user per month at $0.010 per event | Verdict |
+| --- | --- | --- | --- |
+| Every 15 minutes | 2,880 | $28.80 | No. Real-time DMs are not a product requirement, and the webhook does this for $0.010 per new event. |
+| Hourly | 720 | $7.20 | Only for accounts the product flags as active. |
+| Every 4 hours | 180 | $1.80 | Default. |
+| Daily | 30 | $0.30 | Fallback for dormant accounts, and the reconciliation cadence once the webhook exists. |
+
+New events cost $0.010 each on top of the floor at any cadence, and the first import of an account costs its 30-day DM count times $0.010. TODO(Mark): confirm the per-event price on the app's plan in the developer portal before Charles hard-codes the defaults.
+
+<Steps>
+  <Step title="Gate: confirm what the API can actually see">
+    Done on 2026-09-06 with @Mark_L_Pederson: legacy conversations from the last 30 days come through (3 events), new encrypted Chats do not. So the API works, and the product question is whether a legacy-only import is worth shipping before X exposes encrypted Chat. That is open question 0. Everything below assumes the answer is yes.
+  </Step>
+  <Step title="AlloyDB tables">
+    Mirror 789 and 790 with the DDL below. Extend the token table (the Go equivalent of `x_oauth_token`) with `user_id`, `scope`, `dm_enabled`, `sync_cadence_minutes` (default 240), `next_sync_at`, and `needs_reconsent`. Keep X ids as `text` everywhere.
+  </Step>
+  <Step title="dm-sync-dispatcher: Cloud Scheduler every 15 minutes, Cloud Run job">
+    Select accounts where `dm_enabled` is true, `scope` contains `dm.read`, `needs_reconsent` is false, `next_sync_at <= now()`, and no `x_dm_sync_run` row is `running` for them. Also select runs in `paused_rate_limit` whose pause started more than 15 minutes ago. Push one Cloud Tasks task per account with the account id as the task name so a slow run cannot be enqueued twice. Cap the queue at about 20 concurrent tasks; the X limit is per user, so the cap only protects AlloyDB and the budget.
+  </Step>
+  <Step title="dm-sync-worker: Cloud Run service behind the queue">
+    Port `twitter-api-sync-dms` step for step. Additions the Xano reference leaves out: refresh the token when it expires within 5 minutes (X rotates the refresh token on every refresh, so write the new pair back before anything else); on 401 or a 403 that names the scope, set `needs_reconsent` and stop; on 429 read `x-rate-limit-reset` and set `next_sync_at` to it; on 5xx let Cloud Tasks retry with backoff. Use the probe pattern for incremental runs: request `max_results=1`, compare the id to `newest_event_id`, return if equal, otherwise page at 20 and then 100 until the first known event. On success set `next_sync_at = now() + sync_cadence_minutes`. Fill the counterpart handle for sent 1-to-1 messages with a `GET /2/users` lookup batched by id (up to 100 ids per call) and cache it, since `includes.users` only carries senders.
+  </Step>
+  <Step title="Connect-time initial run">
+    The OAuth callback stores the token and enqueues one `initial` task immediately, not on the next tick, so the user sees DMs within a minute. An `initial` run that pauses on 429 resumes on the next tick with the same run id.
+  </Step>
+  <Step title="Resolver hand-off">
+    Do not resolve counterparties in the worker. The resolver CRON from the parent page sweeps `x_dm_activity` rows with `my_person_id = 0` by `sender_profile_url` (and `counterpart_x_user_id` for sent 1-to-1 messages), back-fills `my_person_id`, and only then fans out KNOWS pairs the way `known/ingest/_fanout_email_pairs` does for email.
+  </Step>
+  <Step title="Cost guards and observability">
+    Per-account daily cap on `events_seen` (start at 3,000) and a global monthly budget with a kill-switch flag the dispatcher reads. Emit one structured log line per run from the run row (events seen, new, pages, status, HTTP status) and metrics for accounts due, runs completed, 429s, reconsents needed, and estimated spend, which is `events_seen` times the per-event price. Alert on failure rate and on spend.
+  </Step>
+  <Step title="Tests">
+    Unit tests for the derivations: direction, counterpart from the hyphenated conversation id, `participant_count`, `card_descriptor`, `snippet`. A recorded fixture from the smoke test below (one `MessageCreate`, one group event, one sent message) drives them. An idempotency test runs the same fixture twice and asserts no new rows. One contract test against X with Mark's token, run manually, not in CI.
+  </Step>
+  <Step title="Rollout">
+    Feature flag per user. Internal accounts first, one week of spend and error data, then every connected user. Revisit the `dm.received` webhook (Account Activity subscription per user, a public receiver on Cloud Run with the CRC challenge) once volume makes per-poll floors matter; polling then drops to a daily reconciliation.
+  </Step>
+</Steps>
+
+### Copy-paste migration (AlloyDB)
+
+```sql
+CREATE TABLE x_dm_activity (
+  id                     BIGSERIAL PRIMARY KEY,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id                BIGINT      NOT NULL,
+  my_person_id           BIGINT      NOT NULL DEFAULT 0,
+  activity_type_id       INT         NOT NULL DEFAULT 0,
+  direction              TEXT        NOT NULL DEFAULT 'received' CHECK (direction IN ('sent', 'received')),
+  card_descriptor        TEXT        NOT NULL DEFAULT '',
+  activity_timestamp     TIMESTAMPTZ,
+  x_user_id              TEXT        NOT NULL DEFAULT '',
+  dm_event_id            TEXT        NOT NULL,
+  dm_conversation_id     TEXT        NOT NULL DEFAULT '',
+  event_type             TEXT        NOT NULL DEFAULT 'MessageCreate' CHECK (event_type IN ('MessageCreate', 'ParticipantsJoin', 'ParticipantsLeave')),
+  text                   TEXT        NOT NULL DEFAULT '',
+  snippet                TEXT        NOT NULL DEFAULT '',
+  sender_x_user_id       TEXT        NOT NULL DEFAULT '',
+  sender_username        TEXT        NOT NULL DEFAULT '',
+  sender_profile_url     TEXT        NOT NULL DEFAULT '',
+  counterpart_x_user_id  TEXT        NOT NULL DEFAULT '',
+  participant_ids        JSONB,
+  participant_count      INT         NOT NULL DEFAULT 0,
+  is_group               BOOLEAN     NOT NULL DEFAULT false,
+  referenced_tweets      JSONB,
+  attachments            JSONB,
+  raw                    JSONB,
+  data_source_id         INT         NOT NULL DEFAULT 0,
+  sync_run_id            BIGINT      NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX x_dm_activity_user_event_uq ON x_dm_activity (user_id, dm_event_id);
+CREATE INDEX x_dm_activity_user_ts_idx        ON x_dm_activity (user_id, activity_timestamp DESC);
+CREATE INDEX x_dm_activity_conversation_idx   ON x_dm_activity (dm_conversation_id);
+CREATE INDEX x_dm_activity_unresolved_idx     ON x_dm_activity (my_person_id) WHERE my_person_id = 0;
+
+CREATE TABLE x_dm_sync_run (
+  id                BIGSERIAL PRIMARY KEY,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id           BIGINT      NOT NULL,
+  x_user_id         TEXT        NOT NULL DEFAULT '',
+  mode              TEXT        NOT NULL DEFAULT 'incremental' CHECK (mode IN ('initial', 'incremental')),
+  status            TEXT        NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'paused_rate_limit', 'complete', 'failed')),
+  events_seen       INT         NOT NULL DEFAULT 0,
+  events_new        INT         NOT NULL DEFAULT 0,
+  pages_fetched     INT         NOT NULL DEFAULT 0,
+  next_token        TEXT        NOT NULL DEFAULT '',
+  newest_event_id   TEXT        NOT NULL DEFAULT '',
+  started_at        TIMESTAMPTZ,
+  finished_at       TIMESTAMPTZ,
+  error_message     TEXT        NOT NULL DEFAULT ''
+);
+CREATE INDEX x_dm_sync_run_status_idx ON x_dm_sync_run (status);
+CREATE INDEX x_dm_sync_run_user_idx   ON x_dm_sync_run (user_id, created_at DESC);
+```
+
+## Smoke test with Mark's account
+
+**Result, 2026-09-06 13:00 UTC: the chain runs end to end.** The token for @Orbiter_io (X user id `1594015572706181121`, scope `offline.access dm.read users.read dm.write tweet.read`) is row 2 in `x_oauth_token`. `twitter-api-sync-dms` (13402) read it, confirmed the account at `/2/users/me`, fetched one page of `GET /2/dm_events` with HTTP 200, and closed `x_dm_sync_run` row 1 as `complete`. The page held **zero events**, so `x_dm_activity` is still empty. Mark then sent @Orbiter_io a DM from @Mark_L_Pederson and the sync was re-run in `incremental` mode (run 2) and the harness re-run twice more over the following ten minutes: still HTTP 200 with `{"meta":{"result_count":0}}` and the rate-limit headers counting down normally (15 per window). The endpoint is healthy; it simply does not carry the message, which is consistent with the new conversation being an encrypted Chat rather than a legacy DM.
+
+**Then the consent flow itself, 13:30 UTC.** After the app permission level was raised to include Direct Messages and `http://localhost:8765/x-callback` was registered, @Mark_L_Pederson authorized through the standard link; the one-shot local listener exchanged the code 2 seconds after the redirect and stored `x_oauth_token` row 3 (X user id `16826747`, scope `follows.read offline.access dm.read users.read tweet.read`). `twitter-api-sync-dms` in `initial` mode (run 3) returned **3 legacy `MessageCreate` events** from the last 30 days and wrote `x_dm_activity` rows 1 to 3: two received 1-to-1 messages with sender handles resolved, one sent message. A second run in `incremental` mode (run 4) updated the same 3 rows and inserted none, so the upsert is idempotent. The DM sent to @Orbiter_io earlier that hour, a new conversation, was not among them.
+
+What it took to get there is worth more to Charles than the result:
+
+- **The authorize page rejected every link that asked for `dm.read`** with X's generic "Something went wrong". The app's permission level in the developer console was **Read**, which the console shows on the OAuth 1.0 access-token row. Raise it under the app's Settings before any user is sent through the consent flow; the level is per app and does not rotate keys.
+- **The token that finally worked came from the console, not the authorize flow.** The new developer console (Apps → Keys & Tokens → OAuth 2.0 Keys) generates a user access token plus refresh token for the app owner's account with chosen scopes. Seeding it through `twitter-api-oauth-exchange` (13390) in refresh-token mode stores the rotated pair in one call. That is a bootstrap for internal accounts only; real users still need the consent flow.
+- **Authorization codes die in 30 seconds and are single-use.** Two earlier attempts failed with "Value passed for the authorization code was invalid" because the code was pasted by hand after it expired or after a first use. The Go callback must exchange the code in the request that receives it; no human step can sit between redirect and exchange.
+- **Client ID, callback, and permission all live on one app.** A link built with one app's Client ID against another app's callback list produces a code the second app cannot exchange, with the same "invalid" error.
+- **CLI runner quirks.** `xano function run --json -` (stdin) delivers an empty input; use `-d key=value` or an inline `--json`. Nested `function.run` calls fail in the runner, so both Xano functions read the token row themselves.
+- **Encrypted Chat is the real limit.** X's developer forum carries a run of 2026 threads reporting `GET /2/dm_events` returning `result_count` 0 while messages are visible in the app, with the explanation that the API only supports legacy unencrypted DMs and that a conversation upgraded to encryption disappears from it. The forum threads sit behind a login wall, so this is reported from search summaries; Charles should read them from a logged-in account before sizing the feature: [DM Events endpoint missing messages](https://devcommunity.x.com/t/twitter-api-support-ticket-dm-events-endpoint-missing-messages/254508), [X API stops returning new DMs](https://devcommunity.x.com/t/x-api-stops-returning-new-direct-messages-in-the-dm-events-endpoint/259751), [chat.received webhook fires but dm_events is empty](https://devcommunity.x.com/t/chat-received-webhook-received-but-dm-events-api-always-returns-result-count-0/271605), [XChat webhook decryption and chat-xdk](https://devcommunity.x.com/t/xchat-webhook-decryption-when-will-chat-xdk-be-released-and-how-can-we-decrypt-encrypted-payloads-today/267349).
+
+<Steps>
+  <Step title="Check the app in the X developer portal">
+    Under the app's *User authentication settings*, confirm the permission level is **Read and write and Direct message** and note the exact **Callback URI** and **Client ID**. The callback must match the authorize link byte for byte.
+  </Step>
+  <Step title="Authorize with dm.read">
+    Open this link, signed in as the X account to test. It uses the plain PKCE method with verifier `challenge`, which is the default `code_verifier` on `twitter-api-oauth-exchange` (13390), so nothing else needs to be passed to the exchange.
+
+    ```text
+    https://x.com/i/oauth2/authorize?response_type=code&client_id={X_CLIENT_ID}&redirect_uri={CALLBACK_URI_URL_ENCODED}&scope=tweet.read%20users.read%20follows.read%20dm.read%20offline.access&state=log-x-dms&code_challenge=challenge&code_challenge_method=plain
+    ```
+
+    After approving, X redirects to the callback with `?code=...&state=log-x-dms`. The code is single-use and expires in about 30 seconds, so do not copy it by hand: run a one-shot local listener on the callback port that calls 13390 the moment the redirect lands. If X shows "Something went wrong" instead of the consent screen, the app's permission level does not include Direct Messages, the callback is not registered on this app, or the Client ID belongs to a different app.
+  </Step>
+  <Step title="Exchange the code (13390)">
+    Run the exchange yourself from the Xano UI (Run & Debug on 13390) or from the CLI. 13390 has no nested `function.run`, so the CLI runner executes it fine.
+
+    ```bash
+    xano function run twitter-api-oauth-exchange -w 3 --no-input-check --json '{"code":"PASTE_CODE","redirect_uri":"PASTE_CALLBACK_URI","code_verifier":"challenge"}'
+    ```
+
+    Expected response: `ok: true`, the row id, `x_user_id`, `username`, and a `scope` string that contains `dm.read`. If `scope` lacks it, the app permission level in step 1 is wrong.
+  </Step>
+  <Step title="Run the harness (13401)">
+    ```bash
+    xano function run twitter-api-dm-events -w 3 --no-input-check --json '{"max_pages":1,"max_results":100}'
+    ```
+
+    Expected: `account` (from `/2/users/me`), `events_returned`, `events[]`, `users[]`, `media[]`, `tweets[]`, `pages_fetched`, `next_token`, `rate_limited`. Paste one `MessageCreate` event and one group event into the response block above and check the two shape details listed there. Pass `pagination_token` to fetch the next page, up to 15 pages per window.
+  </Step>
+  <Step title="Populate the tables (13402)">
+    ```bash
+    xano function run twitter-api-sync-dms -w 3 --no-input-check --json '{"user_id":12,"x_user_id":"16826747","mode":"initial","max_pages":15}'
+    ```
+
+    `x_user_id` selects the token row when more than one account is stored (row 2 is @Orbiter_io, row 3 is @Mark_L_Pederson); without it the newest row wins. Expected: a `x_dm_sync_run` row with `status = complete` and one `x_dm_activity` row per event in the last 30 days. Read them back with the Metadata API, or in the Xano UI on the live data source:
+
+    ```bash
+    TOKEN=$(awk '/access_token:/{print $2; exit}' ~/.xano/credentials.yaml)
+    curl -s -H "Authorization: Bearer $TOKEN" -H "X-Data-Source: live" \
+      "https://xh2o-yths-38lt.n7c.xano.io/api:meta/workspace/3/table/789/content?page=1&per_page=20" \
+      | jq '.items[] | {activity_timestamp, direction, card_descriptor, snippet, dm_conversation_id, is_group}'
+    ```
+
+    Run it a second time with `mode = incremental` and confirm `events_new` is 0 and `events_updated` is at most one page.
+  </Step>
+  <Step title="Record the result">
+    | Date | Account | Events returned | Pages | Oldest event seen | Notes |
+    | --- | --- | --- | --- | --- | --- |
+    | 2026-09-06 13:00 UTC | @Orbiter_io (`1594015572706181121`) | 0 | 1 | none | HTTP 200, `result_count` 0: no legacy DM events in the 30-day window. Token seeded from the developer console refresh token; sync run 1 `complete`. |
+    | 2026-09-06 13:23 UTC | @Orbiter_io, after a DM from @Mark_L_Pederson | 0 | 1 | none | Still `result_count` 0 across sync run 2 and two harness runs; `x-rate-limit-remaining` 13 → 12. The new conversation is an encrypted Chat, which the API does not return. |
+    | 2026-09-06 13:33 UTC | @Mark_L_Pederson (`16826747`), consent flow | 3 | 1 | 2026-08-11 02:00 UTC | Sync run 3 `initial`: 3 new rows (2 received, 1 sent), all 1-to-1 legacy conversations. Run 4 `incremental`: 0 new, 3 updated. |
+  </Step>
+</Steps>
+
+**Runner limitation, verified 2026-09-06.** `xano function run` cannot resolve nested `function.run` calls. Running `twitter-api-followers` (13389) with an empty handle through the CLI fails with `Function does not exist: function:13391` even though 13391 is published, the same debugger artifact recorded as trap 21 in the docs CLAUDE.md. The harness therefore makes **no nested call**: it reads the token row directly and, if the token expires within 5 minutes, throws `XTokenError` asking for `twitter-api-token` (13391, itself CLI-runnable with `token_type=user`) to be run first. A freshly exchanged token is good for 2 hours, so the smoke test never hits this.
+
+### Harness source: twitter-api-dm-events (13401)
+
+Read-only. Created 2026-09-06 via `xano function create`, re-fetched and diffed byte-for-byte against this source, then executed once against the empty token table: it stopped at the intended `XTokenError` ("No user-context X token in x_oauth_token"), which proves the stack compiles and runs up to the token check.
+
+<Accordion title="XanoScript — twitter-api-dm-events (13401)">
+````xanoscript
+// v1.0 (2026-09-06): smoke-test harness for X (Twitter) API v2 GET /2/dm_events, the endpoint behind the proposed x_dm_activity logger (docs: Open Work > X Followers Capture > Log X DMs). Reads the user-context token in this stack only and makes no nested function.run call, so it can be executed from the CLI/MCP runner (which cannot resolve nested calls, see docs trap 21): if the x_oauth_token row expires within 5 minutes it throws XTokenError asking for twitter-api-token (token_type user) to be run first, then the row is re-read here and the Authorization header is built here. Requires the row's scope to include dm.read (with tweet.read and users.read); throws XScopeError otherwise so a missing consent reads as a clear message instead of an X 403. Confirms the token via /2/users/me, then pages GET /2/dm_events (newest first, up to 100 events per page, only the last 30 days are available) with dm_event.fields plus expansions for sender and participant users, media, and referenced posts. On HTTP 429 it stops and returns what it has with rate_limited = true. Writes nothing.
+function "twitter-api-dm-events" {
+  input {
+    // Optional numeric X user id to pick a specific user-context row in x_oauth_token. Defaults to the most recently updated user row.
+    text x_user_id? filters=trim
+  
+    // How many pages (up to 100 events each) to fetch in this call. The endpoint allows 15 requests per 15 minutes per user.
+    int max_pages?=1 filters=min:1|max:15
+  
+    // Events per page, 1 to 100.
+    int max_results?=100 filters=min:1|max:100
+  
+    // next_token from a previous call, to continue where it left off.
+    text pagination_token? filters=trim
+  
+    // Optional event type filter (MessageCreate, ParticipantsJoin or ParticipantsLeave). Leave empty to return all three.
+    text event_types? filters=trim
+  }
+
+  stack {
+    // Read the token in this stack: a specific account, or the newest user-context row
+    conditional {
+      if ($input.x_user_id != "") {
+        db.query x_oauth_token {
+          where = ($db.x_oauth_token.grant_type == "user") && ($db.x_oauth_token.x_user_id == $input.x_user_id)
+          return = {type: "single"}
+        } as $token_row
+      }
+    
+      else {
+        db.query x_oauth_token {
+          where = $db.x_oauth_token.grant_type == "user"
+          sort = {updated_at: "desc"}
+          return = {type: "single"}
+        } as $token_row
+      }
+    }
+  
+    conditional {
+      if ($token_row == null) {
+        throw {
+          name = "XTokenError"
+          value = "No user-context X token in x_oauth_token. Authorize with scopes dm.read tweet.read users.read offline.access, then run twitter-api-oauth-exchange."
+        }
+      }
+    }
+  
+    // No nested refresh here (runner limitation): refuse a token that expires within 5 minutes and say what to run
+    var $refresh_threshold {
+      value = now|add_secs_to_timestamp:300
+    }
+  
+    var $token_stale {
+      value = ($token_row.expires_at == null) || ($token_row.expires_at < $refresh_threshold)
+    }
+  
+    conditional {
+      if ($token_stale) {
+        var $stale_err {
+          value = "Stored X token for @" ~ $token_row.username ~ " expires at " ~ $token_row.expires_at ~ ". Run twitter-api-token with token_type=user to refresh it, then re-run this harness."
+        }
+      
+        throw {
+          name = "XTokenError"
+          value = $stale_err
+        }
+      }
+    }
+  
+    // The DM endpoints need dm.read on the grant; fail early with a readable message
+    var $scope {
+      value = $token_row.scope
+    }
+  
+    var $has_dm_scope {
+      value = $scope|contains:"dm.read"
+    }
+  
+    conditional {
+      if ($has_dm_scope == false) {
+        var $scope_err {
+          value = "Stored X token for @" ~ $token_row.username ~ " was granted without dm.read (scope: '" ~ $scope ~ "'). Re-authorize with dm.read tweet.read users.read offline.access and re-run twitter-api-oauth-exchange."
+        }
+      
+        throw {
+          name = "XScopeError"
+          value = $scope_err
+        }
+      }
+    }
+  
+    var $token_source {
+      value = "x_oauth_token:" ~ $token_row.id
+    }
+  
+    var $auth_header {
+      value = "Authorization: Bearer " ~ $token_row.access_token
+    }
+  
+    // Confirm the token works and identify the connected account
+    api.request {
+      url = "https://api.x.com/2/users/me?user.fields=id,username,name,public_metrics"
+      method = "GET"
+      headers = []|push:$auth_header
+      timeout = 30
+    } as $me_call
+  
+    precondition ($me_call.response.result != false) {
+      error = "X /2/users/me did not respond (timeout)"
+    }
+  
+    var $me_status {
+      value = $me_call.response.status
+    }
+  
+    var $me_body {
+      value = $me_call.response.result
+    }
+  
+    conditional {
+      if ($me_status != 200) {
+        var $me_err {
+          value = "X /2/users/me failed (HTTP " ~ $me_status ~ ") using " ~ $token_source ~ ": " ~ ($me_body|json_encode)
+        }
+      
+        throw {
+          name = "XApiError"
+          value = $me_err
+        }
+      }
+    }
+  
+    var $account {
+      value = $me_body|get:"data":null
+    }
+  
+    // Field lists for the DM lookup
+    var $dm_fields {
+      value = "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids,referenced_tweets,attachments"
+    }
+  
+    var $expansions {
+      value = "sender_id,participant_ids,referenced_tweets.id,attachments.media_keys"
+    }
+  
+    var $user_fields {
+      value = "id,username,name,profile_image_url,verified,protected"
+    }
+  
+    var $media_fields {
+      value = "media_key,type,url,preview_image_url"
+    }
+  
+    var $tweet_fields {
+      value = "id,text,author_id,created_at"
+    }
+  
+    var $base_url {
+      value = "https://api.x.com/2/dm_events?max_results=" ~ $input.max_results ~ "&dm_event.fields=" ~ $dm_fields ~ "&expansions=" ~ $expansions ~ "&user.fields=" ~ $user_fields ~ "&media.fields=" ~ $media_fields ~ "&tweet.fields=" ~ $tweet_fields
+    }
+  
+    // Only send event_types when asked; omitting it returns all three types
+    conditional {
+      if ($input.event_types != "") {
+        var.update $base_url {
+          value = $base_url ~ "&event_types=" ~ $input.event_types
+        }
+      }
+    }
+  
+    // Page through DM events
+    var $events {
+      value = []
+    }
+  
+    var $users {
+      value = []
+    }
+  
+    var $media {
+      value = []
+    }
+  
+    var $tweets {
+      value = []
+    }
+  
+    var $next_token {
+      value = $input.pagination_token
+    }
+  
+    var $pages {
+      value = 0
+    }
+  
+    var $keep_going {
+      value = true
+    }
+  
+    var $rate_limited {
+      value = false
+    }
+  
+    var $last_status {
+      value = 0
+    }
+  
+    var $last_body {
+      value = null
+    }
+  
+    while ($keep_going) {
+      each {
+        var $page_url {
+          value = $base_url
+        }
+      
+        conditional {
+          if ($next_token != "") {
+            var.update $page_url {
+              value = $base_url ~ "&pagination_token=" ~ $next_token
+            }
+          }
+        }
+      
+        // Fetch one page of DM events
+        api.request {
+          url = $page_url
+          method = "GET"
+          headers = []|push:$auth_header
+          timeout = 60
+        } as $page_call
+      
+        precondition ($page_call.response.result != false) {
+          error = "X dm_events request did not respond (timeout)"
+        }
+      
+        var $page_status {
+          value = $page_call.response.status
+        }
+      
+        var $page_body {
+          value = $page_call.response.result
+        }
+      
+        var.update $last_status {
+          value = $page_status
+        }
+      
+        conditional {
+          if ($page_status == 429) {
+            // Per-user window exhausted: stop and hand back what we have plus the resume token
+            var.update $rate_limited {
+              value = true
+            }
+          
+            var.update $last_body {
+              value = $page_body
+            }
+          
+            var.update $keep_going {
+              value = false
+            }
+          }
+        
+          elseif ($page_status != 200) {
+            var $page_err {
+              value = "X dm_events request failed (HTTP " ~ $page_status ~ ") after " ~ $pages ~ " page(s): " ~ ($page_body|json_encode)
+            }
+          
+            throw {
+              name = "XApiError"
+              value = $page_err
+            }
+          }
+        
+          else {
+            var $page_data {
+              value = $page_body|get:"data":null
+            }
+          
+            conditional {
+              if ($page_data != null) {
+                array.merge $events {
+                  value = $page_data
+                }
+              }
+            }
+          
+            var $inc_users {
+              value = $page_body|get:"includes.users":null
+            }
+          
+            conditional {
+              if ($inc_users != null) {
+                array.merge $users {
+                  value = $inc_users
+                }
+              }
+            }
+          
+            var $inc_media {
+              value = $page_body|get:"includes.media":null
+            }
+          
+            conditional {
+              if ($inc_media != null) {
+                array.merge $media {
+                  value = $inc_media
+                }
+              }
+            }
+          
+            var $inc_tweets {
+              value = $page_body|get:"includes.tweets":null
+            }
+          
+            conditional {
+              if ($inc_tweets != null) {
+                array.merge $tweets {
+                  value = $inc_tweets
+                }
+              }
+            }
+          
+            var.update $pages {
+              value = $pages + 1
+            }
+          
+            var.update $next_token {
+              value = $page_body|get:"meta.next_token":""
+            }
+          
+            conditional {
+              if (($next_token == "") || ($pages >= $input.max_pages)) {
+                var.update $keep_going {
+                  value = false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  
+    var $events_returned {
+      value = $events|count
+    }
+  }
+
+  response = {
+    account        : $account
+    scope          : $scope
+    token_source   : $token_source
+    events_returned: $events_returned
+    events         : $events
+    users          : $users
+    media          : $media
+    tweets         : $tweets
+    pages_fetched  : $pages
+    next_token     : $next_token
+    rate_limited   : $rate_limited
+    last_status    : $last_status
+    last_body      : $last_body
+  }
+}
+````
+</Accordion>
+
+### Reference source: twitter-api-sync-dms (13402)
+
+The writer. Same creation and verification steps as the harness; its first run against the empty token table stopped at the same `XTokenError`. Charles ports this, not the harness.
+
+<Accordion title="XanoScript — twitter-api-sync-dms (13402)">
+````xanoscript
+// v1.0 (2026-09-06): REFERENCE IMPLEMENTATION for Charles's Go/GCP build of the X DM logger (docs: Open Work > X Followers Capture > Log X DMs). Pulls the connected account's direct-message events from X API v2 GET /2/dm_events (newest first, last 30 days only, up to 100 per page, 15 requests per 15 minutes per user) and logs one x_dm_activity (789) row per event per Orbiter user, deduped on (user_id, dm_event_id), with a x_dm_sync_run (790) row per attempt. Derives direction (sent when sender_id is the connected account), the 1-to-1 counterpart from the hyphenated conversation id, card_descriptor, snippet and sender_profile_url the way email_activity does for email. mode incremental stops after the first page that contained an already-logged event; mode initial pages until X runs out. On HTTP 429 the run is paused with next_token stored for resume via sync_run_id. Reads the user-context token in this stack only and makes no nested function.run (CLI-runnable): rows without dm.read or within 5 minutes of expiry throw a readable error. Never resolves my_person_id or touches the graph; that belongs to the resolver CRON.
+function "twitter-api-sync-dms" {
+  input {
+    // Orbiter user the DMs belong to (x_dm_activity.user_id).
+    int user_id
+  
+    // Optional numeric X user id to pick a specific user-context row in x_oauth_token. Defaults to the most recently updated user row.
+    text x_user_id? filters=trim
+  
+    // initial pages until X runs out (30-day window). incremental stops after the first page that contained an event already logged.
+    text mode?=incremental filters=trim|lower
+  
+    // Resume a paused run: continues from that run's stored next_token.
+    int sync_run_id?
+  
+    // Pages per call, up to the 15-request window.
+    int max_pages?=15 filters=min:1|max:15
+  
+    // Events per page, 1 to 100.
+    int max_results?=100 filters=min:1|max:100
+  
+    // activity_type id for received rows (0 until the x_dm_from row exists).
+    int activity_type_from?
+  
+    // activity_type id for sent rows (0 until the x_dm_to row exists).
+    int activity_type_to?
+  
+    // data_source row for X DM Sync (0 until it exists).
+    int data_source_id?
+  }
+
+  stack {
+    precondition (($input.mode == "initial") || ($input.mode == "incremental")) {
+      error_type = "inputerror"
+      error = "mode must be initial or incremental"
+    }
+  
+    // Read the token in this stack: a specific account, or the newest user-context row
+    conditional {
+      if ($input.x_user_id != "") {
+        db.query x_oauth_token {
+          where = ($db.x_oauth_token.grant_type == "user") && ($db.x_oauth_token.x_user_id == $input.x_user_id)
+          return = {type: "single"}
+        } as $token_row
+      }
+    
+      else {
+        db.query x_oauth_token {
+          where = $db.x_oauth_token.grant_type == "user"
+          sort = {updated_at: "desc"}
+          return = {type: "single"}
+        } as $token_row
+      }
+    }
+  
+    conditional {
+      if ($token_row == null) {
+        throw {
+          name = "XTokenError"
+          value = "No user-context X token in x_oauth_token. Authorize with scopes dm.read tweet.read users.read offline.access, then run twitter-api-oauth-exchange."
+        }
+      }
+    }
+  
+    // The DM endpoints need dm.read on the grant
+    var $scope {
+      value = $token_row.scope
+    }
+  
+    var $has_dm_scope {
+      value = $scope|contains:"dm.read"
+    }
+  
+    conditional {
+      if ($has_dm_scope == false) {
+        var $scope_err {
+          value = "Stored X token for @" ~ $token_row.username ~ " was granted without dm.read (scope: '" ~ $scope ~ "'). Re-authorize with dm.read tweet.read users.read offline.access and re-run twitter-api-oauth-exchange."
+        }
+      
+        throw {
+          name = "XScopeError"
+          value = $scope_err
+        }
+      }
+    }
+  
+    // No nested refresh here (runner limitation): refuse a token that expires within 5 minutes
+    var $refresh_threshold {
+      value = now|add_secs_to_timestamp:300
+    }
+  
+    var $token_stale {
+      value = ($token_row.expires_at == null) || ($token_row.expires_at < $refresh_threshold)
+    }
+  
+    conditional {
+      if ($token_stale) {
+        var $stale_err {
+          value = "Stored X token for @" ~ $token_row.username ~ " expires at " ~ $token_row.expires_at ~ ". Run twitter-api-token with token_type=user to refresh it, then re-run this function."
+        }
+      
+        throw {
+          name = "XTokenError"
+          value = $stale_err
+        }
+      }
+    }
+  
+    var $auth_header {
+      value = "Authorization: Bearer " ~ $token_row.access_token
+    }
+  
+    // Confirm the token works and identify the connected account
+    api.request {
+      url = "https://api.x.com/2/users/me?user.fields=id,username,name"
+      method = "GET"
+      headers = []|push:$auth_header
+      timeout = 30
+    } as $me_call
+  
+    precondition ($me_call.response.result != false) {
+      error = "X /2/users/me did not respond (timeout)"
+    }
+  
+    var $me_status {
+      value = $me_call.response.status
+    }
+  
+    var $me_body {
+      value = $me_call.response.result
+    }
+  
+    conditional {
+      if ($me_status != 200) {
+        var $me_err {
+          value = "X /2/users/me failed (HTTP " ~ $me_status ~ ") for x_oauth_token row " ~ $token_row.id ~ ": " ~ ($me_body|json_encode)
+        }
+      
+        throw {
+          name = "XApiError"
+          value = $me_err
+        }
+      }
+    }
+  
+    var $account {
+      value = $me_body|get:"data":null
+    }
+  
+    var $account_id {
+      value = $account|get:"id":""
+    }
+  
+    var $account_username {
+      value = $account|get:"username":""
+    }
+  
+    // Create or resume the run row
+    var $next_token {
+      value = ""
+    }
+  
+    var $newest_event_id {
+      value = ""
+    }
+  
+    conditional {
+      if ($input.sync_run_id > 0) {
+        db.get x_dm_sync_run {
+          field_name = "id"
+          field_value = $input.sync_run_id
+        } as $run
+      
+        precondition ($run != null) {
+          error_type = "notfound"
+          error = "sync_run_id not found"
+        }
+      
+        var.update $next_token {
+          value = $run.next_token
+        }
+      
+        var.update $newest_event_id {
+          value = $run.newest_event_id
+        }
+      
+        db.edit x_dm_sync_run {
+          field_name = "id"
+          field_value = $run.id
+          data = {status: "running", updated_at: now}
+        } as $run_resumed
+      }
+    
+      else {
+        db.add x_dm_sync_run {
+          data = {
+            user_id   : $input.user_id
+            x_user_id : $account_id
+            mode      : $input.mode
+            status    : "running"
+            started_at: now
+            created_at: now
+            updated_at: now
+          }
+        } as $run
+      }
+    }
+  
+    var $run_id {
+      value = $run.id
+    }
+  
+    // Field lists for the DM lookup
+    var $dm_fields {
+      value = "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids,referenced_tweets,attachments"
+    }
+  
+    var $expansions {
+      value = "sender_id,participant_ids,referenced_tweets.id,attachments.media_keys"
+    }
+  
+    var $user_fields {
+      value = "id,username,name,profile_image_url,verified,protected"
+    }
+  
+    var $base_url {
+      value = "https://api.x.com/2/dm_events?max_results=" ~ $input.max_results ~ "&dm_event.fields=" ~ $dm_fields ~ "&expansions=" ~ $expansions ~ "&user.fields=" ~ $user_fields ~ "&media.fields=media_key,type,url,preview_image_url&tweet.fields=id,text,author_id,created_at"
+    }
+  
+    // Page through DM events and log them
+    var $users {
+      value = []
+    }
+  
+    var $events_seen {
+      value = 0
+    }
+  
+    var $events_new {
+      value = 0
+    }
+  
+    var $events_updated {
+      value = 0
+    }
+  
+    var $pages {
+      value = 0
+    }
+  
+    var $keep_going {
+      value = true
+    }
+  
+    var $rate_limited {
+      value = false
+    }
+  
+    var $stop_incremental {
+      value = false
+    }
+  
+    while ($keep_going) {
+      each {
+        var $page_url {
+          value = $base_url
+        }
+      
+        conditional {
+          if ($next_token != "") {
+            var.update $page_url {
+              value = $base_url ~ "&pagination_token=" ~ $next_token
+            }
+          }
+        }
+      
+        // Fetch one page of DM events
+        api.request {
+          url = $page_url
+          method = "GET"
+          headers = []|push:$auth_header
+          timeout = 60
+        } as $page_call
+      
+        precondition ($page_call.response.result != false) {
+          error = "X dm_events request did not respond (timeout)"
+        }
+      
+        var $page_status {
+          value = $page_call.response.status
+        }
+      
+        var $page_body {
+          value = $page_call.response.result
+        }
+      
+        conditional {
+          if ($page_status == 429) {
+            // Per-user window exhausted: pause the run and keep next_token for resume
+            var.update $rate_limited {
+              value = true
+            }
+          
+            var.update $keep_going {
+              value = false
+            }
+          }
+        
+          elseif ($page_status != 200) {
+            var $page_err {
+              value = "X dm_events request failed (HTTP " ~ $page_status ~ ") after " ~ $pages ~ " page(s): " ~ ($page_body|json_encode)
+            }
+          
+            db.edit x_dm_sync_run {
+              field_name = "id"
+              field_value = $run_id
+              data = {
+                status       : "failed"
+                error_message: $page_err
+                finished_at  : now
+                updated_at   : now
+              }
+            } as $run_failed
+          
+            throw {
+              name = "XApiError"
+              value = $page_err
+            }
+          }
+        
+          else {
+            var $inc_users {
+              value = $page_body|get:"includes.users":null
+            }
+          
+            conditional {
+              if ($inc_users != null) {
+                array.merge $users {
+                  value = $inc_users
+                }
+              }
+            }
+          
+            var $page_data {
+              value = $page_body|get:"data":null
+            }
+          
+            conditional {
+              if ($page_data != null) {
+                // The first event of a fresh run is the newest one X has
+                conditional {
+                  if ($newest_event_id == "") {
+                    var $first_ev {
+                      value = $page_data|first
+                    }
+                  
+                    var.update $newest_event_id {
+                      value = $first_ev|get:"id":""
+                    }
+                  }
+                }
+              
+                foreach ($page_data) {
+                  each as $ev {
+                    var $ev_id {
+                      value = $ev|get:"id":""
+                    }
+                  
+                    var $ev_type {
+                      value = $ev|get:"event_type":"MessageCreate"
+                    }
+                  
+                    var $ev_text {
+                      value = $ev|get:"text":""
+                    }
+                  
+                    var $ev_sender {
+                      value = $ev|get:"sender_id":""
+                    }
+                  
+                    var $ev_conv {
+                      value = $ev|get:"dm_conversation_id":""
+                    }
+                  
+                    var $ev_created {
+                      value = $ev|get:"created_at":""
+                    }
+                  
+                    var $ev_participants {
+                      value = $ev|get:"participant_ids":null
+                    }
+                  
+                    var $ev_refs {
+                      value = $ev|get:"referenced_tweets":null
+                    }
+                  
+                    var $ev_att {
+                      value = $ev|get:"attachments":null
+                    }
+                  
+                    // Sender handle from includes.users
+                    var $sender_username {
+                      value = ""
+                    }
+                  
+                    foreach ($users) {
+                      each as $u {
+                        conditional {
+                          if ($u.id == $ev_sender) {
+                            var.update $sender_username {
+                              value = $u.username
+                            }
+                          }
+                        }
+                      }
+                    }
+                  
+                    // Direction: sent when the connected account wrote the message
+                    var $direction {
+                      value = "received"
+                    }
+                  
+                    conditional {
+                      if (($ev_type == "MessageCreate") && ($ev_sender == $account_id)) {
+                        var.update $direction {
+                          value = "sent"
+                        }
+                      }
+                    }
+                  
+                    // 1-to-1 conversation ids are "<id>-<id>"; group ids are a single snowflake
+                    var $is_group {
+                      value = true
+                    }
+                  
+                    var $counterpart {
+                      value = ""
+                    }
+                  
+                    var $conv_has_dash {
+                      value = $ev_conv|contains:"-"
+                    }
+                  
+                    conditional {
+                      if ($conv_has_dash) {
+                        var.update $is_group {
+                          value = false
+                        }
+                      
+                        var.update $counterpart {
+                          value = $ev_conv
+                            |replace:$account_id:""
+                            |replace:"-":""
+                        }
+                      }
+                    }
+                  
+                    var $participant_count {
+                      value = 2
+                    }
+                  
+                    conditional {
+                      if ($is_group) {
+                        conditional {
+                          if ($ev_participants != null) {
+                            var $pc {
+                              value = $ev_participants|count
+                            }
+                          
+                            var.update $participant_count {
+                              value = $pc
+                            }
+                          }
+                        
+                          else {
+                            var.update $participant_count {
+                              value = 0
+                            }
+                          }
+                        }
+                      }
+                    }
+                  
+                    // Counterpart handle, when X included that user
+                    var $counterpart_username {
+                      value = ""
+                    }
+                  
+                    conditional {
+                      if ($counterpart != "") {
+                        foreach ($users) {
+                          each as $u2 {
+                            conditional {
+                              if ($u2.id == $counterpart) {
+                                var.update $counterpart_username {
+                                  value = $u2.username
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  
+                    // card_descriptor like email: "DM from @handle" / "DM to @handle" / "Group DM (n)"
+                    var $card {
+                      value = ""
+                    }
+                  
+                    conditional {
+                      if ($is_group) {
+                        var.update $card {
+                          value = "Group DM (" ~ $participant_count ~ ")"
+                        }
+                      }
+                    
+                      elseif ($direction == "sent") {
+                        conditional {
+                          if ($counterpart_username != "") {
+                            var.update $card {
+                              value = "DM to @" ~ $counterpart_username
+                            }
+                          }
+                        
+                          else {
+                            var.update $card {
+                              value = "DM to " ~ $counterpart
+                            }
+                          }
+                        }
+                      }
+                    
+                      else {
+                        conditional {
+                          if ($sender_username != "") {
+                            var.update $card {
+                              value = "DM from @" ~ $sender_username
+                            }
+                          }
+                        
+                          else {
+                            var.update $card {
+                              value = "DM from " ~ $ev_sender
+                            }
+                          }
+                        }
+                      }
+                    }
+                  
+                    var $snippet {
+                      value = $ev_text|substr:0:160
+                    }
+                  
+                    var $sender_url {
+                      value = ""
+                    }
+                  
+                    conditional {
+                      if ($sender_username != "") {
+                        var.update $sender_url {
+                          value = "https://x.com/" ~ $sender_username
+                        }
+                      }
+                    }
+                  
+                    var $atype {
+                      value = $input.activity_type_from
+                    }
+                  
+                    conditional {
+                      if ($direction == "sent") {
+                        var.update $atype {
+                          value = $input.activity_type_to
+                        }
+                      }
+                    }
+                  
+                    // Upsert on (user_id, dm_event_id)
+                    db.query x_dm_activity {
+                      where = ($db.x_dm_activity.user_id == $input.user_id) && ($db.x_dm_activity.dm_event_id == $ev_id)
+                      return = {type: "single"}
+                    } as $existing
+                  
+                    conditional {
+                      if ($existing == null) {
+                        db.add x_dm_activity {
+                          data = {
+                            user_id              : $input.user_id
+                            my_person_id         : 0
+                            activity_type_id     : $atype
+                            direction            : $direction
+                            card_descriptor      : $card
+                            activity_timestamp   : $ev_created
+                            x_user_id            : $account_id
+                            dm_event_id          : $ev_id
+                            dm_conversation_id   : $ev_conv
+                            event_type           : $ev_type
+                            text                 : $ev_text
+                            snippet              : $snippet
+                            sender_x_user_id     : $ev_sender
+                            sender_username      : $sender_username
+                            sender_profile_url   : $sender_url
+                            counterpart_x_user_id: $counterpart
+                            participant_ids      : $ev_participants
+                            participant_count    : $participant_count
+                            is_group             : $is_group
+                            referenced_tweets    : $ev_refs
+                            attachments          : $ev_att
+                            raw                  : $ev
+                            data_source_id       : $input.data_source_id
+                            sync_run_id          : $run_id
+                            created_at           : now
+                            updated_at           : now
+                          }
+                        } as $added
+                      
+                        var.update $events_new {
+                          value = $events_new + 1
+                        }
+                      }
+                    
+                      else {
+                        db.edit x_dm_activity {
+                          field_name = "id"
+                          field_value = $existing.id
+                          data = {
+                            activity_type_id     : $atype
+                            direction            : $direction
+                            card_descriptor      : $card
+                            activity_timestamp   : $ev_created
+                            x_user_id            : $account_id
+                            dm_conversation_id   : $ev_conv
+                            event_type           : $ev_type
+                            text                 : $ev_text
+                            snippet              : $snippet
+                            sender_x_user_id     : $ev_sender
+                            sender_username      : $sender_username
+                            sender_profile_url   : $sender_url
+                            counterpart_x_user_id: $counterpart
+                            participant_ids      : $ev_participants
+                            participant_count    : $participant_count
+                            is_group             : $is_group
+                            referenced_tweets    : $ev_refs
+                            attachments          : $ev_att
+                            raw                  : $ev
+                            sync_run_id          : $run_id
+                            updated_at           : now
+                          }
+                        } as $edited
+                      
+                        var.update $events_updated {
+                          value = $events_updated + 1
+                        }
+                      
+                        // Incremental mode: everything older than a known event is already logged
+                        conditional {
+                          if ($input.mode == "incremental") {
+                            var.update $stop_incremental {
+                              value = true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  
+                    var.update $events_seen {
+                      value = $events_seen + 1
+                    }
+                  }
+                }
+              }
+            }
+          
+            var.update $pages {
+              value = $pages + 1
+            }
+          
+            var.update $next_token {
+              value = $page_body|get:"meta.next_token":""
+            }
+          
+            // Checkpoint after every page so a crash loses at most one page
+            db.edit x_dm_sync_run {
+              field_name = "id"
+              field_value = $run_id
+              data = {
+                events_seen    : $events_seen
+                events_new     : $events_new
+                pages_fetched  : $pages
+                next_token     : $next_token
+                newest_event_id: $newest_event_id
+                updated_at     : now
+              }
+            } as $run_checkpoint
+          
+            conditional {
+              if (($next_token == "") || ($pages >= $input.max_pages) || $stop_incremental) {
+                var.update $keep_going {
+                  value = false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  
+    // Close the run
+    var $final_status {
+      value = "complete"
+    }
+  
+    conditional {
+      if ($rate_limited) {
+        var.update $final_status {
+          value = "paused_rate_limit"
+        }
+      }
+    
+      elseif (($next_token != "") && ($stop_incremental == false)) {
+        var.update $final_status {
+          value = "paused_rate_limit"
+        }
+      }
+    }
+  
+    conditional {
+      if ($final_status == "complete") {
+        db.edit x_dm_sync_run {
+          field_name = "id"
+          field_value = $run_id
+          data = {
+            status         : "complete"
+            events_seen    : $events_seen
+            events_new     : $events_new
+            pages_fetched  : $pages
+            next_token     : ""
+            newest_event_id: $newest_event_id
+            finished_at    : now
+            updated_at     : now
+          }
+        } as $run_done
+      }
+    
+      else {
+        db.edit x_dm_sync_run {
+          field_name = "id"
+          field_value = $run_id
+          data = {
+            status         : "paused_rate_limit"
+            events_seen    : $events_seen
+            events_new     : $events_new
+            pages_fetched  : $pages
+            next_token     : $next_token
+            newest_event_id: $newest_event_id
+            updated_at     : now
+          }
+        } as $run_paused
+      }
+    }
+  }
+
+  response = {
+    sync_run_id    : $run_id
+    mode           : $input.mode
+    status         : $final_status
+    account_id     : $account_id
+    username       : $account_username
+    events_seen    : $events_seen
+    events_new     : $events_new
+    events_updated : $events_updated
+    pages_fetched  : $pages
+    next_token     : $next_token
+    newest_event_id: $newest_event_id
+    rate_limited   : $rate_limited
+    users_seen     : $users
+  }
+}
+````
+</Accordion>
+
+## Open questions
+
+0. **Build now, or wait for X?** With new conversations encrypted and invisible to `GET /2/dm_events`, a poll-based import captures only legacy threads that stay unencrypted, a set that shrinks every time a user upgrades a conversation. The alternatives are to wait for X's encrypted Chat API, or to scope the XChat webhook plus `chat-xdk` decryption once X ships it, which would also replace the polling design and its per-event floor cost. This decision comes before every other item on this page.
+1. **Message bodies are third-party personal data.** Email stores `clean_message`, so parity says store `text`. DMs are more private than email in most users' minds. Decide whether to store full text, snippet only, or full text with a shorter retention than `x_follower` rows, and what happens on disconnect.
+2. **`user_id` versus `entity_id`.** Tables 789 and 790 use `user_id` to match `email_activity`; the parent page adds `entity_id` to `x_oauth_token` for the same Orbiter user. Pick one name before the Go tables are created.
+3. **Which activity types.** Two rows (`x_dm_from`, `x_dm_to`) mirror `email_from` / `email_to`. Group DMs could justify a third (`x_dm_group`) if the interaction-log job wants to discount them the way `direct_emails` discounts cc-only mail.
+4. **Group DM participants.** X returns `participant_ids` only on join and leave events. To know a group's members at message time the sync must replay the group's join and leave events or call the conversation endpoint. Decide whether group membership matters for counts.
+5. **Polling versus webhook.** Per-resource pricing makes the `dm.received` webhook the cheaper path once volume grows, but it needs a public receiver and per-user subscriptions. Phase 1 polls; confirm the crossover point from the run rows.
+6. **Multiple X accounts per Orbiter user.** Same question as the parent page. If allowed, the sync runs once per token row and `x_user_id` on the activity row tells them apart.
+7. **Protected and deleted counterparties.** A sender who protects their account after the fact still shows in `includes.users` with `protected = true`; a deleted account may drop out of `includes` entirely. Store `sender_username` at capture time so the row still reads.
+
+## What exists in Xano today
+
+All four X DM artifacts were created on 2026-09-06 as references for the Go build. None is scheduled, called by anything, or read by the app.
+
+<Card icon="database">
+
+```text
+x_dm_activity — 789
+```
+
+Reference table, one row per DM event per Orbiter user, columns as in the table above. Unique index on `(user_id, dm_event_id)`; btree on `(user_id, activity_timestamp)`, `dm_conversation_id`, and `my_person_id`. Empty until the smoke test runs 13402.
+
+</Card>
+
+<Card icon="database">
+
+```text
+x_dm_sync_run — 790
+```
+
+Reference companion table, one row per sync attempt with mode, status, counts, `next_token` and `newest_event_id`. Btree on `status` and `(user_id, created_at)`.
+
+</Card>
+
+<Card icon="play">
+
+```text
+twitter-api-sync-dms — 13402
+```
+
+Reference writer. Reads the user-context token, pages `GET /2/dm_events`, derives the email-style fields, and upserts 789 with a checkpointed 790 row. Inputs: `user_id`, `x_user_id`, `mode`, `sync_run_id`, `max_pages`, `max_results`, `activity_type_from`, `activity_type_to`, `data_source_id`. No nested calls, no schedule, no resolver, no graph.
+
+</Card>
+
+<Card icon="wrench">
+
+```text
+twitter-api-dm-events — 13401
+```
+
+Read-only smoke-test harness for `GET /2/dm_events`, created while scoping this page. Reads the newest user-context `x_oauth_token` row in its own stack (or one selected by `x_user_id`), refuses rows without `dm.read` or within 5 minutes of expiry with a readable error, confirms the token at `/2/users/me`, then pages DM events with the field and expansion lists above. Inputs: `x_user_id`, `max_pages` (1 to 15), `max_results` (1 to 100), `pagination_token`, `event_types`. Stops on HTTP 429 and returns `rate_limited = true`. Writes nothing.
+
+</Card>
+
+<Card icon="database">
+
+```text
+x_oauth_token — 788
+```
+
+Columns: `grant_type` (enum user, app), `x_user_id` (text, unique), `username`, `access_token`, `refresh_token`, `expires_at`, `scope`, plus timestamps. **Empty on live, sandbox and staging as of 2026-09-06.** The `scope` column is what the sync checks for `dm.read`.
+
+</Card>
+
+<Card icon="play">
+
+```text
+twitter-api-oauth-exchange — 13390
+```
+
+The exchange step of the smoke test. Unchanged; see the [parent page](/guides/open-work/x-followers-capture#what-exists-in-xano-today) for details.
+
+</Card>
+
+<Card icon="wrench">
+
+```text
+twitter-api-token — 13391
+```
+
+Refreshes a user-context row when it expires within 5 minutes. CLI-runnable with `token_type=user`. See the parent page.
+
+</Card>
+
+<Card icon="database">
+
+```text
+email_activity — 597
+```
+
+The table this design mirrors. Written by `mvp/activity/log-participant-activity` (12773), one row per participant per message, deduped on `(grant_id, message_id)`.
+
+</Card>
+
+<Card icon="database">
+
+```text
+activity_type — 217
+```
+
+Lookup table with `activity_type` text values. Email uses ids 1 to 4 (`email_from`, `email_to`, `email_cc`, `email_bcc`). Two X DM rows are proposed; ids 11 and 14 are gaps and must not be reused.
+
+</Card>
+
+<Card icon="database">
+
+```text
+data_source — 161
+```
+
+Provenance lookup. 14 is NylasEmail, 47 and 48 are the Nylas parse-from and parse-to sources. A new "X DM Sync" row is proposed; existing rows 7 (Twitter) and 41 (Twitter Resolve) describe profile enrichment, not activity.
+
+</Card>
+
+## Related
+
+- [X Followers Capture](/guides/open-work/x-followers-capture) owns the OAuth flow, `x_oauth_token`, and the resolver CRON this page reuses.
+- [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) is the consumer that counts activity per contact and needs `x_dm_activity` as a fourth source.
+- [message.created](/guides/log-parse/message-created) is the email webhook chain this design mirrors.
