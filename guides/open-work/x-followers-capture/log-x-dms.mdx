@@ -15,7 +15,7 @@ icon: "comments"
   1. **Legacy DMs** through `GET /2/dm_events`: conversations that were never upgraded to encryption. Full text, last 30 days only. Proven: 3 of Mark's conversations logged.
   2. **Encrypted chats** through the **X Chat API**: every new conversation. The API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body only as ciphertext that decrypts on the user's device. Proven: Mark's 6 chat events with @jasondiamond logged as metadata rows.
 
-  **Decision taken for this spec: log encrypted chats as metadata-only rows (`text` empty), never hold user keys or PINs server-side, and treat message text as a later, on-device feature.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
+  **Decision taken for this spec: Phase 1 logs encrypted chats as metadata-only rows (`text` empty) and never holds user keys or PINs server-side. Knowing that a conversation is happening, with whom, in which direction and how recently is the value for Orbiter's interaction log and KNOWS edges. Phase 2, message text through on-device decryption in the Orbiter client, is scoped as the last step of the build plan.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
 </Warning>
 
 ## What this delivers
@@ -51,7 +51,19 @@ Work top to bottom. Each step names its acceptance check.
     Never resolve counterparties in the loggers. The resolver CRON from the parent page sweeps rows with `my_person_id = 0` by `sender_profile_url`, or `counterpart_x_user_id` for sent 1-to-1 rows, back-fills `my_person_id`, and only then fans out KNOWS pairs as `known/ingest/_fanout_email_pairs` does for email. Chat rows resolve exactly like legacy rows; they only lack text.
   </Step>
   <Step title="8. Cost guards, observability, tests, rollout">
-    Per-account daily cap on events read (start at 3,000) and a global monthly budget behind a kill switch. One structured log line per run from the run row; metrics for accounts due, runs completed, 429s, reconsents needed, webhook deliveries and estimated spend. Unit tests for direction, counterpart from the hyphenated id, `card_descriptor` and colon-to-hyphen normalisation, driven by the recorded fixtures on this page; an idempotency test that runs a fixture twice. Feature flag per user; internal accounts first; a week of spend data; then everyone.
+    Per-account daily cap on events read (start at 3,000) and a global monthly budget behind a kill switch. One structured log line per run from the run row; metrics for accounts due, runs completed, 429s, reconsents needed, webhook deliveries and estimated spend. Unit tests for direction, counterpart from the hyphenated id, `card_descriptor` and colon-to-hyphen normalisation, driven by the recorded fixtures on this page; an idempotency test that runs a fixture twice. Feature flag per user; internal accounts first; a week of spend data; then everyone. **Phase 1 ships here.**
+  </Step>
+  <Step title="9. Phase 2, later: message text through on-device decryption (Option B)">
+    Phase 1 already tells Orbiter that a conversation is happening, with whom, in which direction and how recently. Phase 2 adds the words, and it can only happen on the user's device, because that is where X keeps the keys. Scope, in order:
+
+    1. **Client integration.** Embed the Chat XDK in the Orbiter client: `@xdevplatform/chat-xdk` (WASM) in the web app, the native binding in mobile. The client calls `unlock(pin)` once per device, keeps the key material in the XDK's own storage, and never sends the PIN or keys anywhere.
+    2. **PIN prompt.** A one-time screen that asks for the user's XChat PIN with a plain explanation of what it unlocks and that it stays on the device. Users who decline stay on Phase 1; the metadata rows are unaffected.
+    3. **Decrypt and post.** On open, and while the app is in the foreground, the client fetches `GET /2/chat/conversations/{id}/events` for conversations with rows whose `text` is empty, runs `decrypt_events()`, and posts `{dm_event_id, text}` pairs to a new ingest endpoint that fills `text` and `snippet` on the existing row. Nothing new is inserted; Phase 1 rows are the anchor. Webhook events keep arriving as metadata and get their text the next time a client opens.
+    4. **Ingest endpoint.** Authenticated, per-user, idempotent on `dm_event_id`, rejects rows that do not belong to the caller's `user_id`. Rate-limit and size-cap the payload.
+    5. **Privacy and retention.** Explicit consent copy for storing plaintext of end-to-end encrypted chats, a retention window shorter than legacy DM text, deletion on disconnect, and a per-user switch to stop text sync while keeping metadata. Legal review before rollout.
+    6. **Acceptance.** A row logged by Phase 1 gains `text` within one client session; a user who never enters a PIN keeps working with metadata only; revoking the switch clears stored text for that user.
+
+    Do not start Phase 2 until Phase 1 has run for real users and the product has decided it needs the words. Everything above the metadata layer is reversible; a store of decrypted private messages is not.
   </Step>
 </Steps>
 
@@ -177,7 +189,7 @@ X ships a separate **X Chat API** plus a **Chat XDK** (Rust core; Go, Python, Ty
 | Option | What we get | Where keys live | Verdict |
 | --- | --- | --- | --- |
 | **A. Server-side metadata** | Every chat event's timestamp, conversation, sender, direction, counterpart, group flag. No text. | Nowhere; nothing is decrypted. | **This spec.** Proven with 13404. Exactly what the interaction-log job counts. |
-| **B. On-device text** | Full text, decrypted in the Orbiter web or mobile app with the WASM or native XDK after the user enters their XChat PIN there; the client posts decrypted events to an ingest endpoint. | On the user's device only. | Later, if the product needs text. Sync runs only while the client is open, and uploading plaintext of end-to-end encrypted messages is a deliberate privacy decision. |
+| **B. On-device text** | Full text, decrypted in the Orbiter web or mobile app with the WASM or native XDK after the user enters their XChat PIN there; the client posts decrypted events to an ingest endpoint that fills `text` on the Phase 1 rows. | On the user's device only. | **Phase 2**, step 9 of the build plan. Sync runs only while the client is open, and storing plaintext of end-to-end encrypted messages is a deliberate privacy decision. |
 | **C. Server-side text with the user's PIN** | Full text on the server. | On Orbiter's servers. | **Do not build.** Contradicts X's developer guidance and the encryption promise users were given. |
 
 Bot accounts (`POST /2/bots`) only see messages sent to the bot, so they do not apply.
@@ -2731,7 +2743,7 @@ function "twitter-api-dm-events" {
 
 ## Open questions
 
-1. **Message text for encrypted chats.** Option B above is the only sanctioned route and needs the user's XChat PIN entered in the Orbiter client. Decide whether the product needs text at all, given that counts, direction and recency are what the interaction log uses.
+1. **When to start Phase 2.** Message text for encrypted chats is scoped as step 9 of the build plan (Option B, on-device decryption) and needs the user's XChat PIN entered in the Orbiter client. Decide the trigger: a product need for the words, or a share of connected users on encrypted-only conversations.
 2. **Retention of legacy text.** Email stores `clean_message`, so parity says store `text` for legacy DMs. Decide the retention and what happens on disconnect.
 3. **`user_id` versus `entity_id`.** Tables 789 and 790 use `user_id` to match `email_activity`; the parent page adds `entity_id` to `x_oauth_token` for the same Orbiter user. Pick one name before the Go tables are created.
 4. **Activity types.** `x_dm_from` and `x_dm_to` mirror email. Group chats could take a third (`x_dm_group`) if the interaction-log job wants to discount them the way `direct_emails` discounts cc-only mail.
