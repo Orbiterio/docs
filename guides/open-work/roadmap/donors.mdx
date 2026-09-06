@@ -4,6 +4,8 @@ description: "Build plan for the donations lane: DONOR_TO edges from the foundat
 icon: "hand-holding-dollar"
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: build plan — nothing built.** This page operationalizes the [Educational Institution Donations](/guides/open-work/roadmap/educational-institution-donations) scope (researched 2026-07-05) into the v1.2 lane format: find donors and materialize **`DONOR_TO`** edges, donor identities resolved to `master_person` / `master_company`. v1 recipient scope is **educational institutions** (the graph's `Company:School` nodes); tables and stages are recipient-agnostic so the lane extends to any nonprofit recipient without a migration.
 
 <Warning>
@@ -62,6 +64,8 @@ Same invariant as the other v1.2 lanes: every route produces **donation mentions
 Written for the coding agent building this lane. This page is self-contained; everything you need is here or explicitly linked. Do not read intent into ambiguity: if something material is undecided, follow the escalation rule at the bottom.
 
 **Read first, in order:** [Edge Weights](/guides/ontology/edge-weights) (scale, hub rule, envelope), [Edges](/guides/ontology/edges) (conventions), [Educational Institution Donations](/guides/open-work/roadmap/educational-institution-donations) (the research record: data-source landscape, IRS disclosure rules, prompt rationale), [990s, FEC & Form D](/guides/open-work/roadmap/990-fec-form-d) (owner of your `filing_990` input), and the pattern functions cited on this page: #12984 tiered resolver, #12677 v5 adjudication, #13168 name-only cap, #12833 deep research, #723 attempts audit, Fundable Stage-1 gating, `master-company-new` #12558, `master-person-new` #13039.
+
+<BakeOffRules />
 
 **Invariants — violating any one is a failed build:**
 
@@ -134,9 +138,11 @@ No new node label family: foundations and corporate donors extend the existing C
 | `gift_types` | enum\[\] |  | `cash` \| `pledge` \| `bequest` \| `in_kind` \| `unknown`. |
 | `via_foundation_uuid` | uuid |  | Set on derived person-level edges from the trustee bridge (invariant 3). |
 | `is_alumni` | bool |  | True when an `ATTENDED` edge to the same institution corroborates. |
-| `weight` | float | ✓ | Derived scheme below (2026-08-25, from the [Edge Weights](/guides/ontology/edge-weights) master scale) — pending §3.6 ratification. |
+| `weight` | integer | ✓ | Part of the envelope. Derived scheme below (2026-08-25, from the [Edge Weights](/guides/ontology/edge-weights) master scale) — pending §3.6 ratification. |
 | `mention_ref`, `source_urls`, `confidence` |  | ✓ | Audit \+ provenance. |
-| envelope |  | ✓ | 2026-07-04 standard; deterministic description "X is a donor to Y". |
+| envelope |  | ✓ | 2026-07-04 standard (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`). Description template: `{Donor} is a donor to {Institution} ({gift_count} gifts, {first_gift_year}–{last_gift_year}, {purpose}).` |
+
+Ontology entry: [Edges → DONOR_TO](/guides/ontology/edges#donor_to) — the source of truth; this table mirrors it.
 
 Idempotent per (donor, institution). Per-gift detail stays relational under `donation_mention`. Co-donor pairs derive through the shared institution node at score time, never materialized — and the hub rule applies hard here: universities are thousand-donor hubs.
 
@@ -303,9 +309,10 @@ Reuses the federal lane's ST-1 fixture (EIN `13-1684331`, latest \+ 3 filings) �
   "filing_990_read": {"filings_readable": 4, "fetches_triggered": 0},
   "grant_mentions_to_tracked_institutions_range": [1, 40],
   "edges": [
-    {"edge": "DONOR_TO", "donor_type": "foundation", "weight": 40, "hub_damped": true,
+    {"edge": "DONOR_TO", "donor_type": "foundation", "weight": 40,
      "gift_count": "aggregated", "total_usd_known": "sum of stated amounts only"}
   ],
+  "assertions": {"hub_damped": "weight 40 not 30 — hub damping is expressed only through weight; there is no hub_damped edge property"},
   "trustee_bridge": {
     "derived_person_edges": "one per federal-lane auto_linked trustee",
     "via_foundation_uuid": "set on every derived edge",
@@ -335,8 +342,10 @@ The most public announced gift on record (\$1.8B, 2018, financial aid) — exerc
     "corroborations_gte": 2, "confidence_gte": 0.85, "state": "auto_linked"
   },
   "edge": {"edge": "DONOR_TO", "donor_type": "person", "weight": 30,
-    "weight_tier": ">=10M", "total_usd_known_gte": 1800000000, "is_alumni": true,
-    "mention_ref": "present", "envelope": "complete"}
+    "total_usd_known": 1800000000, "gift_count": 1,
+    "first_gift_year": 2018, "last_gift_year": 2018, "purpose": "financial aid",
+    "is_alumni": true, "mention_ref": "present"},
+  "assertions": {"weight_tier": ">=10M", "total_usd_known_gte": 1800000000, "envelope": "complete"}
 }
 ```
 

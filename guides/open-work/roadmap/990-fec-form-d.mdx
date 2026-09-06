@@ -5,6 +5,8 @@ icon: "building-columns"
 sidebarTitle: "Overview"
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: scope & planning only.** Nothing on this page is built. Goal: turn the three highest-density free federal filing sources into graph edges: **IRS 990s** (who governs which nonprofits, who grants to whom), **FEC individual contributions** (who funds what, with employer identity points attached), and **SEC Form D** (who sits on private raises outside Crunchbase/Fundable coverage). All three are structured, bulk-accessible, zero-scrape, zero-vendor-cost. Two of the three ride on ingestion the [Educational Institution Donations](/guides/open-work/roadmap/educational-institution-donations) plan already specifies: that page owns the edu-recipient slice; this lane owns the general filings plumbing it plugs into.
 
 <Warning>
@@ -58,6 +60,8 @@ Written for the coding agent building this lane. Three lanes build in parallel; 
 
 **Read first, in order:** [Edge Weights](/guides/ontology/edge-weights) (scale, hub rule, envelope), [Edges](/guides/ontology/edges) (conventions), [Educational Institution Donations](/guides/open-work/roadmap/educational-institution-donations) (the consumer of your `filing_990` store), and the pattern functions cited on this page: #12984 tiered resolver, #12677 v5 adjudication, #13168 name-only cap, #12833 deep research, #723 attempts audit, Fundable Stage-1 gating, `master-company-new` #12558.
 
+<BakeOffRules />
+
 **Invariants — violating any one is a failed build:**
 
 1. One write path: 990 and Form D edges flow parse → mention row → resolution → edge writer; no edge without a `mention_ref`. You own `filing_990`; the donations lane consumes it and fetches nothing.
@@ -75,7 +79,7 @@ Written for the coding agent building this lane. Three lanes build in parallel; 
 
 **Definition of done per phase:** Phase 0 = fixture report as an appendix here (Part VII title→role ambiguity, FEC match and false-positive rates on a 200-row audit, Form D non-VC gap size, floor validation). Phase 1 (990 adapter) = `filing_990` \+ governance mentions landed, donations lane reading the store successfully, edges behind the Stage-1 gate. Phase 2 (Form D) = related-person edges writing, Fundable gap-fill rounds landing, stage lane reading `formd_related_person_mention`. Phase 3 (FEC overlay) = match view live behind its gates, rollups only, 60-day audit clock started. Each phase ends with acceptance queries green twice and crons \+ enrichment-QA checks registered.
 
-**Acceptance queries (zero rows required):** any `OFFICER_OF` with role `trustee` or `director`; `OFFICER_OF` weight outside {14, 20} or `RELATED_PERSON_OF` outside {15, 20}; filing-sourced `BOARD_MEMBER_OF` ≠ 8 or missing provenance; `POLITICAL_DONOR_TO` below the floor, with `excluded_from_scoring` ≠ true, or touching a person created after the batch began; any person or queue row whose origin is FEC; any 990 fetch outside the `filing_990` path; edges missing `mention_ref` or the envelope.
+**Acceptance queries (zero rows required):** any `OFFICER_OF` with role `trustee` or `director`; `OFFICER_OF` weight outside {14, 20} or `RELATED_PERSON_OF` outside {15, 20}; filing-sourced `BOARD_MEMBER_OF` ≠ 8 or missing provenance; `POLITICAL_DONOR_TO` below the floor, with `excluded_from_scoring` ≠ true, or touching a person created after the batch began; any person or queue row whose origin is FEC; any 990 fetch outside the `filing_990` path; `OFFICER_OF` / filing-sourced `BOARD_MEMBER_OF` / `RELATED_PERSON_OF` edges missing `mention_ref`, `POLITICAL_DONOR_TO` missing `evidence_refs`, or any edge missing the envelope.
 
 **Hard limit for first runs:** cap at 100 filings and one FEC cycle until acceptance queries pass twice.
 
@@ -114,9 +118,11 @@ Design accordingly: 990 and Form D get the full Stage A/B/C pipeline; FEC is an 
 
 ## Node & edge schemas (new in this scope)
 
-No new node label family: nonprofits, foundations, committees, and issuers all extend the existing Company family with discriminators (`nonprofit`, `foundation`, `fec_committee_id`, `is_issuer`), consistent with the stage-lane label decision. Form D raises land as Fundable-style round records, not a new node type. `DONOR_TO` is defined in the donations plan and reused here unchanged. **Three edge types are net-new**, and trustee/director rows reuse the existing `BOARD_MEMBER_OF` edge (weight 8, 1,300\+ live edges) with filing-provenance properties, so nonprofit board service scores through existing machinery from day one.
+No new node label family: nonprofits, committees, and issuers all extend the existing Company family with discriminators (`nonprofit`, `fec_committee_id`, `is_issuer` — the edge-target discriminators in the [ontology](/guides/ontology/edges#enrichment-engine-v12-edges); `foundation` is an org fact and node property, not an edge-target discriminator), consistent with the stage-lane label decision. Form D raises land as Fundable-style round records, not a new node type. `DONOR_TO` is defined in the donations plan and reused here unchanged. **Three edge types are net-new**, and trustee/director rows reuse the existing `BOARD_MEMBER_OF` edge (weight 8, 1,300\+ live edges) with filing-provenance properties, so nonprofit board service scores through existing machinery from day one.
 
-### Edge: `OFFICER_OF` (new): `(Person)-[:OFFICER_OF]->(Company)`
+### Edge: `OFFICER_OF` (new): `(Person)-[:OFFICER_OF]->(Company {nonprofit: true})`
+
+Ontology entry: [Edges → OFFICER_OF](/guides/ontology/edges#officer_of) — the source of truth; this table mirrors it.
 
 | Property | Type | Req | Notes |
 | --- | --- | --- | --- |
@@ -125,9 +131,9 @@ No new node label family: nonprofits, foundations, committees, and issuers all e
 | `compensation_usd` | int |  | When reported. |
 | `valid_from` / `valid_to` | date | ✓ / opt | Filing-year span; extended as consecutive filings confirm, closed when a roster drops the name. Bitemporal convention. |
 | `filing_refs` | id\[\] | ✓ | Source filings. |
-| `weight` | float | ✓ | **14** officer, **20** key\_employee. |
+| `weight` | integer | ✓ | **14** officer, **20** key\_employee. Part of the envelope. |
 | `mention_ref`, `source_urls`, `confidence` |  | ✓ | Audit \+ provenance. |
-| envelope |  | ✓ | 2026-07-04 standard; deterministic description "X is an officer of Y". |
+| envelope |  | ✓ | 2026-07-04 standard (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`). Description template: `{Person} is an officer of {Org} ({title_as_filed}, FY{valid_from}–FY{valid_to}).` — `…was an officer of…` once `valid_to` closes. |
 
 Idempotent per (person, org, role). Co-board pairs derive through the shared Company node from the reused `BOARD_MEMBER_OF` edges at score time, never materialized: the stage-lane pattern.
 
@@ -146,11 +152,13 @@ Idempotent per (person, org, role). Co-board pairs derive through the shared Com
 | `layer` | `evidence` | ✓ | Evidence-first per the decision above; 60-day scoring review. |
 | `excluded_from_scoring` | bool `true` | ✓ | Hard flag, GDELT pattern. |
 | `evidence_refs` | id\[\] | ✓ | Rows in the contribution rollup table. |
-| envelope |  | ✓ | Deterministic description "X contributed to Y in the \<cycle\> cycle". |
+| envelope |  | ✓ | 2026-07-04 standard; traversal `weight` **60**. Description template: `{Person} contributed ${amount_total_usd} to {Committee} across {contribution_count} contributions in the {cycle} cycle.` |
 
-Aggregated edge, written only for closed-world matches passing the uniqueness \+ employer gate. Co-donor pairs derive through the shared committee node; evidence-only.
+Aggregated edge, written only for closed-world matches passing the uniqueness \+ employer gate. Provenance is `evidence_refs` (no `mention_ref` — the per-row detail is the rollup table). Co-donor pairs derive through the shared committee node; evidence-only.
 
-### Edge: `RELATED_PERSON_OF` (new): `(Person)-[:RELATED_PERSON_OF]->(Company {is_issuer})`
+### Edge: `RELATED_PERSON_OF` (new): `(Person)-[:RELATED_PERSON_OF]->(Company {is_issuer: true})`
+
+Ontology entry: [Edges → RELATED_PERSON_OF](/guides/ontology/edges#related_person_of).
 
 | Property | Type | Req | Notes |
 | --- | --- | --- | --- |
@@ -158,8 +166,8 @@ Aggregated edge, written only for closed-world matches passing the uniqueness \+
 | `filing_accession` | string | ✓ | EDGAR anchor; idempotency key with person. |
 | `offering_amount_usd` | int |  | From the filing. |
 | `valid_from` | date | ✓ | Filing date. |
-| `weight` | float | ✓ | **15** executive\_officer / director, **20** promoter. |
-| `mention_ref`, `source_urls`, `confidence`, envelope |  | ✓ | Standard; description "X is a related person of Y". |
+| `weight` | integer | ✓ | **15** executive\_officer / director, **20** promoter. Part of the envelope. |
+| `mention_ref`, `source_urls`, `confidence`, envelope |  | ✓ | Standard. Description template: `{Person} is a related person of {Issuer} ({role}, Form D filed {valid_from}).` |
 
 Co-officer pairs on one issuer derive through the shared node, tier-weighted.
 

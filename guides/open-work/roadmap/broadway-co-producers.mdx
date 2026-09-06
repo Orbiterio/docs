@@ -4,6 +4,8 @@ description: "Scope & build plan for ingesting Broadway and West End producing c
 icon: "ticket"
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: scope & planning, decisions locked 2026-08-21.** Nothing on this page is built. Goal: ingest the full producing block of every Broadway and West End production, resolve producers to `master_person` / `master_company` records, and materialize production credits as graph edges so co-producing relationships become queryable co-investment paths.
 
 <Warning>
@@ -41,7 +43,7 @@ One invariant: every route in enqueues **productions** (or person-lookups that r
 | Question | Decision |
 | --- | --- |
 | Edge weights | Fixed §3.6 tier bands: lead producer closest, then producer, co-producer, associate/executive, "in association with" furthest. Values set 2026-08-21: `W_lead` 12, `W_producer` 16, `W_coproducer` 22, `W_associate` 28, `W_association` 35. |
-| Co-production | Derived through the shared production node; no materialized `CO_PRODUCED_WITH`. Revisit selective materialization only if the leverage-loop perf test demands it. |
+| Co-production | Derived through the shared production node; never written as `CO_PRODUCED_WITH` (the [ontology rule](/guides/ontology/edges#enrichment-engine-v12-edges): pairs derive, credits materialize). |
 | Node label | Extend the film/TV credit node family with a stage discriminator; no new label family. Existing credit-walking scoring picks up stage productions for free. |
 | Couple credits | One `PRODUCED` edge per spouse plus a shared `couple_credit` marker. Household-level treatment stays in the Known layer. |
 | Scrape posture | ToS review runs parallel to Phase 0. Fetcher built as a source adapter, raw HTML cached to GCS, Playbill as the fallback backbone. |
@@ -53,6 +55,8 @@ One invariant: every route in enqueues **productions** (or person-lookups that r
 Written for the coding agent building this lane. Three lanes build in parallel; this page is self-contained and everything you need is here or explicitly linked. Do not read intent into ambiguity: if something material is undecided, follow the escalation rule at the bottom.
 
 **Read first, in order:** [Edge Weights](/guides/ontology/edge-weights) (scale, hub rule, envelope), [Edges](/guides/ontology/edges) (conventions), the [IMDb & Music Queue Refactor](/guides/open-work/imdb-queue-refactor) (the unified queue contract this lane is born onto), and the pattern functions cited on this page: #12984 tiered resolver, #12677 v5 adjudication, #13168 name-only cap, #12833 deep research, #723 attempts audit, Fundable Stage-1 gating.
+
+<BakeOffRules />
 
 **Invariants — violating any one is a failed build:**
 
@@ -138,20 +142,22 @@ Per the label decision, this lane adds **no new node label family**: stage produ
 
 Idempotency key: `source_production_id`.
 
-### Edge: `PRODUCED` (new): `(Person\|Company)-[:PRODUCED]->(Production)`
+### Edge: `PRODUCED` (new): `(Person\|Company)-[:PRODUCED]->(Film_TV {stage: true})`
+
+Ontology entry: [Edges → PRODUCED (stage)](/guides/ontology/edges#produced-stage) — that page is the source of truth for the pattern, weights and properties; this table mirrors it.
 
 | Property | Type | Req | Notes |
 | --- | --- | --- | --- |
-| `billing_tier` | enum `lead_producer` \| `producer` \| `co_producer` \| `associate_producer` \| `executive_producer` \| `in_association` | ✓ | Drives the band. |
-| `billing_order` | int | ✓ | Position within the tier line, 1-based. |
-| `couple_credit` | bool |  | `true` on both spouse edges split from one couple token. |
+| `billing_tier` | enum `lead_producer` \| `producer` \| `co_producer` \| `associate_producer` \| `executive_producer` \| `in_association` | ✓ | Drives the weight. |
+| `billing_order` | integer | ✓ | Position within the tier line, 1-based. |
+| `couple_credit` | boolean |  | `true` on both spouse edges split from one couple token. |
 | `via_entity_uuid` | uuid |  | Set on person-level derivations when the credit is held by a shingle. |
-| `market` | enum | ✓ | Mirrors the production. |
-| `weight` | float | ✓ | Per the band table below. |
+| `market` | enum `broadway` \| `west_end` | ✓ | Mirrors the production. |
+| `weight` | integer | ✓ | Part of the envelope; per the band table below. |
 | `mention_ref` | id | ✓ | Audit link to `stage_credit_mention`. |
 | `valid_from` / `valid_to` | date | ✓ / opt | Inherit production opening/closing; closing-date updates rewrite `valid_to` only. |
 | `source_urls`, `confidence` |  | ✓ | Provenance \+ resolution outcome. |
-| envelope |  | ✓ | Deterministic description: "Angelina Jolie produced The Outsiders". |
+| envelope |  | ✓ | `uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at` (2026-07-04 standard). Description template: `{Producer} produced {Title} ({billing tier}, {market}, {season}).` — e.g. "Angelina Jolie produced The Outsiders (lead producer, Broadway, 2023-24)." |
 
 Idempotent per (producer, production).
 
@@ -260,27 +266,36 @@ Dry run against public data; nothing written. Subject: the 2024 Tony Best Musica
 **Extraction notes:** the block is a token-typing gauntlet. Couples split into paired person edges (Sue Gilad & Larry Rogowsky in the lead tier; Jonathan & Michelle Clay, Jennifer & Jonathan Allan Soros, LaChanze & Marylee Fairbanks in the co-producer tier). The slash credit "Geffen Playhouse/Howard Tenenbaum/Linda B. Rubin" splits to one org \+ two persons in an association group. The Shubert Organization appears as both venue owner and co-producer; only the credit yields an edge. Entity credits span film (American Zoetrope), music (Sony Music Masterworks), studio (Warner Bros. Theatre Ventures), and pooled-investor vehicles (The Broadway Investor's Club).
 
 ```text
-// Production node (film/TV credit family + stage discriminator)
-(outsiders:Production {stage: true, market: "broadway",
+// Film_TV node (film/TV credit family + stage discriminator)
+(outsiders:Film_TV {stage: true, market: "broadway",
   source_production_id: "ibdb:537824", title: "The Outsiders",
   theatre: "Bernard B. Jacobs Theatre", valid_from: date("2024-04-11"),
   season: "2023-24", revival: false, award_winner: true})
 
-// Lead tier (W_lead); Jolie resolves warm via existing film credits
+// Lead tier (12); Jolie resolves warm via existing film credits.
+// Shown in full once; every PRODUCED edge below carries the same
+// envelope + provenance set (uuid, created_at, updated_at,
+// description, description_generated_at, valid_from/valid_to,
+// mention_ref, source_urls, confidence).
 (jolie:Person)-[:PRODUCED {billing_tier: "lead_producer",
-  billing_order: 5, weight: W_lead, market: "broadway"}]->(outsiders)
+  billing_order: 5, weight: 12, market: "broadway",
+  valid_from: date("2024-04-11"), valid_to: null,
+  description: "Angelina Jolie produced The Outsiders (lead producer, Broadway, 2023-24).",
+  mention_ref: "stage_credit_mention:<id>",
+  source_urls: ["https://www.ibdb.com/broadway-production/the-outsiders-537824"],
+  confidence: "confirmed"}]->(outsiders)
 
-// Couple credit, co-producer tier: two edges + shared marker
+// Couple credit, co-producer tier (22): two edges + shared marker
 (j_soros:Person)-[:PRODUCED {billing_tier: "co_producer",
-  couple_credit: true, weight: W_coproducer}]->(outsiders)
+  couple_credit: true, weight: 22, market: "broadway", ...}]->(outsiders)
 (jen_soros:Person)-[:PRODUCED {billing_tier: "co_producer",
-  couple_credit: true, weight: W_coproducer}]->(outsiders)
+  couple_credit: true, weight: 22, market: "broadway", ...}]->(outsiders)
 
-// Shingle credit + person-level derivation after unmasking
+// Shingle credit + person-level derivation after unmasking (12)
 (araca:Company)-[:PRODUCED {billing_tier: "lead_producer",
-  weight: W_lead}]->(outsiders)
+  weight: 12, market: "broadway", ...}]->(outsiders)
 (rego:Person)-[:PRODUCED {billing_tier: "lead_producer",
-  via_entity_uuid: araca.uuid, weight: W_lead}]->(outsiders)
+  via_entity_uuid: araca.uuid, weight: 12, market: "broadway", ...}]->(outsiders)
 ```
 
 **Write-set inventory (simulated):**

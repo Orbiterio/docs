@@ -4,6 +4,8 @@ sidebarTitle: "Phase 1: YouTube"
 description: "Agent-grade build spec for the first buildable slice of the speaking & media lane: YouTube interview channels only, roster-driven, in orbiter-universe. Why there is no podcast spine to extend, what the adapter writes to AlloyDB and the Universe graph, the YouTube Data API quota design, the extraction and resolution contracts, the build order, and the smoke tests."
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: build spec, nothing built (2026-09-05).** This page narrows the [Speaking & Media Co-Occurrence](/guides/open-work/roadmap/media-co-occurrence) lane to its Phase 1 — the **YouTube adapter, roster channels only** — and pins it to `orbiter-universe` (AlloyDB `universe.*`, the Universe FalkorDB graph, Cloud Run, Pub/Sub). Conferences (Phase 2), GDELT (Phase 3), and the person-side `search.list` entry points are **out of scope here**.
 
 <Warning>
@@ -19,7 +21,7 @@ Short answer: it turns a curated list of YouTube interview channels into `MediaA
 | **GCS** | Verbatim `videos.list` items (`youtube/videos/<video_id>.json`) and playlist pages (`youtube/playlists/<channel_id>/<page>.json`) | Captions, transcripts, thumbnails |
 | **AlloyDB `universe.*` — lane tables** | `media_source_roster` (channels, hosts, status), `media_video_queue` (per-video work), `media_appearance` (one row per video, owns the graph node), `media_appearance_mention` (one row per extracted participant), `media_resolution_attempt` (append-only), `media_appearance_edge` (edge ledger), `media_youtube_quota` (daily unit ledger) | Event / session tables, `news_comention_rollup` |
 | **AlloyDB `universe.*` — backbone** | `person` entities **only** through a strong key (a LinkedIn URL in the description or found by Exa) or an adjudicated match; `enrichment_queue` rows at **tier 4** for newly minted people; `enrichment_attempts` rows per provider call | Name-only person stubs; typed-cache columns; any `entity_facts` row (a `MediaAppearance` is not an entity, so appearances are edge-ledger rows, not relationship facts — see [Storage model](#storage-model)) |
-| **Universe graph** | `MediaAppearance:Entity` nodes (new node kind, MERGE key proposed below — **Mark must confirm the key before the first graph write**, per the repo rule); `Person:Entity` nodes for newly minted strong-key people; **`APPEARED_IN`** edges, weight **15** (`host` / `guest`) or **20** (`panelist`), via a new `graph.MergeAppearedIn` | `Event` nodes, `PART_OF`, `CO_MENTIONED_WITH`, any pair edge (co-appearance derives at score time); any edge while `MEDIA_EDGE_WRITES_ENABLED=false` |
+| **Universe graph** | `MediaAppearance:Entity` nodes (new node kind, MERGE key proposed below — **Mark must confirm the key before the first graph write**, per the repo rule); `Person:Entity` nodes for newly minted strong-key people; **`APPEARED_IN`** edges, weight **15** (`host` / `guest`) or **20** (`panelist`), via a new `graph.MergeAppearedIn` — the YouTube subset of the [ontology's role enum](/guides/ontology/edges#appeared_in); `speaker` (45 / 15) is the conference adapter's | `Event` nodes, `PART_OF`, `CO_MENTIONED_WITH`, any pair edge (co-appearance derives at score time); any edge while `MEDIA_EDGE_WRITES_ENABLED=false` |
 | **Dispatch** | Nothing. No `entity.enrich_requested`, no Deep Bio. | Recursive enrichment |
 
 Everything is idempotent: re-polling a channel with no new uploads changes nothing; re-processing a video changes nothing.
@@ -227,7 +229,7 @@ DROP TABLE universe.media_source_roster;
 
 **Node** `MediaAppearance:Entity` (new, `platform/graph/media.go`, `MergeMediaAppearance`): `uuid` (= row id), `appearance_key`, `entity_type: 'MediaAppearance'`, `source`, `title`, `valid_from` (publish date, `YYYY-MM-DD`), `video_id`, `episode_ref` (omitted when null), `via_roster` (channel name), `channel_external_id`, `url`, `source_urls`, `confidence`, `description` = `"Episode of {channel}: {title}"` with `description_generated_at`, `created_at` / `updated_at`, and `embeddings` of `"{title} — {channel}"` with `embedding_model` + `embedding_dimensions` (mandatory beside any vector). ON MATCH: `updated_at` only.
 
-**Edge** `(Person:Entity {uuid})-[:APPEARED_IN]->(MediaAppearance:Entity {uuid})` (new, `platform/graph/media_edges.go`, `MergeAppearedIn`): MATCH both endpoints (never create a stub), `edgeIdentitySet` (v7 uuid from Go, stable `created_at`), `role`, `weight` set ON CREATE only (15 host/guest, 20 panelist), `mention_ref` = `media_appearance_mention:<id>`, `source: youtube`, `source_urls`, `confidence`, `description` = `"{Person} appeared in {title} as {role} on {channel}."`. Keyed on the endpoint pair.
+**Edge** `(Person:Entity {uuid})-[:APPEARED_IN]->(MediaAppearance:Entity {uuid})` (new, `platform/graph/media_edges.go`, `MergeAppearedIn`): MATCH both endpoints (never create a stub), the 2026-07-04 envelope (`uuid` v7 from Go, stable `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`), `role`, `weight` set ON CREATE only (15 host/guest, 20 panelist), `mention_ref` = `media_appearance_mention:<id>`, `source_urls`, `confidence`, `description` = the ontology template `"{Person} appeared in {title} as {role}."` with the source suffix `" on {channel}"` (the podcast form appends `on {show}`). `source` is a **node** property on `MediaAppearance`, not an edge property. Keyed on the endpoint pair. Property set per [Edges → APPEARED_IN](/guides/ontology/edges#appeared_in); Phase 1 writes the `host` / `guest` / `panelist` subset of the role enum — `speaker` (45, or 15 below the hub threshold) belongs to the conference adapter and is out of scope here, not a different schema.
 
 ## Pipeline
 
@@ -324,6 +326,8 @@ Plus: `cross-feature-media` depguard block; `Media`/`YouTube` config structs; `.
 
 Read first: repo `CLAUDE.md`; `.claude/skills/universe-schema/SKILL.md`; `.claude/skills/music-enrichment/SKILL.md` (support rows + support edges, the shape this lane copies); [Go Developer Notes](/guides/enrichment/waterfall/go-developer-notes); the [parent lane page](/guides/open-work/roadmap/media-co-occurrence) for invariants; [Edges → APPEARED_IN](/guides/ontology/edges#appeared_in). Fake adapters first, daily merges.
 
+<BakeOffRules />
+
 <Steps>
   <Step title="1. Fixtures before code (Phase 0)">
     With a real key, resolve the candidate handles (`channels.list forHandle`), record channel ids + uploads playlist ids in `gcpseed/data/media_source_roster.json`, and capture for **one** interview channel: the channel item, every uploads playlist page, and the `videos.list` items (raw JSON under `testdata/youtube/<channel_id>/`). Capture 20 items from the negative-control channel. Note units spent in the manifest. **Done when:** the recorded corpus replays through a fake server; per-channel unit cost is ≤ 50 for a 1,000-video channel; the extraction prompt is run once over 30 recorded videos in the LLM Test Harness on both extraction candidates (`gemini-3.1-flash-lite`, `deepseek-v4-flash-0731`) and the metadata-only guest yield per model is written into `TODO.md` with the pick (the Phase 0 measurement the parent page asks for).
@@ -393,6 +397,7 @@ Read first: repo `CLAUDE.md`; `.claude/skills/universe-schema/SKILL.md`; `.claud
 ### Acceptance queries (zero rows required, run twice)
 
 ```sql
+-- Phase-1 (YouTube) subset of the APPEARED_IN role enum; a conference adapter widens this to include 'speaker'
 SELECT id FROM universe.media_appearance_edge WHERE role NOT IN ('host','guest','panelist');
 SELECT id FROM universe.media_appearance_edge
  WHERE (role IN ('host','guest') AND weight <> 15) OR (role = 'panelist' AND weight <> 20);
@@ -408,10 +413,12 @@ SELECT day FROM universe.media_youtube_quota WHERE units_used > 9000 OR units_se
 
 ```cypher
 MATCH (p:Person)-[r:APPEARED_IN]->(m:MediaAppearance)
-WHERE r.role IS NULL OR r.mention_ref IS NULL OR r.uuid IS NULL OR r.created_at IS NULL
+WHERE r.role IS NULL OR r.mention_ref IS NULL OR r.source_urls IS NULL OR r.confidence IS NULL
+   OR r.uuid IS NULL OR r.created_at IS NULL OR r.weight IS NULL OR r.description IS NULL
 RETURN r.uuid
 MATCH (m:MediaAppearance) WITH m.appearance_key AS k, count(*) AS n WHERE n > 1 RETURN k, n
-MATCH ()-[r:CO_APPEARED_WITH|CO_PANELISTS]->() RETURN count(r)
+// materialized pair edges must never exist (they are not ontology edge types; pairs derive through the appearance node)
+MATCH ()-[r]->() WHERE type(r) STARTS WITH 'CO_APPEARED' OR type(r) = 'CO_PANELISTS' RETURN count(r)
 ```
 
 A repo test also greps `internal/clients/youtube` for `captions` and fails if the string appears: invariant 4 (no caption or transcript path in v1) enforced by CI, not by review.

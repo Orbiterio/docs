@@ -1,0 +1,220 @@
+---
+title: "Phase 1: 990 Adapter Smoke Tests"
+sidebarTitle: "990 Adapter Smoke Tests"
+description: "The smoke-test set for the IRS 990 adapter, picked from what is actually in the dev Universe graph on 2026-09-06: three nonprofits whose board members are already Person nodes (the net-new-edge proof), three School nodes, the Ford Foundation 990-PF, negative controls, acceptance queries, and QA registration."
+icon: "vial"
+---
+
+**Status: candidates verified against dev AlloyDB + ProPublica on 2026-09-06; nothing run yet.** This page is the smoke-test contract for the [Phase 1 990 adapter](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter). The point of the set is not "does it run" — it is **does the graph hold more, and correct, data afterwards than before.** Every fixture therefore comes with a measured *before* baseline, and the pass criteria assert the *delta*.
+
+<Info>
+**How the candidates were chosen.** Queried the dev `orbiter_universe` AlloyDB (read-only, IAP tunnel) for (a) `company` entities with a graph node whose name is foundation-shaped or whose Fundable mirror is `non_profit`, (b) `master_companies.is_school` rows, and (c) `person_work_experience` rows whose title matches `trustee | board member | foundation` **and** whose `company_entity_id` resolved to an org that is already in the graph. Each survivor was checked against the ProPublica Nonprofit Explorer API for an EIN and for e-filed 990s with data in TY2020–2023. The dev FalkorDB is IP-restricted, so "graph edges" below are read from the relational ledgers that mirror it (`entities.graph_node_uuid`, `person_education.graph_written_at`, `person_work_experience.graph_written_at`). Re-run the baseline queries at the bottom before the first real drain — counts move as the person waterfall runs.
+</Info>
+
+## The fixture set
+
+| # | Fixture | EIN | Form | Already in graph? | Why it is in the set |
+| --- | --- | --- | --- | --- | --- |
+| F1 | **Veterans Future Foundation** (VFF) | `82-1433446` | 990 (full), TY2020–2023 | ✅ org node (`veteransfuture.org`) **and** board member **Katelyn Gallanty** as a Person node | The cleanest *net-new edge* proof: org + trustee both exist, joined today only by a LinkedIn-inferred `WORKS_AT`. Small roster, ~\$1M revenue — hand-verifiable |
+| F2 | **Hollywood Professional Association** (HPA) | `26-0017646` | 990, TY2020–2023, 501(c)(6) | ✅ org node and board member **Seth Hallen** | Second affiliation case; a (c)(6) trade association, so `subsection_code` ≠ 3 lands as a fact |
+| F3 | **California Science Center Foundation** | `95-2210527` | 990, TY2020–2023, \$24M–\$131M | ✅ org node and board member **Rizwan Kassim** | Large roster (40\+ trustees) → most mentions stay `unresolved`; proves the cap and the sweep queue |
+| F4 | **Stanford** (The Board of Trustees of the Leland Stanford Junior University) | `94-1156365` | 990, TY2020–2023, \$8–9B | ✅ `School` node, **24 `ATTENDED`** \+ 3 `WORKS_AT` edges | Replaces the spec's Johns Hopkins case (**JHU is not in the graph**). `School` label must survive; trustee \+ officer double roles; Schedule I grants |
+| F5 | **New York University** | `13-5562308` | 990, TY2020–2023 | ✅ `School` node, 11 `ATTENDED` | Second School; large Schedule I |
+| F6 | **Harvard** (President and Fellows of Harvard College) | `04-2103580` | 990, **TY2021 and TY2023 only** have e-filed data | ✅ `School` node, 12 `ATTENDED` | The gap-year tenure test: a 4-year window with two missing filings must not close a continuing trustee's `valid_to` |
+| F7 | **Ford Foundation** | `13-1684331` | **990-PF**, TY2020–2023 | ❌ not in Universe; **is** in `fundables.organizations` (`fordfoundation.org`, `is_investor`) | Fresh `ResolveStrong("ein")` create; Part XV grants (the Donors read); later the fundables-sync must attach `fundable` to the *same* entity, not mint a second |
+| C1 | Cedars-Sinai Medical Center | `95-1644600` | 990, \$4.7B | ✅ org node; Kassim holds a "Board of Governors" title | **Negative control:** Board of Governors is a fundraising board, not Part VII. Kassim must **not** resolve onto Cedars' roster |
+| C2 | A public university in the graph (e.g. University of Florida, Indiana University Bloomington) | — | none — governmental, no 990 | ✅ `School` node | **Negative control:** ProPublica has no filings → queue row `last_error = ein_not_found`, `next_attempt_at = +30d`, released; zero entities, zero edges |
+
+Not in the graph and not needed: Gates, Knight, MacArthur, Rockefeller, RWJF, Schmidt Futures, Wellcome are all in the Fundable mirror without a Universe entity — F7 covers that path once.
+
+## Before-baselines (run first, keep the output)
+
+```sql
+-- the three affiliation fixtures: org node + the board member's current link to it
+SELECT mc.name AS org, e.id AS org_entity, e.graph_node_uuid IS NOT NULL AS org_has_node,
+       mp.name AS person, pe.id AS person_entity, pe.graph_node_uuid IS NOT NULL AS person_has_node,
+       pw.title, pw.graph_written_at IS NOT NULL AS works_at_edge_exists
+FROM universe.master_companies mc
+JOIN universe.entities e  ON e.id = mc.entity_id AND e.merged_into IS NULL
+JOIN universe.person_work_experience pw ON pw.company_entity_id = e.id AND pw.title ~* '(board|trustee)'
+JOIN universe.entities pe ON pe.id = pw.entity_id
+JOIN universe.master_persons mp ON mp.entity_id = pe.id
+WHERE mc.domain IN ('veteransfuture.org','hpaonline.com','californiasciencecenter.org')
+   OR mc.name IN ('Veterans Future Foundation','Hollywood Professional Association','California Science Center Foundation');
+
+-- the School fixtures: existing inbound edges (ATTENDED / WORKS_AT) as the "before" number
+SELECT mc.name, e.id, e.graph_node_uuid,
+  (SELECT count(*) FROM universe.person_education pe WHERE pe.school_entity_id = e.id AND pe.graph_written_at IS NOT NULL) AS attended_edges,
+  (SELECT count(*) FROM universe.person_work_experience pw WHERE pw.company_entity_id = e.id AND pw.graph_written_at IS NOT NULL) AS works_at_edges,
+  (SELECT count(*) FROM universe.entity_facts f WHERE f.value_entity_id = e.id AND f.is_chosen) AS inbound_chosen_relation_facts
+FROM universe.master_companies mc JOIN universe.entities e ON e.id = mc.entity_id
+WHERE e.merged_into IS NULL AND mc.domain IN ('stanford.edu','nyu.edu','harvard.edu');
+
+-- Ford: must be absent from Universe and present in the Fundable mirror
+SELECT (SELECT count(*) FROM universe.entity_identifiers WHERE kind = 'ein' AND normalized_value = '131684331') AS universe_ein_rows,
+       (SELECT id FROM fundables.organizations WHERE domain = 'fordfoundation.org') AS fundable_org_id;
+```
+
+Measured 2026-09-06: VFF / HPA / CSC each have the org node, the person node, and one `WORKS_AT` edge with a board title; Stanford 24 / NYU 11 / Harvard 12 `ATTENDED`; **0** inbound chosen relation facts on any School; Ford `universe_ein_rows = 0`.
+
+## ST-1 — Veterans Future Foundation: the net-new-edge proof (F1)
+
+**Input:** `POST /v1/admin/filings/990/orgs {"ein":"82-1433446","years_window":4}` then `POST …/drain {"max_rows":1}`. Gate **closed** first, then open, then drain again.
+
+**Expected:**
+
+```json
+{
+  "org": { "reused_existing_entity": true, "identifiers_added": ["ein:821433446"],
+           "graph_labels_after": ["Company", "Organization", "Entity"],
+           "facts_added": { "nonprofit": true, "foundation": false, "ein": "821433446", "legal_name": "<filer name>", "formation_year": "<int>" },
+           "propublica_facts": { "ntee_code": "J22", "subsection_code": "3" } },
+  "filings": { "landed": 4, "return_type": "990", "tax_years": [2020, 2021, 2022, 2023], "parse_state": "parsed", "fetches_from_irs": 4 },
+  "mentions": { "per_filing_range": [4, 15], "subject_kind_person_range": [4, 15] },
+  "katelyn_gallanty": {
+    "resolution_method": "affiliation", "resolution_state": "auto_linked", "resolution_confidence_gte": 0.90,
+    "exa_attempts": 0, "adjudication_attempts": 0,
+    "roles_contains": ["trustee"], "is_officer_if_treasurer_flagged": true,
+    "ledger_rows": [{ "edge_kind": "BOARD_MEMBER_OF", "weight": 8 }, { "edge_kind": "OFFICER_OF", "role": "officer", "weight": 14, "only_if": "OfficerInd = X" }],
+    "valid_from": "<earliest tax_period_begin where present>", "valid_to": null
+  },
+  "other_mentions": { "persons_created_from_bare_name": 0, "unresolved_allowed": true, "strong_key_leaves_lte": 3 },
+  "edges_with_gate_closed": 0,
+  "edges_with_gate_open": { "BOARD_MEMBER_OF_new": ">= 1", "WORKS_AT_untouched": true },
+  "enrich_events_published": 0
+}
+```
+
+**Pass criteria (the delta):** before the run the only edge between Gallanty and VFF is `WORKS_AT`; after the run with the gate open there is **also** a `BOARD_MEMBER_OF (8)` edge carrying `title_as_filed`, `valid_from`, `filing_refs` (4 ids), `mention_ref`, `source_urls`, `confidence`, `source: irs_990` — and the `WORKS_AT` edge is byte-identical. Her resolution chain in `filing_990_resolution_attempt` is exactly one row: `method = affiliation`, `outcome = auto_linked`, with **zero** `exa_linkedin` or `adjudication` rows. Draining twice changes no row and no edge `created_at`. Shuffled-year seeding converges to the same span.
+
+## ST-2 — Stanford: School label, double roles, Schedule I (F4)
+
+**Input:** `POST …/orgs {"ein":"94-1156365","years_window":4}`, one drain.
+
+**Expected:** the org resolves to the **existing** `School` entity — `ResolveStrong("ein")` finds nothing, the soft `name` candidate is **not** auto-picked (soft keys nominate, never decide), and the **domain corroboration** step (below) finds `stanford.edu` as an existing strong `domain` key → the EIN is attached to that entity. Once linked: `MergeCompany` adds `Organization` **add-only** (labels after: `School`, `Company`, `Organization`, `Entity`), `nonprofit: true`. ≥ 1 mention with both `IndividualTrusteeOrDirectorInd` and `OfficerInd` → two ledger rows for that person (8 and 14). Schedule I rows ≥ 200 with `recipient_ein` populated on most. The 24 `ATTENDED` edges are untouched. Roles come from **flags**, not the dictionary (`role_source = flags` on every Form 990 row).
+
+<Note>
+**Decided 2026-09-06 (Mark) — Q6 on the adapter page.** The three School fixtures already exist as entities keyed by `domain`, and the 990 filer name rarely equals the display name ("The Board of Trustees of the Leland Stanford Junior University"), so `ResolveStrong("ein")` misses and D4 correctly refuses the soft-name match — as originally spec'd the adapter would mint a **second** Stanford. Ruling: **(b) the org step corroborates through the domain** — ProPublica's `website` for the EIN (fallback: the filing's `WebsiteAddressTxt`) is reduced to its registrable domain and looked up as an existing **strong `domain` identifier**; a hit means the EIN is attached to *that* entity. This *finds* by domain, never *mints* one (the mirror of open Q2). **(a) hand-seeding `ein` onto the fixture School entities is the Phase 0 fallback** if the ProPublica `website` field is too dirty on the fixture set — Phase 0 measures it: record, per fixture, the ProPublica website, its registrable domain, and whether it matched the existing entity. Assert in ST-2: `org.reused_existing_entity = true`, `org.resolution_method = "domain_corroboration"` (or `"ein_preseeded"` under the fallback), and the fixture-duplicate acceptance query returns zero rows.
+</Note>
+
+## ST-3 — Ford Foundation: 990-PF, fresh create, grants (F7)
+
+**Input:** `POST …/orgs {"ein":"13-1684331","years_window":4}`, one drain. Unchanged from the original spec.
+
+```json
+{
+  "org": { "created": true, "entity_type": "company", "identifiers": ["ein:131684331"],
+           "graph_labels": ["Company", "Organization", "Entity"],
+           "facts": { "nonprofit": true, "foundation": true }, "domain_identifier_attached": false },
+  "filings": { "landed": 4, "return_type": "990PF", "parse_state": "parsed" },
+  "mentions": { "per_filing_range": [12, 25] },
+  "roles": { "role_source_in": ["title_dictionary", "llm"], "trustee_edge_kind": "BOARD_MEMBER_OF", "officer_edge_kind": "OFFICER_OF" },
+  "resolution": { "persons_created_from_bare_name": 0, "unresolved_allowed": true },
+  "tenure": { "continuing_trustee": { "valid_to": null }, "departed_trustee": { "valid_to": "<tax_period_end of last appearance>" } },
+  "grants": { "rows_gte": 100, "schedule": "pf_part_xv" },
+  "edges_with_gate_closed": 0, "enrich_events_published": 0
+}
+```
+
+**Pass criteria:** `domain` is **not** attached (open Q2); zero `OFFICER_OF` rows with a trustee/director role; `filing_990_grant` rows are readable by a plain `SELECT … WHERE recipient_name_normalized LIKE` with no fetch; every mention has a `filing_990_resolution_attempt` chain ending in its stored state. **Follow-up assertion for the fundables-sync:** after its next run, `entity_identifiers` holds `ein:131684331` **and** `fundable:<org id>` on the **same** entity — one Ford, two strong keys.
+
+## ST-4 — HPA and California Science Center (F2, F3)
+
+Same input shape as ST-1. **HPA:** Seth Hallen resolves via `affiliation` (0 Exa); `subsection_code = 6` lands as a fact; `nonprofit: true` still (a (c)(6) is a nonprofit, not a charity — the fact vocabulary does not distinguish in Phase 1, note it). **CSC:** Rizwan Kassim resolves via `affiliation`; with a 40\+ roster and `FILINGS_990_MAX_NEW_PERSONS_PER_RUN` left at 50, assert the unresolved census is printed with its denominator (never `vacuous`), that Exa was called **only** for mentions carrying an identity point beyond the name, and that the weekly sweep re-runs steps 1–2 for the `unresolved` tail without a fetch.
+
+## ST-5 — Gap-year tenure (F6)
+
+Harvard has e-filed data for TY2021 and TY2023 only inside a 4-year window. A trustee present on both filings must get `valid_from = TY2021 begin`, `valid_to = NULL` — the missing TY2022 is not a departure. A trustee present on TY2021 only gets `valid_to = TY2021 tax_period_end`. Assert both, then assert the same spans after seeding TY2023 before TY2021.
+
+## ST-6 — Negative controls
+
+| Control | Fixture | Assert |
+| --- | --- | --- |
+| Board of Governors ≠ Part VII | C1 Cedars-Sinai | Kassim has **no** mention on Cedars' filings and **no** ledger row to Cedars; his existing `WORKS_AT` is untouched |
+| No 990 (governmental) | C2 public university | ProPublica 404 / empty inventory → `last_error = ein_not_found`, `next_attempt_at ≈ +30d`, lock released; zero filings, mentions, entities, edges |
+| Common name (`Michael Smith`, three soft candidates, no corroboration) | harness | `needs_review`, one open review row, zero entities created, zero edges |
+| Bare name, search returns nothing | harness | `unresolved`, zero entities, zero edges, attempt `no_candidates` |
+| Search returns a LinkedIn profile whose slug lacks the surname | harness | rejected, `unresolved` |
+| Search returns a matching profile, adjudication 0.92 | harness | entity created via strong `linkedin`, `enrichment_queue` row at tier 4, **no** `entity.enrich_requested`, `graph.MergePerson` called once |
+| `FormerOfcrDirectorTrusteeInd = X` | harness | mention stored `is_former`, no roles, no tenure contribution |
+| Institutional trustee (`BusinessName`) | harness | `subject_kind = organization`, `not_applicable`, no edge (D8) |
+| Gate closed | any | ledger populated, zero `MergePersonEdge` calls |
+| Same filing set drained twice | any | zero new rows anywhere, `graph_edge_uuid` and edge `created_at` unchanged |
+| `FILINGS_990_MAX_NEW_PERSONS_PER_RUN = 1` with two creatable mentions | harness | second stays `unresolved` with attempt outcome `cap_deferred` |
+
+"Search" above is whichever of Exa / Parallel the [bake-off](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter#build-plan-for-the-agent) picked for profile discovery; the fakes script both.
+
+## Acceptance queries (zero rows required, run twice)
+
+```sql
+-- role/edge kind mismatch
+SELECT id FROM universe.filing_990_governance_edge
+ WHERE edge_kind = 'OFFICER_OF' AND role NOT IN ('officer','key_employee');
+-- weight outside the decided set
+SELECT id FROM universe.filing_990_governance_edge
+ WHERE (edge_kind='BOARD_MEMBER_OF' AND weight <> 8)
+    OR (edge_kind='OFFICER_OF' AND weight NOT IN (14,20));
+-- edge with no chosen fact behind it
+SELECT e.id FROM universe.filing_990_governance_edge e
+ LEFT JOIN universe.entity_facts f ON f.id = e.fact_id AND f.is_chosen
+ WHERE e.graph_written_at IS NOT NULL AND f.id IS NULL;
+-- open valid_to on a person absent from the org's latest filing
+SELECT e.id FROM universe.filing_990_governance_edge e
+ WHERE e.valid_to IS NULL AND NOT EXISTS (
+   SELECT 1 FROM universe.filing_990_governance_mention m
+   JOIN universe.filing_990 f ON f.id = m.filing_id
+   WHERE m.person_entity_id = e.person_entity_id AND f.org_entity_id = e.org_entity_id
+     AND NOT m.is_former
+     AND f.tax_period = (SELECT MAX(tax_period) FROM universe.filing_990 WHERE org_entity_id = e.org_entity_id));
+-- person minted by this lane without a strong identifier
+SELECT en.id FROM universe.entities en
+ JOIN universe.enrichment_queue q ON q.entity_id = en.id AND q.source_function = 'filings.irs990'
+ WHERE NOT EXISTS (SELECT 1 FROM universe.entity_identifiers i WHERE i.entity_id = en.id AND i.is_strong_identity);
+-- filing without its verbatim XML
+SELECT id FROM universe.filing_990 WHERE xml_storage_key IS NULL OR xml_sha256 IS NULL;
+-- a second entity for a fixture org (the ST-2 trap): more than one company holding a fixture EIN OR domain
+SELECT i.normalized_value, count(DISTINCT i.entity_id) FROM universe.entity_identifiers i
+ JOIN universe.entities e ON e.id = i.entity_id AND e.merged_into IS NULL
+ WHERE i.kind IN ('ein','domain') AND i.normalized_value IN
+   ('821433446','260017646','952210527','941156365','135562308','042103580','131684331',
+    'veteransfuture.org','stanford.edu','nyu.edu','harvard.edu','fordfoundation.org')
+ GROUP BY 1 HAVING count(DISTINCT i.entity_id) > 1;
+```
+
+```cypher
+// edges missing the envelope or the ontology's provenance set
+MATCH (p:Person)-[r:BOARD_MEMBER_OF|OFFICER_OF]->(c)
+WHERE r.source = 'irs_990'
+  AND (r.uuid IS NULL OR r.created_at IS NULL OR r.weight IS NULL OR r.description IS NULL
+       OR r.valid_from IS NULL OR r.title_as_filed IS NULL OR r.filing_refs IS NULL
+       OR r.mention_ref IS NULL OR r.source_urls IS NULL OR r.confidence IS NULL
+       OR (type(r) = 'OFFICER_OF' AND (r.role IS NULL OR NOT r.role IN ['officer','key_employee'])))
+RETURN r.uuid
+// OFFICER_OF target must be a nonprofit Company
+MATCH (:Person)-[r:OFFICER_OF]->(c) WHERE NOT 'Company' IN labels(c) OR c.nonprofit <> true RETURN r.uuid
+// School fixtures must keep their label
+MATCH (c) WHERE c.ein IN ['941156365','135562308','042103580'] AND NOT 'School' IN labels(c) RETURN c.uuid
+// any materialized pair edge (must never exist — pairs derive through the org node; these are not ontology edge types)
+MATCH ()-[r]->() WHERE type(r) IN ['CO_BOARD_MEMBERS','CO_OFFICERS'] RETURN count(r)
+```
+
+**The delta query — the whole point of the set:**
+
+```cypher
+// per fixture org: edges by type, before vs after
+MATCH (c) WHERE c.ein IN ['821433446','260017646','952210527','941156365','135562308','042103580','131684331']
+OPTIONAL MATCH (c)<-[r]-()
+RETURN c.ein, c.name, labels(c), type(r) AS edge, count(r) AS n ORDER BY c.ein, edge
+```
+
+Run it before (expect only `ATTENDED` / `WORKS_AT` rows, and no Ford) and after (expect `BOARD_MEMBER_OF` and `OFFICER_OF` rows on every fixture, everything that was there before unchanged).
+
+## QA registration
+
+Extend the `qa-the-sandbox` registry with: (1) queue quiescence = no `filing_990_org_queue` row locked longer than `ENRICHMENT_QUEUE_LOCK_TTL` **and** zero rows with `attempts >= max`; (2) mention census by `resolution_state` with the denominator printed — a run with zero mentions reports **`vacuous`**, never pass; (3) ledger vs graph parity: rows with `graph_written_at` ↔ `MATCH … r.source='irs_990'` counts; (4) the SQL queries above; (5) zero `entity.enrich_requested` events whose `source_function` is this lane; (6) the fixture-duplicate query — a second entity for any fixture EIN/domain is a **sev-1**. Real failures are counted by severity from structured logs, never by row counts.
+
+## References
+
+- [Phase 1: 990 Adapter](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter) (the build spec) · [990s, FEC & Form D](/guides/open-work/roadmap/990-fec-form-d) (parent lane)
+- [Edges → BOARD_MEMBER_OF](/guides/ontology/edges#board_member_of) · [Edges → OFFICER_OF](/guides/ontology/edges#officer_of)
+- [ProPublica Nonprofit Explorer API](https://projects.propublica.org/nonprofits/api) (EIN lookup + filing inventory used to verify every fixture)

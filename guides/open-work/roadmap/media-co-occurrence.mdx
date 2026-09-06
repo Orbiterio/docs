@@ -5,6 +5,8 @@ icon: "microphone-lines"
 sidebarTitle: "Overview"
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: scope & planning only.** Nothing on this page is built. Goal: extend the podcast ingestion lane (curated media/tech/VC podcast cron: guest \+ LinkedIn resolution, hosts connected to guests in the graph) into a general speaking/media co-occurrence waterfall covering **YouTube interviews**, **conference speaker rosters**, and **GDELT news co-mentions**. All three are free sources; they differ sharply in signal strength and identity risk, so each gets its own gates.
 
 <Warning>
@@ -40,11 +42,11 @@ Same invariant as the stage-production lane: every route enqueues **appearances 
 | GDELT scoring | **Evidence-first.** `CO_MENTIONED_WITH` ships as intelligence-layer evidence only in v1: visible in narratives and layers, excluded from leverage-loop and outcome scoring. Promotion to scored edges is a later call made against observed precision. |
 | Co-mention floor & decay | ≥3 distinct articles across ≥2 source domains, counted over a rolling 24-month window; stale pairs age out. |
 | Promotion criteria | Random 100-pair manual audit after 60 days of collection; promote into scoring only at ≥90% validated precision, quarterly re-audits thereafter. |
-| Scored levels | Interview host↔guest and co-panelists score against §3.6 bands. Conference-level co-occurrence is evidence-only, like GDELT. |
+| Scored levels | Interview host↔guest and co-panelists score against §3.6 bands. Conference-level co-occurrence *pairs* are evidence-only, like GDELT (the speaker's own `APPEARED_IN` is a normal traversal edge). |
 | Captions | Metadata-only extraction in v1. Phase 0 measures the miss rate; caption fallback ships later only if the gap justifies it. |
 | Roster governance | Agent suggestions land as `proposed` rows in `media_source_roster`; founder approves from a review queue, the merge-suspects pattern. |
 | Historical windows | Full channel history for roster YouTube channels; GDELT limited to the rolling 24-month window, no 2015 backfill. |
-| §3.6 bands | Set 2026-08-21 in the cross-lane sitting: `W_interview` 15, `W_panel` 20; traversal weights on unbanded edges: conference `APPEARED_IN` 45, `PART_OF` 30, `CO_MENTIONED_WITH` 55. |
+| §3.6 bands | Set 2026-08-21 in the cross-lane sitting: `W_interview` 15, `W_panel` 20; traversal weights on unbanded edges: conference-speaker `APPEARED_IN` 45 at hub-scale events (speaker count ≥ threshold, default 50) and 15 below it (reconciled with `SPOKE_AT` 2026-09-05), `PART_OF` 30, `CO_MENTIONED_WITH` 55. |
 
 ## Agent build brief
 
@@ -52,11 +54,13 @@ Written for the coding agent building this lane. Three lanes build in parallel; 
 
 **Read first, in order:** [Edge Weights](/guides/ontology/edge-weights) (scale, hub rule, envelope), [Edges](/guides/ontology/edges) (conventions), the podcast lane docs (this lane extends its spine and shares the `MediaAppearance` / `Event` definitions), and the pattern functions cited on this page: #12984 tiered resolver, #12677 v5 adjudication, #13168 name-only cap, #12833 deep research, #723 attempts audit, Fundable Stage-1 gating.
 
+<BakeOffRules />
+
 **Invariants — violating any one is a failed build:**
 
 1. One write path: every appearance edge flows extraction → `media_appearance_mention` row → resolution → edge writer. No `APPEARED_IN` without a `mention_ref`.
 2. GDELT is closed-world: it never creates persons, appearances, or queue rows. `CO_MENTIONED_WITH` only between persons that already existed before the batch, only above the floor (≥3 distinct articles, ≥2 distinct source domains, rolling 24 months), always `layer: evidence` and `excluded_from_scoring: true`.
-3. Weights exact: interview `APPEARED_IN` 15, panelist 20, conference speaker 45, `PART_OF` 30, `CO_MENTIONED_WITH` 55. Integer scale, floor 1, never sub-1, 2026-07-04 envelope everywhere.
+3. Weights exact: interview `APPEARED_IN` 15, panelist 20, conference speaker 45 (15 when the event is below the 50-speaker hub threshold), `PART_OF` 30, `CO_MENTIONED_WITH` 55. Integer scale, floor 1, never sub-1, 2026-07-04 envelope everywhere.
 4. YouTube v1 is metadata-only: no caption or transcript fetching in any code path. Roster-first: uploads-playlist enumeration; `search.list` only for person-side lookups inside a hard daily unit budget with a stop.
 5. Simulcast dedup: one `MediaAppearance` per episode across podcast audio and YouTube video, carrying both anchors. Zero duplicate appearances sharing (title, date, host set).
 6. Auto-link only at ≥0.85 with name plus two independent corroborations; name-only capped; everything else `needs_review`. New-person policy: local-only leaves \+ queue rows, kill switches respected, no recursive enrichment.
@@ -131,35 +135,33 @@ This lane introduces **two node types** and **three edge types** to the ontology
 
 Idempotency key: `source` \+ whichever anchor applies.
 
-### Node: `Event` (new)
+### Node: conference → `Event:Live_*` (existing family, not a new label)
 
-| Property | Type | Req | Notes |
-| --- | --- | --- | --- |
-| `uuid` | string | ✓ | Envelope. |
-| `name` | string | ✓ | "TED2026", "AWE USA 2026". |
-| `event_type` | enum `conference` | ✓ | Room to grow (award shows, summits). |
-| `start_date` / `end_date` | date | ✓ | Bitemporal convention. |
-| `venue`, `city` | string |  | From agenda. |
-| `source_urls` | string\[\] | ✓ | Provenance. |
-| envelope |  | ✓ | 2026-07-04 standard. |
-
-Key: (`name`, year).
+The minimal `Event` node this lane first sketched folds into the shipped `Event:Live_*` family ([node model](/guides/ontology/nodes#live_event)), which already carries `event_type`, dates, venue and city. The lane writes a `Live_*` node for a conference it meets (key: `name` + year) and sets `source_urls`; no lane-specific label or property set.
 
 ### Edge: `APPEARED_IN` (new): `(Person)-[:APPEARED_IN]->(MediaAppearance)`
 
+Ontology entry: [Edges → APPEARED_IN](/guides/ontology/edges#appeared_in) — the source of truth for pattern, weights and properties; this table mirrors it.
+
 | Property | Type | Req | Notes |
 | --- | --- | --- | --- |
-| `role` | enum `host` \| `guest` \| `panelist` \| `speaker` | ✓ | Drives pair derivation. |
-| `weight` | float | ✓ | Per the band table below. |
+| `role` | enum `host` \| `guest` \| `panelist` \| `speaker` | ✓ | Drives pair derivation and the weight. |
+| `weight` | integer | ✓ | Part of the envelope; 15 host/guest, 20 panelist, 45 speaker at hub-scale events (15 below the 50-speaker threshold) — the band table below. |
 | `mention_ref` | id | ✓ | Audit link to `media_appearance_mention`. |
 | `source_urls`, `confidence` |  | ✓ | Provenance \+ resolution outcome. |
-| envelope |  | ✓ | Deterministic description: "Bilawal Sidhu appeared in \<title\> as host". |
+| envelope |  | ✓ | `uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at` (2026-07-04 standard). Description template: `{Person} appeared in {title} as {role}.` — `"…on {show}"` appended for podcast episodes (`"…on {channel}"` for YouTube). |
 
 Idempotent per (person, appearance).
 
-### Edge: `PART_OF` (new): `(MediaAppearance)-[:PART_OF]->(Event)`
+### Edge: `PART_OF` (new): `(MediaAppearance)-[:PART_OF]->(Event:Live_*)`
 
-Structural containment: traversal weight **30** (the `RECORDING_OF` analogue), no band. Exists so session-level and conference-level co-occurrence stay distinguishable at query time.
+Structural containment: traversal weight **30** (the `RECORDING_OF` analogue), no band. Exists so session-level and conference-level co-occurrence stay distinguishable at query time. Ontology entry: [Edges → PART_OF](/guides/ontology/edges#part_of).
+
+| Property | Type | Req | Notes |
+| --- | --- | --- | --- |
+| `session_ref` | string |  | Conference agenda anchor, when the appearance carries one. |
+| `source_urls` | string\[\] | ✓ | Provenance. |
+| envelope |  | ✓ | 2026-07-04 standard. Description template: `{Session title} was a session at {Event name} ({year}).` |
 
 ### Edge: `CO_MENTIONED_WITH` (new): `(Person)-[:CO_MENTIONED_WITH]->(Person)`
 
@@ -173,7 +175,7 @@ Structural containment: traversal weight **30** (the `RECORDING_OF` analogue), n
 | `evidence_refs` | id\[\] | ✓ | Rows in `news_comention_rollup`; article detail stays relational. |
 | `layer` | `evidence` | ✓ | Per the evidence-first decision. |
 | `excluded_from_scoring` | bool `true` | ✓ | Hard flag scoring respects. |
-| envelope |  | ✓ | Deterministic description: "X and Y co-appear in news coverage". |
+| envelope |  | ✓ | 2026-07-04 standard. Description template: `{A} and {B} co-appear in news coverage ({article_count} articles, {first_seen}–{last_seen}).` |
 
 Written once per pair (canonical uuid ordering), updated by the daily batch, retired when the rolling window drops the pair below floor.
 
@@ -210,7 +212,7 @@ Go on GCP, per-market/source adapters behind one fetcher interface, raw payloads
 1. Roster poll: uploads playlist per channel (1 unit/call), new video IDs → queue.
 2. Guest extraction from title \+ description with the #12984 tier-1 config. Metadata-only in v1 per the decision above; Phase 0 measures the residual miss rate, and caption fallback ships later only if the gap justifies it. 2a. Podcast dedup: match against podcast-lane episodes by title \+ date \+ host so simulcasts strengthen one appearance instead of minting two.
 3. Resolution: the podcast lane's LinkedIn resolution flow, plus #12677 v5 adjudication for names without a URL. Auto-link ≥0.85; name \+ two corroborating points minimum; #13168 cap applies.
-4. Edge writer: `APPEARED_IN` with role (host/guest/panelist), idempotent per person-video pair.
+4. Edge writer: `APPEARED_IN` with role (host/guest/panelist/speaker), idempotent per person-appearance pair.
 
 ### Conference adapter
 
@@ -238,7 +240,7 @@ Description: {{description}}
 
 Return ONLY valid JSON: {"participants": [...]}. Each participant object:
 - name: exactly as written
-- role: "host" | "guest" | "panelist" | "unknown"
+- role: "host" | "guest" | "panelist" | "speaker" | "unknown"   (extraction state; "unknown" never reaches an edge — the APPEARED_IN role enum is host | guest | panelist | speaker)
 - identity_points: {title, employer, linkedin_url, twitter_handle, other} (nulls allowed)
 - evidence_quote: verbatim fragment naming this participant
 - confidence: "high" | "medium" | "low"
@@ -272,22 +274,24 @@ Dry run against public data; nothing written. Subject: TED tech curator and TED2
 **Extraction notes:** the entertainment channel (billyfx: VFX/AI content, ~990K TikTok, ~400K YouTube) returns empty participant sets at tier-1 cost and is skipped, validating channel-level rosters. Simulcast dedup collapses each TED AI Show episode's podcast audio and YouTube video onto one `MediaAppearance` carrying both anchors.
 
 ```text
-// Interview pair (scored, W_interview)
-(:MediaAppearance {source: "podcast", title: "The TED AI Show — Eric Schmidt",
+// Interview pair (scored, 15 per edge). Every edge also carries the
+// envelope + mention_ref, source_urls, confidence — elided below.
+(ep:MediaAppearance {source: "podcast", title: "The TED AI Show — Eric Schmidt",
   episode_ref, video_id, valid_from, via_roster: "ted-ai-show",
   description: "Episode of The TED AI Show"})
-(bilawal:Person)-[:APPEARED_IN {role: "host", weight: W_interview}]->(ep)
-(schmidt:Person)-[:APPEARED_IN {role: "guest", weight: W_interview}]->(ep)
+(bilawal:Person)-[:APPEARED_IN {role: "host", weight: 15,
+  description: "Bilawal Sidhu appeared in The TED AI Show — Eric Schmidt as host, on The TED AI Show."}]->(ep)
+(schmidt:Person)-[:APPEARED_IN {role: "guest", weight: 15}]->(ep)
 
-// Conference session + containment (co-panel scored, W_panel)
+// Conference session + containment (co-panel scored, 20 per edge; PART_OF 30)
 (demo:MediaAppearance {source: "conference_session", session_ref})
-      -[:PART_OF]->(ted2026:Event {name: "TED2026", start_date, venue})
-(bilawal)-[:APPEARED_IN {role: "panelist", weight: W_panel}]->(demo)
-(wickert:Person)-[:APPEARED_IN {role: "panelist", weight: W_panel}]->(demo)
+      -[:PART_OF {weight: 30, session_ref, source_urls}]->(ted2026:Event:Live_Conference {name: "TED2026", start_date, venue})
+(bilawal)-[:APPEARED_IN {role: "panelist", weight: 20}]->(demo)
+(wickert:Person)-[:APPEARED_IN {role: "panelist", weight: 20}]->(demo)
 
-// GDELT overlay (evidence layer, never scored)
-(bilawal)-[:CO_MENTIONED_WITH {article_count: 14, window: "24mo",
-  first_seen, last_seen, top_source_domains, evidence_refs,
+// GDELT overlay (evidence layer, never scored, traversal 55)
+(bilawal)-[:CO_MENTIONED_WITH {article_count: 14, window: "24mo", window_counts,
+  first_seen, last_seen, top_source_domains, evidence_refs, weight: 55,
   layer: "evidence", excluded_from_scoring: true}]->(schmidt)
 ```
 
@@ -405,7 +409,7 @@ Three fixed inputs, one per source adapter, with simulated expected responses. R
 }
 ```
 
-**Pass criteria:** sessions write `MediaAppearance {source: "conference_session"}` \+ `PART_OF` → event with traversal weight 30; conference-speaker `APPEARED_IN` writes weight 45 and stays evidence-only; co-panelist pairs derive through the shared session node with **zero** materialized co-appearance edges; bio blurbs populate `identity_points` (employer in-source); the Wayback re-run recovers sessions for the archived year and the (event, year) ledger prevents double-landing.
+**Pass criteria:** sessions write `MediaAppearance {source: "conference_session"}` \+ `PART_OF` → event with traversal weight 30; conference-speaker `APPEARED_IN` writes traversal weight 45 (15 when the event is below the 50-speaker hub threshold) and the derived co-speaker pair stays evidence-only; co-panelist pairs derive through the shared session node with **zero** materialized co-appearance edges; bio blurbs populate `identity_points` (employer in-source); the Wayback re-run recovers sessions for the archived year and the (event, year) ledger prevents double-landing.
 
 ### ST-3 — GDELT closed-world week, entry point #5 (batch)
 

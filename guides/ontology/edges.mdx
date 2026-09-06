@@ -153,6 +153,20 @@ FOREACH (x IN CASE WHEN g.is_board_member = true THEN [1] ELSE [] END |
 )
 ```
 
+<Note>
+**Filing-sourced variant (IRS 990, decided 2026-09-06).** Trustee and director rows from Form 990 Part VII reuse THIS edge at weight 8 — no `NONPROFIT_BOARD_MEMBER_OF` fork — so nonprofit board service scores through existing machinery. The 990 writer (`graph.MergePersonEdge`, [Phase 1 990 adapter](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter)) stamps `source: "irs_990"` and the same provenance set as [`OFFICER_OF`](#officer_of), **additively beside** the live `title` (never replacing it, so #2800's readers keep working; a thinner source never blanks a richer one):
+
+| Property | Type | Req | Description |
+|---|---|---|---|
+| `title_as_filed` | string | ✓ | Verbatim Part VII title (also copied to `title`) |
+| `compensation_usd` | integer |  | `ReportableCompFromOrgAmt`, when reported |
+| `valid_from` / `valid_to` | date | ✓ / opt | Filing-year span from all mentions of the pair; `valid_to` NULL while on the latest filing |
+| `filing_refs` | id\[\] | ✓ | Contributing filings |
+| `mention_ref`, `source_urls`, `confidence` | | ✓ | Audit \+ provenance |
+
+Description template: `{Person} is a board member of {Org} ({title_as_filed}, FY{valid_from}–FY{valid_to}).` / `…was a board member of…` once `valid_to` closes. Institutional trustees (`BusinessName` rows) are stored relationally and get **no edge** — the pattern is Person → Company only (990 lane D8).
+</Note>
+
 ---
 
 ### ADVISOR_TO
@@ -3025,10 +3039,10 @@ Parent and child. The strongest family bond after identical twins; the planned v
 Three design rules the lanes share, restated once here because every entry below assumes them:
 
 - **Pairs derive, credits materialize.** Co-producers, co-board members, co-donors and co-officers are never written as pair edges; they are composed at score time through the shared node from two credit edges. Only the credit edge itself is specified.
-- **Hub targets sit in the Moderate band or below.** Institutions, committees and conferences connect thousands of people, so their edges never compete with the structural bonds (`FOUNDED` 5, family 1–10) — the 2026-05-31 audit rule.
+- **Hub targets sit in the Moderate band or below — never stronger than 30.** Institutions, committees and conferences connect thousands of people, so their edges never compete with the structural bonds (`FOUNDED` 5, family 1–10) — the 2026-05-31 audit rule; `WON_AWARD` (30) is the ceiling and most hub edges land in Weak. Same wording as [Edge Weights → Principles](/guides/ontology/edge-weights) (aligned 2026-09-06). A **hub threshold** is a per-edge, measured count that flips the edge to its damped weight: `SPOKE_AT` / `APPEARED_IN {role: speaker}` use speaker count ≥ 50 (15 → 45); foundation `DONOR_TO` uses **> 200 grants in the 4-year filing window** (30 → 40, derived trustee edges 38 → 48; Donors lane default, Phase 0 may tune it).
 - **Evidence-layer edges carry `layer: "evidence"` and `excluded_from_scoring: true`** and a traversal weight in the Weak band. They exist for corroboration and research, not for closeness.
 
-Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`); `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
+Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — both are required and they are not interchangeable. QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> (stage)
 
@@ -3173,7 +3187,9 @@ Two people who co-appear in news coverage over a rolling window. **Evidence laye
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>OFFICER_OF</span>
 
-An officer or key employee of a nonprofit as filed on Form 990 Part VII. Trustee and director rows do **not** use this edge — they reuse the live `BOARD_MEMBER_OF` (8) with the same filing-provenance properties, so nonprofit board service scores through existing machinery. Co-officer pairs derive through the shared node.
+An officer or key employee of a nonprofit as filed on Form 990 Part VII. Trustee and director rows do **not** use this edge — they reuse the live `BOARD_MEMBER_OF` (8) with the same filing-provenance properties ([variant note](#board_member_of)), so nonprofit board service scores through existing machinery. Co-officer pairs derive through the shared node.
+
+**Target and source rules (ratified 2026-09-06, 990 lane D2/D4/D8 + open Q2):** the target is the nonprofit as a `Company:Organization` entity keyed by the strong, company-scoped `ein` identifier — `nonprofit: true` (and `foundation: true` for 990-PF filers) are node properties set from facts; the filing's website is stored as a `website` fact only and is **never** attached as a strong `domain` key on create. The person endpoint exists only through a strong key (an Exa-surfaced LinkedIn URL) or an adjudicated match — never minted from a bare Part VII name — so an unresolved name stays a relational mention with no edge. Institutional trustees get no edge.
 
 | | |
 |---|---|
@@ -3291,7 +3307,7 @@ A named philanthropic gift from a person, couple, foundation or company to an in
 | Person, direct named gift ≥ \$10M | **30** | Ceiling = `WON_AWARD` (30), the strongest hub-target edge |
 | Person, direct named gift ≥ \$1M | **33** | Amount gradation, the house idiom |
 | Person, direct named gift ≥ floor (\$100K) | **36** | Weakest named-gift tier, still above `ATTENDED` (40) |
-| Foundation → institution | **30**; **40** past the grant-count hub threshold | Mega-grantmakers are donor-side hubs (the `LOCATED_IN` 70/80 precedent) |
+| Foundation → institution | **30**; **40** past the grant-count hub threshold (**> 200 grants in the 4-year filing window**, Donors lane default) | Mega-grantmakers are donor-side hubs (the `LOCATED_IN` 70/80 precedent) |
 | Person via foundation (trustee bridge, derived) | **38**; **48** when the foundation is hub-damped | Path-neutral: `BOARD_MEMBER_OF` 8 \+ foundation edge |
 | Company (corporate donor) | **35** | Diffuse, PR-driven giving |
 | Honor-roll-only | **50** *(reserved; no edges in v1)* | ≈ `VOLUNTEERED_AT` ended |

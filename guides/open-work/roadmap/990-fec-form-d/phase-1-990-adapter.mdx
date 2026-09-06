@@ -5,6 +5,8 @@ description: "Agent-grade build spec for the first buildable slice of the federa
 icon: "file-invoice"
 ---
 
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
 **Status: build spec, nothing built (2026-09-05).** This page narrows the [990s, FEC & Form D](/guides/open-work/roadmap/990-fec-form-d) lane to its Phase 1 — the **IRS 990 adapter only** — and pins it to the runtime that actually exists today: the `orbiter-universe` Go repo (AlloyDB `universe.*` schema, the Universe FalkorDB graph, Cloud Run, Pub/Sub). FEC and Form D are Phases 2–3 of the parent page and are **out of scope here**; nothing on this page reaches EDGAR or the FEC.
 
 <Warning>
@@ -23,7 +25,7 @@ Short answer to "does it write to the graph?": **yes, edges and a few nodes, but
 | **GCS** | The verbatim filing XML (`irs990/xml/<year>/<object_id>_public.xml`) and the batch zips it came from (`irs990/zip/<year>/<batch>.zip`, cached so one download serves every org in that batch). | — |
 | **AlloyDB `universe.*` — lane tables** | `filing_990` (one row per fetched filing), `filing_990_governance_mention` (one row per Part VII / officer line), `filing_990_grant` (one row per grant line — the store the [Donors](/guides/open-work/roadmap/donors) lane reads), `filing_990_governance_edge` (the edge ledger), `filing_990_resolution_attempt` (append-only Stage-B audit), `filing_990_org_queue` (the work queue). | Any `DONOR_TO` state. Any FEC / Form D table. |
 | **AlloyDB `universe.*` — backbone** | The nonprofit as a **`company` entity** keyed by a new strong identifier kind `ein`; scalar facts on it (`nonprofit`, `foundation`, `ein`, `website`, `formation_year`, `legal_name`, source `irs_990`); one `enrichment_payloads` envelope per filing; `enrichment_attempts` rows per provider call; **relationship facts** `board_member_of` / `officer_of` (person → org) for resolved people only. | New `person` entities from a **bare name**. A person row is minted only through a strong key (a LinkedIn URL Exa surfaced) or an adjudicated match onto an existing entity — see [D4](#decisions-to-record). No writes to `master_companies` / `master_persons` (typed caches are distill-owned). |
-| **Universe graph (FalkorDB)** | `Company:Organization:Entity` node for the org (via `graph.MergeCompany`, labels add-only so a `School` stays a School) with `nonprofit`, `foundation`, `ein` properties; `Person:Entity` nodes for newly minted strong-key people (via `graph.MergePerson`); **`BOARD_MEMBER_OF` (weight 8)** and **`OFFICER_OF` (14 officer / 20 key employee)** edges via `graph.MergePersonEdge`, each stamped with `title`, `valid_from`, `valid_to`, `source: irs_990`, `filing_refs`, and the deterministic description. | Pair edges (co-board derives at score time). Any edge while `FILINGS_990_EDGE_WRITES_ENABLED=false` (the Stage-1 gate, default off). |
+| **Universe graph (FalkorDB)** | `Company:Organization:Entity` node for the org (via `graph.MergeCompany`, labels add-only so a `School` stays a School) with `nonprofit`, `foundation`, `ein` properties; `Person:Entity` nodes for newly minted strong-key people (via `graph.MergePerson`); **`BOARD_MEMBER_OF` (weight 8)** and **`(Person)-[OFFICER_OF]->(Company {nonprofit: true})` (14 officer / 20 key employee)** edges via `graph.MergePersonEdge`, each stamped per the [ontology](/guides/ontology/edges#officer_of) with `role` (`OFFICER_OF` only), `title_as_filed`, `compensation_usd` (when reported), `valid_from`, `valid_to`, `filing_refs`, `mention_ref`, `source_urls`, `confidence`, and the deterministic description. | Pair edges (co-board derives at score time). Any edge while `FILINGS_990_EDGE_WRITES_ENABLED=false` (the Stage-1 gate, default off). |
 | **Dispatch** | Nothing. No `entity.enrich_requested`, no Deep Bio, no cascade. New strong-key people get an `enrichment_queue` row at **tier 4** (which the person drain never picks — `PickQueueEntry` drains tier ≤ 1), so they exist as leaves until something else promotes them. | Recursive enrichment of any kind. |
 
 Everything above is idempotent: re-running an org with unchanged filings changes no row and no edge.
@@ -344,7 +346,7 @@ admin POST /v1/admin/filings/990/orgs  ──►  filing_990_org_queue (upsert o
 
 ### Stage B: resolution
 
-**Org (once per queue row).** `ResolveStrong("ein", ein, "company")`. On create: `display_name` = filer name, identifiers `ein` (strong) and — only when the website's registrable domain passes the company feature's identity-evidence check *and* shares a name token with the filer name — `domain` (strong; a wrong website would otherwise merge two organizations). Facts (source `irs_990`, confidence 0.95): `nonprofit=true`, `foundation=(return_type == 990PF)`, `ein`, `legal_name`, `website`, `formation_year`; from ProPublica: `ntee_code`, `subsection_code`. Node: `graph.MergeCompany` with `ExtraLabel: "Organization"` (add-only, so an existing `School` keeps its label) and properties `nonprofit`, `foundation`, `ein`, `website`; `Registrar.SetGraphNodeUUID`. The org's node is required before any edge — a missing node is a hard error, never a stub (the `MergePersonEdge` rule).
+**Org (once per queue row).** `ResolveStrong("ein", ein, "company")`. **On a miss, corroborate through the domain before creating** (open Q6, 2026-09-06): take ProPublica's `website` for the EIN (fallback `WebsiteAddressTxt`), reduce it to its registrable domain, and `FindByStrong("domain", …)`; a hit means the nonprofit already exists in the graph under a LinkedIn/Fundable-sourced `domain` key (every `School` node is one) → `AttachIdentifier(ein)` on **that** entity and continue; record `resolution_method = domain_corroboration` on the queue row. No hit → create: `display_name` = filer name, identifier `ein` (strong) **only** — the website is still never attached as a *new* strong `domain` key (open Q2: a wrong 990 website would merge two organizations; the domain step *finds*, it never *mints*). Phase 0 measures the ProPublica `website` field on the fixture set; if it is too dirty, the fallback is hand-seeding `ein` onto the fixture entities (`resolution_method = ein_preseeded`). Facts (source `irs_990`, confidence 0.95): `nonprofit=true`, `foundation=(return_type == 990PF)`, `ein`, `legal_name`, `website`, `formation_year`; from ProPublica: `ntee_code`, `subsection_code`. Node: `graph.MergeCompany` with `ExtraLabel: "Organization"` (add-only, so an existing `School` keeps its label) and properties `nonprofit`, `foundation`, `ein`, `website`; `Registrar.SetGraphNodeUUID`. The org's node is required before any edge — a missing node is a hard error, never a stub (the `MergePersonEdge` rule).
 
 **Person mention, deterministic ladder, stop at the first hit.** Every step appends a `filing_990_resolution_attempt` row.
 
@@ -358,7 +360,7 @@ admin POST /v1/admin/filings/990/orgs  ──►  filing_990_org_queue (upsert o
 
 1. **Facts.** For each `auto_linked` mention with roles, upsert relation facts on the **person**: `entity_facts(entity_id = person, field = board_member_of | officer_of, value_entity_id = org, source = irs_990, confidence = resolution_confidence)`. Add both field names to the facts feature's relation vocabulary so distill's per-target election marks them chosen (single source → trivially chosen; the `entity_facts_relation_winner` unique dedupes re-runs). Only a **chosen** fact may become an edge (repo rule).
 2. **Ledger + tenure.** Upsert `filing_990_governance_edge` on `(person, org, edge_kind)` and **recompute the span from every mention of that pair** (one writer, full view — Go Developer Notes §4): `valid_from` = earliest `tax_period_begin` where the person appears non-former; `valid_to` = `NULL` if present on the org's **latest fetched** filing, else the `tax_period_end` of the last filing where present. `title_as_filed` and `compensation_usd` come from the most recent filing (`ReportableCompFromOrgAmt`, org-only, never summed). `filing_ids` lists every contributing filing. Shuffled-year arrival must converge to identical spans (fixture-tested).
-3. **Edge write** (only when `FILINGS_990_EDGE_WRITES_ENABLED`). `graph.MergePersonEdge` with `Kind`, `Weight` (8 / 14 / 20), `Title`, `Source: "irs_990"`, `ValidFrom`/`ValidTo` as `YYYY-MM-DD`, and the deterministic description (`"{Person} is a board member of {Org} ({title_as_filed}, FY{from}–FY{to})."`; `OFFICER_OF`: `"{Person} is an officer of {Org} (…)"`, past tense once `valid_to` is set). Two additive changes to `platform/graph/person_edges.go`: add `OFFICER_OF` to `personEdgeKinds`, and optional `Role`, `CompensationUSD`, `FilingRefs` fields on `PersonEdge`, omitted when zero (the FOREACH-guard rule: a thinner source never blanks a richer one). Stamp `graph_edge_uuid` + `graph_written_at` on the ledger row; the partial index over `graph_written_at IS NULL` is the sweep queue when the gate opens later.
+3. **Edge write** (only when `FILINGS_990_EDGE_WRITES_ENABLED`). `graph.MergePersonEdge` with `Kind`, `Weight` (8 / 14 / 20), `Title` (→ `r.title`, the live `BOARD_MEMBER_OF` property), `Source: "irs_990"`, `ValidFrom`/`ValidTo` as `YYYY-MM-DD`, and the deterministic description (`"{Person} is a board member of {Org} ({title_as_filed}, FY{from}–FY{to})."`; `OFFICER_OF`: `"{Person} is an officer of {Org} ({title_as_filed}, FY{valid_from}–FY{valid_to})."`, `…was an officer of…` once `valid_to` is set — the [ontology template](/guides/ontology/edges#officer_of)). Additive changes to `platform/graph/person_edges.go`: add `OFFICER_OF` to `personEdgeKinds`, and the [ontology's `OFFICER_OF` property set](/guides/ontology/edges#officer_of) as new `PersonEdge` fields — `Role` (`officer` \| `key_employee`, required on `OFFICER_OF`), `TitleAsFiled` (→ `r.title_as_filed`, required; written beside `r.title` so the live `BOARD_MEMBER_OF` readers keep working), `CompensationUSD` (optional), `FilingRefs` (required), `MentionRef`, `SourceURLs`, `Confidence` (required) — each omitted from the SET when zero (the FOREACH-guard rule: a thinner source never blanks a richer one). Filing-sourced `BOARD_MEMBER_OF` edges carry the same provenance set. Stamp `graph_edge_uuid` + `graph_written_at` on the ledger row; the partial index over `graph_written_at IS NULL` is the sweep queue when the gate opens later.
 
 ### Events and endpoints
 
@@ -406,6 +408,8 @@ Also in the same PRs: a `cross-feature-filings` depguard block in `.golangci.yml
 
 Read first, in order: the repo `CLAUDE.md`; `.claude/skills/universe-schema/SKILL.md`; `.claude/skills/film-tv-enrichment/SKILL.md` (the nearest lane precedent: support rows, edge ledgers, sweep-by-`graph_written_at`, fanout brake); [Go Developer Notes](/guides/enrichment/waterfall/go-developer-notes); the [parent lane page](/guides/open-work/roadmap/990-fec-form-d) for the invariants; [Edges → OFFICER_OF](/guides/ontology/edges#officer_of) and [BOARD_MEMBER_OF](/guides/ontology/edges#board_member_of). Fake adapters first, daily merges, every slice green before the next.
 
+<BakeOffRules />
+
 <Steps>
   <Step title="1. Fixtures before code (Phase 0, offline)">
     Pull `index_2022..2026.csv`, locate the three fixture orgs, fetch their batch zips (range-read the central directory, extract only the needed `<object_id>_public.xml`), commit the XMLs plus a `manifest.json` (ein, tax_period, return_type, object_id, batch, sha256, returnVersion) under `testdata/irs990/`. Write the parser against them and check in one golden JSON per filing (mentions, grants, header). **Done when:** 12 filings parse; re-parse is byte-identical; a shuffled-year tenure test converges; every xpath is annotated with the `returnVersion`s it was verified against.
@@ -435,98 +439,7 @@ Read first, in order: the repo `CLAUDE.md`; `.claude/skills/universe-schema/SKIL
 
 ## Smoke tests
 
-Fixtures (confirm each has ≥ 4 e-filed years in the index during step 1; swap for a neighbour in the same index if not):
-
-| Fixture | EIN | Form | Exercises |
-| --- | --- | --- | --- |
-| Ford Foundation | `13-1684331` | 990-PF | Large stable board, Part XV grants (the Donors consumer read), tenure across 4 years |
-| Johns Hopkins University | `52-0595110` | 990 | Part VII flags, trustee + officer double roles, Schedule I grants, an org already in the graph as `School` |
-| A small 990-EZ filer from `index_2025.csv` (candidate: EIN `04-2702867`) | — | 990-EZ | Title-dictionary roles, thin data, no grants |
-
-### ST-1 — Ford Foundation end to end (entry point #3 on the parent page)
-
-**Input:** `POST /v1/admin/filings/990/orgs {"ein":"13-1684331","years_window":4}` then one drain pass.
-
-**Expected (assert exact fields, ranges where marked):**
-
-```json
-{
-  "org": { "entity_type": "company", "identifiers": ["ein:131684331"],
-           "graph_labels": ["Company", "Organization", "Entity"],
-           "facts": { "nonprofit": true, "foundation": true } },
-  "filings": { "landed": 4, "return_type": "990PF", "parse_state": "parsed", "fetches_from_irs": 4 },
-  "mentions": { "per_filing_range": [12, 25], "subject_kind_person_range": [12, 25] },
-  "roles": { "role_source": "title_dictionary_or_llm", "trustee_edges_kind": "BOARD_MEMBER_OF", "officer_edges_kind": "OFFICER_OF" },
-  "resolution": { "auto_linked_gte": 1, "unresolved_allowed": true, "persons_created_from_bare_name": 0 },
-  "tenure": { "continuing_trustee": { "valid_to": null }, "departed_trustee": { "valid_to": "<tax_period_end of last appearance>" } },
-  "grants": { "rows_gte": 100, "schedule": "pf_part_xv" },
-  "edges_with_gate_closed": 0,
-  "enrich_events_published": 0
-}
-```
-
-**Pass criteria:** zero `OFFICER_OF` rows with a trustee/director role (they must be `BOARD_MEMBER_OF` 8); re-running the drain with the years shuffled (`years_window` 4 seeded oldest-first via the fixture harness) yields identical spans; `filing_990_grant` rows are readable by a plain `SELECT … WHERE recipient_name_normalized LIKE` with no fetch; every mention has a `filing_990_resolution_attempt` chain ending in its stored state.
-
-### ST-2 — Johns Hopkins: flags, double roles, School label, Schedule I
-
-**Expected:** ≥ 1 mention with both `is_individual_trustee` and `is_officer` → two ledger rows for that person (8 and 14); the org keeps the `School` label and gains `nonprofit: true`; Schedule I rows land with `recipient_ein` populated on most rows; an existing graph person with a `works_at` fact to JHU resolves via `affiliation` without an Exa call (assert `exa` attempts = 0 for that mention).
-
-### ST-3 — Negative controls (fixture harness, fakes)
-
-| Control | Assert |
-| --- | --- |
-| Common name (`Michael Smith`, three soft candidates, no corroboration) | `needs_review`, one open review row, zero entities created, zero edges |
-| Bare name, Exa returns nothing | `unresolved`, zero entities, zero edges, attempt `no_candidates` |
-| Exa returns a LinkedIn profile whose slug lacks the surname | rejected, `unresolved` |
-| Exa returns a matching profile, adjudication 0.92 | entity created via strong `linkedin`, `enrichment_queue` row at tier 4, **no** `entity.enrich_requested`, `graph.MergePerson` called once |
-| `FormerOfcrDirectorTrusteeInd = X` | mention stored `is_former`, no roles, no tenure contribution |
-| Institutional trustee (`BusinessName`) | `subject_kind = organization`, `not_applicable`, no edge |
-| Gate closed | ledger populated, zero `MergePersonEdge` calls |
-| Same filing set drained twice | zero new rows anywhere, `graph_edge_uuid` and edge `created_at` unchanged |
-| `FILINGS_990_MAX_NEW_PERSONS_PER_RUN = 1` with two creatable mentions | second stays `unresolved` with attempt outcome `cap_deferred` |
-
-### Acceptance queries (zero rows required, run twice)
-
-```sql
--- role/edge kind mismatch
-SELECT id FROM universe.filing_990_governance_edge
- WHERE edge_kind = 'OFFICER_OF' AND role NOT IN ('officer','key_employee');
--- weight outside the decided set
-SELECT id FROM universe.filing_990_governance_edge
- WHERE (edge_kind='BOARD_MEMBER_OF' AND weight <> 8)
-    OR (edge_kind='OFFICER_OF' AND weight NOT IN (14,20));
--- edge with no chosen fact behind it
-SELECT e.id FROM universe.filing_990_governance_edge e
- LEFT JOIN universe.entity_facts f ON f.id = e.fact_id AND f.is_chosen
- WHERE e.graph_written_at IS NOT NULL AND f.id IS NULL;
--- open valid_to on a person absent from the org's latest filing
-SELECT e.id FROM universe.filing_990_governance_edge e
- WHERE e.valid_to IS NULL AND NOT EXISTS (
-   SELECT 1 FROM universe.filing_990_governance_mention m
-   JOIN universe.filing_990 f ON f.id = m.filing_id
-   WHERE m.person_entity_id = e.person_entity_id AND f.org_entity_id = e.org_entity_id
-     AND NOT m.is_former
-     AND f.tax_period = (SELECT MAX(tax_period) FROM universe.filing_990 WHERE org_entity_id = e.org_entity_id));
--- person minted by this lane without a strong identifier
-SELECT en.id FROM universe.entities en
- JOIN universe.enrichment_queue q ON q.entity_id = en.id AND q.source_function = 'filings.irs990'
- WHERE NOT EXISTS (SELECT 1 FROM universe.entity_identifiers i WHERE i.entity_id = en.id AND i.is_strong_identity);
--- filing without its verbatim XML
-SELECT id FROM universe.filing_990 WHERE xml_storage_key IS NULL OR xml_sha256 IS NULL;
-```
-
-```cypher
-// edges missing provenance or envelope
-MATCH (p:Person)-[r:BOARD_MEMBER_OF|OFFICER_OF]->(c)
-WHERE r.source = 'irs_990' AND (r.uuid IS NULL OR r.created_at IS NULL OR r.valid_from IS NULL OR r.title IS NULL)
-RETURN r.uuid
-// any materialized pair edge (must never exist)
-MATCH ()-[r:CO_BOARD_MEMBERS|CO_OFFICERS]->() RETURN count(r)
-```
-
-### QA registration
-
-Extend the `qa-the-sandbox` registry with: (1) queue quiescence = no `filing_990_org_queue` row locked longer than `ENRICHMENT_QUEUE_LOCK_TTL` **and** zero rows with `attempts >= max`; (2) mention census by `resolution_state` with the denominator printed — a run with zero mentions reports **`vacuous`**, never pass; (3) ledger vs graph parity: rows with `graph_written_at` ↔ `MATCH … r.source='irs_990'` counts; (4) the six SQL queries above; (5) zero `entity.enrich_requested` events whose `source_function` is this lane. Real failures are counted by severity from structured logs, never by row counts.
+Moved to their own page — [990 Adapter Smoke Tests](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-smoke-tests) — after the 2026-09-06 candidate search against the dev Universe graph. Headlines: **Johns Hopkins is not in the graph** and is replaced by **Stanford** (a `School` node with 24 `ATTENDED` edges); the net-new-edge proof is **Veterans Future Foundation** (org node + board member Katelyn Gallanty already a Person node — resolves via `affiliation`, zero search calls); Hollywood Professional Association and California Science Center Foundation are the same shape; Ford Foundation stays as the 990-PF / grants case; Cedars-Sinai (Board of Governors ≠ Part VII) and a public university (no 990) are the negative controls. The acceptance queries, before-baselines and QA registration live there too.
 
 ## Cost and volume
 
@@ -534,26 +447,29 @@ Sources are free. First run (100 filings): ~2K Exa searches ≈ \$10–20, ~1–
 
 ## Decisions to record
 
-Enter these in `.claude/skills/filings-enrichment/SKILL.md` and the universe-schema decision log on the day they are ratified. Mark ratifies; the agent does not guess.
+**All eight ratified by Mark on 2026-09-06** (recorded in `.claude/skills/filings-enrichment/SKILL.md` and the universe-schema decision log). The table is kept as the audit trail.
 
-| # | Decision | Default on this page | Why it needs a signature |
+| # | Decision | Ratified as | Why it needed a signature |
 | --- | --- | --- | --- |
-| D1 | Raw XML lives in GCS; `enrichment_payloads.raw` holds the JSON envelope | as above | Deviates from "verbatim response in the payload row" because the payload column is JSONB |
-| D2 | `ein` is a **strong** identifier kind, company-scoped | strong | A strong-kind addition is an identity decision |
-| D3 | Nonprofits are `Company:Organization` with `nonprofit`/`foundation`/`ein` node properties and facts; **no typed-cache columns** in Phase 1 | as above | `master_companies` has no `is_nonprofit`; adding it means distill work — Phase 1.5 |
-| D4 | No person entity from a bare name; strong key or adjudicated match only; unresolved mentions stay name-anchored | as above | Deviates from the parent page's "local-only leaves + queue rows" wording |
-| D5 | Strong-key leaves get a **tier-4** `enrichment_queue` row and no dispatch | tier 4 | Uses the person drain's tier ≤ 1 pickup as the "never enriched unless promoted" guarantee |
-| D6 | `OFFICER_OF` is added to `personEdgeKinds`; `PersonEdge` gains optional `Role`, `CompensationUSD`, `FilingRefs` | additive | Touches the shared graph writer |
-| D7 | Tenure recomputed from all mentions on every write; middle-initial variants break a span in v1 | as above | Accepts a known false-negative rather than fuzzy-matching names across years |
-| D8 | Institutional trustees stored, no edge | none | The ontology pattern is Person → Company only |
+| D1 | Raw XML lives in GCS; `enrichment_payloads.raw` holds the JSON envelope | ✅ as written | Deviates from "verbatim response in the payload row" because the payload column is JSONB |
+| D2 | `ein` is a **strong** identifier kind, company-scoped | ✅ strong, company-scoped | A strong-kind addition is an identity decision |
+| D3 | Nonprofits are `Company:Organization` with `nonprofit`/`foundation`/`ein` node properties and facts; **no typed-cache columns** in Phase 1 | ✅ as written | `master_companies` has no `is_nonprofit`; adding it means distill work — Phase 1.5 |
+| D4 | No person entity from a bare name; strong key or adjudicated match only; unresolved mentions stay name-anchored | ✅ as written | Deviates from the parent page's "local-only leaves + queue rows" wording |
+| D5 | Strong-key leaves get a **tier-4** `enrichment_queue` row and no dispatch | ✅ tier 4 | Uses the person drain's tier ≤ 1 pickup as the "never enriched unless promoted" guarantee |
+| D6 | `OFFICER_OF` is added to `personEdgeKinds`; `PersonEdge` gains the ontology's `OFFICER_OF` property set (`Role`, `TitleAsFiled`, `CompensationUSD`, `FilingRefs`, `MentionRef`, `SourceURLs`, `Confidence`), each omitted when zero | ✅ additive | Touches the shared graph writer |
+| D7 | Tenure recomputed from all mentions on every write; middle-initial variants break a span in v1 | ✅ as written | Accepts a known false-negative rather than fuzzy-matching names across years |
+| D8 | Institutional trustees stored, no edge | ✅ no edge | The ontology pattern is Person → Company only |
 
-## Open questions
+## Open questions — resolved 2026-09-06
 
-1. **Name-anchored mentions vs leaves (D4).** If Mark wants name-only leaves after all, the change is one function (`resolve.go` step 5) plus a cap; the ledger and edges are unchanged.
-2. **Domain attachment on org create.** Attach `domain` (strong) from `WebsiteAddressTxt` only with the name-token guard, or never, and keep `website` as a fact only?
-3. **Institutional trustees.** Model as `(Company)-[:BOARD_MEMBER_OF]->(Company)` later, or drop?
-4. **Schedule I vs Part XV grant floors** are the Donors lane's call; this lane stores every row.
-5. **ProPublica attribution text** for the review UI (their terms ask for it).
+1. **Name-anchored mentions vs leaves (D4)** → **mention rows only** (D4 ratified). Reversal, if ever wanted, is one function (`resolve.go` step 5) plus a cap.
+2. **Domain attachment on org create** → **never in Phase 1.** `WebsiteAddressTxt` lands as a `website` fact (source `irs_990`) only; the EIN is the org's strong key and `domain` promotion is left to the company pipeline's evidence-weighted domain-repair rules. Stage B's org step drops the name-token guard branch entirely.
+3. **Institutional trustees** → **store, no edge** (D8 ratified). A `(Company)-[:BOARD_MEMBER_OF]->(Company)` pattern would need its own Edge Types entry and weight at a §3.6 sitting; the rows are kept so promotion later costs no re-fetch.
+4. **Schedule I vs Part XV grant floors** — still the Donors lane's call; this lane stores every row. *(unchanged)*
+5. **ProPublica attribution** → a fixed constant in `clients/propublica` (`"Filing inventory and organization data from ProPublica Nonprofit Explorer (https://projects.propublica.org/nonprofits/)."`), emitted as `meta.attribution` on `GET /v1/admin/filings/990/orgs/{ein}` and on the review-queue rows this lane files. Not in the publish contract: no ProPublica-derived field is projected in Phase 1, so there is nothing to attribute downstream yet.
+6. **Existing orgs keyed by `domain` (found by the smoke-test candidate search)** → **(b) domain corroboration on an EIN miss**, with **(a) Phase 0 hand-seeded `ein` as the fallback** if ProPublica's `website` is too dirty on the fixture set. Without it, D4's own rule would make the adapter mint a second Stanford / NYU / Harvard beside the `School` entity that already holds `stanford.edu` etc. Detail in Stage B above and on the [smoke-tests page](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-smoke-tests#st-2--stanford-school-label-double-roles-schedule-i-f4).
+
+Also settled the same day on the Edge Types page: `source` joins the shared edge envelope (QA scopes this lane's edges by `r.source = 'irs_990'`), and filing-sourced `BOARD_MEMBER_OF` carries the `OFFICER_OF` provenance set additively beside the live `title` — see [Edges → BOARD_MEMBER_OF](/guides/ontology/edges#board_member_of).
 
 ## References
 
