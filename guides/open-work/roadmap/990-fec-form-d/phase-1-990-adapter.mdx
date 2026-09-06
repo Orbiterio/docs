@@ -43,7 +43,9 @@ Nothing new goes into Secret Manager for Phase 1. IRS and ProPublica are keyless
 | `PROPUBLICA_BASE_URL` | config | `https://projects.propublica.org/nonprofits/api/v2` | `search.json` (name → EIN) and `organizations/<ein>.json` (filing inventory: `filings_with_data[].tax_prd`, `formtype`, `pdf_url`) |
 | `PROPUBLICA_USER_AGENT` | config | same UA string | ProPublica asks for attribution and modest rates; the client caps itself at 1 req/s |
 | `OPENROUTER_API_KEY` | existing secret | — | Role classification on unmapped titles; Stage-B adjudication |
-| `EXA_API_KEY` | existing secret | — | Stage-B profile discovery (name + org + title) |
+| `PARALLEL_API_KEY` | new secret | — | Stage-B profile discovery (name + org + title) — **Parallel Search won the 2026-09-06 bake-off** over Exa (12 vs 8 judge-ready profiles on 30 fixture names). `EXA_API_KEY` stays wired as the one-env-value alternative |
+| `FILINGS_990_SEARCH_PROVIDER` | config | *(empty)* | `parallel` \| `exa` \| empty. Empty leaves the search step unwired: the ladder records `deferred` and stops after `affiliation` |
+| `FILINGS_990_LLM_ENABLED` | flag | `false` | Wires the identity judge and the title→role classifier on `OPENROUTER_API_KEY`; off leaves both steps `deferred` |
 | `GCS_BUCKET` / `GCS_MODE` | existing | — | Raw XML + zip cache under the `irs990/` prefix (`noop` mode locally reads `testdata/`) |
 | `FILINGS_990_ENABLED` | flag | `false` | Constructs the feature; empty disables every handler |
 | `FILINGS_990_QUEUE_DRAIN_ENABLED` | flag | `false` | Mirrors `ENRICHMENT_*_QUEUE_DRAIN_ENABLED` |
@@ -54,8 +56,8 @@ Nothing new goes into Secret Manager for Phase 1. IRS and ProPublica are keyless
 | `FILINGS_990_MAX_NEW_PERSONS_PER_RUN` | int | `50` | Strong-key leaf creations per drain tick |
 | `FILINGS_990_AUTO_LINK_THRESHOLD` | float | `0.85` | Adjudication auto-link floor |
 | `FILINGS_990_REVIEW_THRESHOLD` | float | `0.60` | Below auto-link, at or above this → `needs_review` |
-| `FILINGS_990_ROLE_MODEL` | config | `deepseek/deepseek-v4-flash-0731` | Title → role, unmapped titles only. Reasoning off, temperature 0, strict JSON. The model the 2026-09-04 Deep Bio bake-off promoted and the cheapest structured-output option in the house registry; the bake-off measured research, so Phase 0 confirms it on the labelled title set |
-| `FILINGS_990_ADJUDICATE_MODEL` | config | `anthropic/claude-sonnet-5` | The identity judge (#12677 v5 shape), temperature 0.1, structured outputs. The one call where a wrong "yes" fuses two humans, so it gets the strongest model already in the house registry; `gemini-3-flash-preview` is a superseded preview line. Optional cost tier: `llm.Caller.Escalate` with `google/gemini-3.8-flash` first and Sonnet 5 for answers in the 0.60–0.85 band or failed validation |
+| `FILINGS_990_ROLE_MODEL` | config | `z-ai/glm-5.3-flash` | Title → role, unmapped titles only; strict JSON, temperature 0. **Set by the 2026-09-06 bake-off** (five models, 57 residue titles — table below); the spec's `deepseek-v4-flash-0731` over-assigned `key_employee` to staff titles. glm refuses reasoning-off, so it runs at `reasoning=low` (≈ \$0.00007 per title) |
+| `FILINGS_990_ADJUDICATE_MODEL` | config | `openai/gpt-5.4` | The identity judge, temperature 0.1, strict JSON. **Set by the 2026-09-06 bake-off** (five models, 150 cases — table below): 145/150 with 2 false auto-links, and the only model that answers `none` on a bare name; the spec's `claude-sonnet-5` scored 123/150 with 10 |
 
 Every var above is parsed in `internal/platform/config` and added to `.env.example` under **WORKER ENVS** (drain, fetch, resolve) and **API ENVS** (the admin endpoints) in the same PR, per the repo rule. Kill switches are the existing `consumers.environment_variables` rows `kill_switch_company` and `kill_switch_person`, read through the existing cap check (`enrichment/cap.go`) — no new keys.
 
@@ -352,7 +354,7 @@ admin POST /v1/admin/filings/990/orgs  ──►  filing_990_org_queue (upsert o
 
 1. **`prior_filing`** — a mention on an earlier filing of the **same org** with the same `name_normalized` is already `auto_linked` → inherit `person_entity_id` (confidence = prior). This is what makes tenure cheap.
 2. **`affiliation`** — `Resolver.MatchIdentifiers("person", [name])` nominates soft candidates; a candidate with an existing chosen relationship fact or edge to this org (`works_at`, `board_member_of`, `officer_of`, `founded`) is corroboration #1, and a title/employer fact agreeing with `title_as_filed` is #2. Two corroborations → `auto_linked` at 0.90. Exactly one candidate with one corroboration → adjudicate (step 4).
-3. **`exa_linkedin`** — `clients/exa.Search` with `"<name>" "<org name>" <title> linkedin`, `numResults: 5`, domain filter `linkedin.com`. Reject any result whose slug tokens do not contain the surname. A single surviving profile → adjudicate; adjudication ≥ 0.85 → `ResolveStrong("linkedin", url, "person")` (find-or-create), `AttachIdentifier` soft `name`, `auto_linked`, method `linkedin_strong`. A **created** entity here is a leaf: `graph.MergePerson` (name, embedding via the shared embedder), then `fanoutlimit.Bound.Offer` → `enrichment_queue` upsert at **tier 4**, depth 1, `source_function = filings.irs990`, `seed_entity_id` = the org. Counted against `FILINGS_990_MAX_NEW_PERSONS_PER_RUN` and the person cap.
+3. **`exa_linkedin`** (the step keeps its name; the provider is a seam — `clients/parallel` after the bake-off, `clients/exa` as the alternative) — `"<name>" "<org name>" <title> linkedin`, 5 results, domain filter `linkedin.com`. Keep only `linkedin.com/in/<slug>` results whose slug carries the **surname and the first name, its nickname or initial** (the surname alone let a company page and three near-names through on the fixture set). Prefer the one surviving profile whose title/excerpt names the org (two corroborations); with no org signal, exactly one survivor (one corroboration); several without an org signal → `rejected`. The chosen profile → adjudicate; adjudication ≥ 0.85 → `ResolveStrong("linkedin", url, "person")` (find-or-create), `AttachIdentifier` soft `name`, `auto_linked`, method `linkedin_strong`. A **created** entity here is a leaf: `graph.MergePerson` (name, embedding via the shared embedder), then `fanoutlimit.Bound.Offer` → `enrichment_queue` upsert at **tier 4**, depth 1, `source_function = filings.irs990`, `seed_entity_id` = the org. Counted against `FILINGS_990_MAX_NEW_PERSONS_PER_RUN` and the person cap.
 4. **`adjudication`** — `FILINGS_990_ADJUDICATE_MODEL`, temperature 0.1, strict JSON `{"match":"yes|no|none","candidate":"<id>","confidence":0-1,"reasoning":"…","same_name_different_person":bool}` over the full mention context (name, title, org, org city/state, tax year, comp bracket) plus each candidate's profile summary. Auto-link only at `confidence ≥ FILINGS_990_AUTO_LINK_THRESHOLD` **and** two independent corroborations recorded in the attempt; name-only matches are capped at 0.59 regardless of model output (#13168 guard). `[0.60, 0.85)` → `needs_review` with `ReviewFiler.FileReviewItem` (reason `ambiguous_soft_match`, evidence kind `name`, counterpart = the candidate); below → stays `unresolved`.
 5. **No candidate, no profile** → `unresolved`. Never an entity, never an edge. The weekly `filings.resolution_sweep_requested` re-runs steps 1–2 only (free) for `unresolved` mentions, and re-runs 3–4 monthly.
 
@@ -437,13 +439,56 @@ Read first, in order: the repo `CLAUDE.md`; `.claude/skills/universe-schema/SKIL
   </Step>
 </Steps>
 
+## Bake-off results — 2026-09-06
+
+Run with `go run ./scripts/bakeoff-990 -task search | adjudicate | roles` against the committed Phase 0 goldens (labelled sets are derived from them, so a re-run is reproducible); prompts are the production ones in `internal/features/filings/irs990_prompts.go`. Raw answers for this run: `/tmp/bakeoff-990/*.jsonl` on Mark's machine. Quality first, price second, per the [bake-off rules](#build-plan-for-the-agent).
+
+### Search: Parallel vs Exa — **Parallel**
+
+30 fixture roster names (round-robin across the eight orgs), the ladder's query, `linkedin.com` only, 5 results. *Survivor* = a `/in/<slug>` whose slug carries the surname; *names org* = the hit's title/excerpt carries the org's name (the ladder's second corroboration). The judge-ready outcome is **one survivor naming the org**, else **one survivor** with no org signal.
+
+| provider | any hit | any survivor | one survivor naming org | one survivor, no org signal | several, no org signal | judge-ready | p50 | cost / query |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Parallel** (advanced) | 30/30 | 17/30 | **9** | 4 | 3 | **13** | 1.5 s | ≈ \$0.005 (list) |
+| Exa | 30/30 | 10/30 | 8 | 1 | 1 | 9 | 1.1 s | \$0.007 (reported) |
+
+Two ladder rules fell out of the per-query table. **(1)** Requiring the first name / nickname / initial in the slug, not just the surname, dropped exactly the four false survivors (`cedars-sinai-guerin-children-s` for Vera Guerin, `john-ehrenkranz` for Joel, `katherine-oschin` for Lynda, `jim-whitehead` for Martha) and no true profile — after it, Parallel 12 / Exa 8. **(2)** Eleven of the sixty queries returned *several* same-name profiles (two Tom Dunns, two Tim Kirkseys, three Joseph Steinbergs), so "one survivor or nothing" would have discarded real people; the org-naming survivor is now preferred. Both are in `irs990_resolve.go`.
+
+### Identity adjudication — **`openai/gpt-5.4`**
+
+150 cases from 30 names, five per name: the profile we hold (*positive_exact*); nickname/initial + the org's common name + a compatible other title (*positive_alias*); the same name at an unrelated employer (*negative_other_org*); a different first name at the org (*negative_near_name*); a bare name (*thin*). Correct = positives `yes` at ≥ 0.60, negatives/thin not `yes` or < 0.60. **False auto-link** = a negative or thin case answered `yes` at ≥ 0.85 — the failure that mints a wrong edge.
+
+| model | correct | false auto-links | invalid JSON | pos_exact / pos_alias / neg_other / neg_near / thin | p50 | cost / 150 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **`openai/gpt-5.4`** | **145/150** | **2** | 0 | 30 / 29 / 30 / 30 / 26 | 1.9 s | \$0.49 |
+| `deepseek/deepseek-v4-pro` | 134/150 | 10 | 4 | 30 / 30 / 28 / 29 / 17 | 3.7 s | \$0.25 |
+| `google/gemini-2.5-flash` | 133/150 | 16 | 0 | 30 / 30 / 30 / 30 / 13 | 1.6 s | \$0.10 |
+| `anthropic/claude-sonnet-5` (spec default) | 123/150 | 10 | 0 | 29 / 22 / 30 / 30 / 12 | 2.0 s | \$0.35 |
+| `moonshotai/kimi-k2.6` | 25/150 | 0 | 125 | — | 2.2 s | \$0.33 |
+
+Every false auto-link in the table is a *thin* case — a bare distinctive name answered `yes 0.85–0.90` from world knowledge ("Sakurako D Fisher is a known Stanford trustee"). The ladder's verdict rule already caps a zero-corroboration match at 0.59, so none would have drawn an edge; the column measures **calibration**, and gpt-5.4 is the one model that says `none` when it has nothing (26/30). No model auto-linked a same-name-different-employer or near-name negative. Claude's *positive_alias* misses are partly a harness artifact (a synthetic day job contradicted what it knows about a famous trustee) and partly caution (`none 0.40` on a plain Joseph Steinberg). kimi-k2.6 spent the 600-token budget reasoning and returned no JSON on 125 cases; the re-run at 3,000 tokens is recorded in the skill.
+
+### Title → role residue — **`z-ai/glm-5.3-flash` (reasoning=low)**
+
+57 titles the flags-then-dictionary classifier leaves undecided: 44 real ones labelled by the Part VII checkboxes filed beside them (keeping titles whose filers agree ≥ 2/3), 13 hand-labelled 990-EZ abbreviations (`SECY/TREAS`, `MEMBER AT LARGE`, `IMMEDIATE PAST PRESIDENT` …). `director` scores as `trustee` (same edge).
+
+| model | agrees with label | real / hand | invalid JSON | p50 | cost / 57 |
+| --- | --- | --- | --- | --- | --- |
+| **`z-ai/glm-5.3-flash`** (reasoning=low) | 26/57 | 14/44 · 12/13 | 0 | 1.0 s | \$0.004 |
+| `openai/gpt-5-nano` (reasoning=low) | 29/57 | 16/44 · 13/13 | 0 | 2.4 s | \$0.006 |
+| `deepseek/deepseek-v4-flash-0731` (spec default) | 24/57 | 11/44 · 13/13 | 0 | 1.1 s | \$0.002 |
+| `deepseek/deepseek-v4-pro` | 24/57 | 12/44 · 12/13 | 0 | 0.8 s | \$0.021 |
+| `google/gemini-3.1-flash-lite` | 24/57 | 11/44 · 13/13 | 0 | 0.4–0.6 s | \$0.007 |
+
+The low agreement is the **label**, not the models: on 18 of the 44 real titles every model disagreed with the flags in the same way — Harvard checks the *officer* box for every V.P. and for the Provost, and files its Corporation members as `FELLOW`. The flags are the filer's policy, which is exactly why they outrank the LLM when present; the prompt's rule (V.P. → `key_employee`) only ever applies to flagless 990-EZ/PF rows. The 21 titles the models **split** on decided it: gemini-3.1-flash-lite reads `AS OF <date>` as former (5 misses); gpt-5-nano misses `UNTIL` / `THRU` (draws an edge for a departed officer); deepseek-v4-flash-0731 calls `FACULTY`, `SENIOR FELLOW` and `WEB APPLICATION ARCHITECT` `key_employee` (staff → `OFFICER_OF` 20); deepseek-v4-pro calls `MEMBER` a trustee. glm's two disagreements are defensible (`HEAD OF SCHOOL` officer; `SRVP, CAO` officer — a Chief Administrative Officer is one). glm and gpt-5-nano refuse reasoning-off; glm at `reasoning=low` is \$0.00007 per title. The "AS OF is a start date" rule was added to the prompt.
+
 ## Smoke tests
 
 Moved to their own page — [990 Adapter Smoke Tests](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-smoke-tests) — after the 2026-09-06 candidate search against the dev Universe graph. Headlines: **Johns Hopkins is not in the graph** and is replaced by **Stanford** (a `School` node with 24 `ATTENDED` edges); the net-new-edge proof is **Veterans Future Foundation** (org node + board member Katelyn Gallanty already a Person node — resolves via `affiliation`, zero search calls); Hollywood Professional Association and California Science Center Foundation are the same shape; Ford Foundation stays as the 990-PF / grants case; Cedars-Sinai (Board of Governors ≠ Part VII) and a public university (no 990) are the negative controls. The acceptance queries, before-baselines and QA registration live there too.
 
 ## Cost and volume
 
-Sources are free. First run (100 filings): ~2K Exa searches ≈ \$10–20, ~1–2K adjudications on `claude-sonnet-5` ≈ \$8–13 (about \$8 with the optional Gemini 3.8 Flash first tier), title classification on `deepseek-v4-flash-0731` under \$0.20. GCS: zips cached once per batch (~500 MB each), XML objects negligible. No vendor person-enrichment spend: leaves sit at tier 4.
+Sources are free. First run (100 filings): ~2K Parallel searches ≈ \$10, ~1–2K adjudications on `gpt-5.4` ≈ \$3–7 (measured \$0.0033 per case), title classification on `glm-5.3-flash` under \$0.20. GCS: zips cached once per batch (~500 MB each), XML objects negligible. No vendor person-enrichment spend: leaves sit at tier 4.
 
 ## Decisions to record
 
