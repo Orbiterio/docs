@@ -54,9 +54,16 @@ Work top to bottom. Each step names its acceptance check.
     Per-account daily cap on events read (start at 3,000) and a global monthly budget behind a kill switch. One structured log line per run from the run row; metrics for accounts due, runs completed, 429s, reconsents needed, webhook deliveries and estimated spend. Unit tests for direction, counterpart from the hyphenated id, `card_descriptor` and colon-to-hyphen normalisation, driven by the recorded fixtures on this page; an idempotency test that runs a fixture twice. Feature flag per user; internal accounts first; a week of spend data; then everyone. **Phase 1 ships here.**
   </Step>
   <Step title="9. Phase 2, later: message text through on-device decryption (Option B)">
-    Phase 1 already tells Orbiter that a conversation is happening, with whom, in which direction and how recently. Phase 2 adds the words, and it can only happen on the user's device, because that is where X keeps the keys. Scope, in order:
+    Phase 1 already tells Orbiter that a conversation is happening, with whom, in which direction and how recently. Phase 2 adds the words, and it can only happen on the user's device, because that is where X keeps the keys. **This does not wait for an iOS app.** X's own desktop web client decrypts chats in the browser with the WASM build of the Chat XDK, and the Orbiter web app can do the same. Scope, in order:
 
-    1. **Client integration.** Embed the Chat XDK in the Orbiter client: `@xdevplatform/chat-xdk` (WASM) in the web app, the native binding in mobile. The client calls `unlock(pin)` once per device, keeps the key material in the XDK's own storage, and never sends the PIN or keys anywhere.
+    1. **Client integration, web first.** Embed `@xdevplatform/chat-xdk` (WASM, see X's "Building UI apps with WASM" guide) in the Orbiter web app; add the native binding when the iOS app exists. The client calls `unlock(pin)` once per device, keeps the key material in the XDK's own storage, and never sends the PIN or keys anywhere. Trade-offs by platform:
+
+       | | Web app (WASM) | iOS app (native binding) |
+       | --- | --- | --- |
+       | Ships | First; no new app needed | Later, with the mobile build |
+       | When text syncs | Only while an Orbiter tab is open | Background refresh keeps up with new chats |
+       | Key storage | Browser profile; PIN re-entry after a cleared profile or a new browser | Keychain-backed; PIN prompt recurs rarely |
+       | Coverage | Chats that arrived before the tab opened are fetched on open, so nothing is missed, only delayed | Near real-time |
     2. **PIN prompt.** A one-time screen that asks for the user's XChat PIN with a plain explanation of what it unlocks and that it stays on the device. Users who decline stay on Phase 1; the metadata rows are unaffected.
     3. **Decrypt and post.** On open, and while the app is in the foreground, the client fetches `GET /2/chat/conversations/{id}/events` for conversations with rows whose `text` is empty, runs `decrypt_events()`, and posts `{dm_event_id, text}` pairs to a new ingest endpoint that fills `text` and `snippet` on the existing row. Nothing new is inserted; Phase 1 rows are the anchor. Webhook events keep arriving as metadata and get their text the next time a client opens.
     4. **Ingest endpoint.** Authenticated, per-user, idempotent on `dm_event_id`, rejects rows that do not belong to the caller's `user_id`. Rate-limit and size-cap the payload.
