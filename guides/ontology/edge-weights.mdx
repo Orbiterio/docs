@@ -400,13 +400,17 @@ All additional weights are **proposals**, even when they reuse an existing famil
 
 ### Person → MediaAppearance / Event (media lane)
 
-Set 2026-08-21; folded from [Media co-occurrence](/guides/open-work/roadmap/media-co-occurrence). Interview pairs are `COLLABORATORS`-class; conferences are hubs.
+<a id="media-weights" />
 
-| Edge | Weight | Description |
+The 15/20/45 appearance and 55 news bands were set 2026-08-21. **2026-09-06 Go plan revision:** episode/session-specific evidence and a pair-aware reader are required before any scored use; no media writer is implemented. Proposed `SESSION_OF` replaces the unbuilt media `PART_OF` name, preserving the project reservation. Moderator handling and conservative news independence gates are proposed additions.
+
+| Edge | Weight | Contract |
 | --- | --- | --- |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:APPEARED_IN]</span> | 15 / 20 / 45 | Person appeared in a podcast episode, video or session — interview host / guest 15, co-panelist 20, conference speaker 45 — [spec](/guides/ontology/edges#appeared_in). Reconciled 2026-09-05: speaking is 15 below the speaker-count hub threshold (default 50) and 45 at or above it, for both `APPEARED_IN {role: speaker}` and the Live Events `SPOKE_AT` — the `LOCATED_IN` / `DONOR_TO` hub-damping idiom |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:PART_OF]</span> | 30 | `MediaAppearance` → `Event:Live_*` containment; the `RECORDING_OF` analogue — [spec](/guides/ontology/edges#part_of) |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:CO_MENTIONED_WITH]</span> | 55 *(evidence layer)* | Person A & B co-appear in news coverage; `excluded_from_scoring: true` — [spec](/guides/ontology/edges#co_mentioned_with) |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:APPEARED_IN]</span> | 15 / 20 / 45 | Interview host/guest 15; panelist/moderator 20; speaker 15 only below a complete verified 50-speaker event threshold, otherwise 45. Unknown count uses 45. Only compatible confirmed memberships in the same interaction group can score; solo talks, guest cliques and conference-wide adjacency do not. [Full spec](/guides/ontology/edges#appeared_in). |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:SESSION_OF]</span> | 30 | Exact `MediaAppearance` session → exact `Event:Live_*` edition. Always evidence/excluded; no cross-session scoring shortcut. [Proposed spec](/guides/ontology/edges#session_of). |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:CO_MENTIONED_WITH]</span> | 55 | Closed-world, independently verified article-person matches; at least three canonical articles/two domains in 24 calendar months, plus proposed independent-story/publisher gates. Always evidence/excluded in v1. [Full spec](/guides/ontology/edges#co_mentioned_with). |
+
+All media edges require the metadata envelope, including `description` and `description_generated_at`. Graph/scoring flags default off. The current Go generic readers do not enforce media exclusions or group/role compatibility; reader acceptance tests are a release prerequisite, and a weight or flag alone is insufficient. Repeated source assets count as one verified encounter. No co-appearance pair edges or `KNOWS` are materialized. [Go plan](/guides/open-work/roadmap/media-co-occurrence).
 
 ### Person → Company (federal filings lane)
 
