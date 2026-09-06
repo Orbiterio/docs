@@ -1,7 +1,7 @@
 ---
 title: "Profile Image Crop"
 sidebarTitle: "Profile Image Crop"
-description: "Build a Go service on GCP that resolves image links, uses GPT-6 Astra through OpenRouter to keep or crop a portrait, and returns a PNG without changing the person's appearance."
+description: "Build a Go service on GCP that resolves image links, uses GPT-5.6 Luna through OpenRouter to keep or crop a portrait, and returns a PNG without changing the person's appearance."
 icon: "crop-simple"
 ---
 
@@ -15,15 +15,17 @@ Give the service a direct image URL or a webpage such as an IMDb photo viewer. R
 
 **Keep a well-framed portrait, even when it is rectangular.** Exact square output is not required. A good 600 × 800 headshot should retain its composition; with a 512-pixel maximum edge, its output becomes 384 × 512. A full-body event photo should become a closer head-and-shoulders crop. A square photo with a distant face still needs assessment.
 
-Use **GPT-6 Astra for the visual decision and Go for the pixel operation**. Astra returns a crop rectangle; Go extracts that rectangle from the original image and encodes PNG. This preserves the source appearance. There is no generative image editing, face reconstruction, background replacement, or beautification in this build.
+Use **GPT-5.6 Luna for the visual decision and Go for the pixel operation**. Luna returns a crop rectangle; Go extracts that rectangle from the original image and encodes PNG. This preserves the source appearance. There is no generative image editing, face reconstruction, background replacement, or beautification in this build.
 
-## Smoke test: Patrick Van Horn on IMDb
+## Live-photo smoke tests and results
 
-Use these two entry points:
+On September 6, 2026, we opened both exact IMDb photo URLs, retrieved the selected photos, sent aspect-preserving previews to **GPT-5.6 Luna through OpenRouter**, and applied its returned coordinates with the Go code below. The displayed outputs are deterministic crops and PNG encodes of those source photos. No image-generation model was used.
 
-- **Person profile:** [Patrick Van Horn — IMDb](https://www.imdb.com/name/nm0887187/). This tests resolving the primary profile photograph from a person page.
-- **Exact photo used in the example:** [IMDb photo viewer — rm303606528](https://www.imdb.com/name/nm0887187/mediaviewer/rm303606528/). This locks the smoke test to the selected event photograph.
-- **Saved original fixture:** [Download the source JPEG](/images/profile-image-crop/imdb-patrick-van-horn-before.jpg). Use these fixed bytes for repeatable image-processing tests when the live page changes.
+### Patrick Van Horn
+
+- **Exact photo tested:** [IMDb photo viewer — rm303606528](https://www.imdb.com/name/nm0887187/mediaviewer/rm303606528/).
+- **Person-profile smoke-test URL:** [Patrick Van Horn — IMDb](https://www.imdb.com/name/nm0887187/). We opened this page and verified that its primary portrait links to the same tested photo, `rm303606528`. The mapping was checked in Chrome; the automatic production resolver still needs testing.
+- **Saved source:** [Download the source JPEG](/images/profile-image-crop/imdb-patrick-van-horn-before.jpg).
 
 <Columns cols={2}>
   <div>
@@ -32,46 +34,105 @@ Use these two entry points:
     <p>Original selected photo, 1331 × 2048.</p>
   </div>
   <div>
-    <h3>After — initial visual example</h3>
-    <img src="/images/profile-image-crop/imdb-patrick-van-horn-after-ai-example.png" alt="Initial AI-edited square headshot example of Patrick Van Horn with a closer head-and-shoulders frame" style={{width: "100%", height: "420px", objectFit: "contain"}} />
-    <p>Earlier example, 1254 × 1254. Square is optional for the service.</p>
+    <h3>After — Luna + Go</h3>
+    <img src="/images/profile-image-crop/imdb-patrick-van-horn-after-luna-go.png" alt="Patrick Van Horn profile portrait cropped from the source photograph by Go using Luna's coordinates" style={{width: "100%", height: "420px", objectFit: "contain"}} />
+    <p>447 × 512 PNG. Crop decision: excess body.</p>
   </div>
 </Columns>
 
-<Note>
-The saved “after” was created with an AI image-editing tool during the initial experiment. It illustrates the intended closer framing and may differ in fine detail from the source. It is **not** an output from the proposed Go service and must not be used as a pixel-exact golden fixture. The Go implementation must crop the original pixels; its acceptance test is natural framing with unchanged facial content.
-</Note>
-
 Source photo credit displayed by IMDb: David Klein, © 2003 Getty Images. [Original photo page](https://www.imdb.com/name/nm0887187/mediaviewer/rm303606528/).
 
-For the exact photo-viewer URL, expect the resolver to select `rm303606528`, followed by an Astra `crop` decision that removes the lower body. For the person-profile URL, use the clearly designated primary profile photo; it can differ from this event photograph and may legitimately receive `keep`. Do not require the same crop for those two URLs. Repeat the exact-photo request to verify the cache path.
+### Neve Campbell
+
+- **Exact photo tested:** [IMDb photo viewer — rm1863841537](https://www.imdb.com/name/nm0000117/mediaviewer/rm1863841537).
+- **Saved source:** [Download the source JPEG](/images/profile-image-crop/imdb-neve-campbell-before.jpg).
+
+<Columns cols={2}>
+  <div>
+    <h3>Before</h3>
+    <img src="/images/profile-image-crop/imdb-neve-campbell-before.jpg" alt="Selected IMDb photograph of Neve Campbell before cropping" style={{width: "100%", height: "420px", objectFit: "contain"}} />
+    <p>566 × 720 source variant advertised by the IMDb page.</p>
+  </div>
+  <div>
+    <h3>After — Luna + Go</h3>
+    <img src="/images/profile-image-crop/imdb-neve-campbell-after-luna-go.png" alt="Neve Campbell profile portrait cropped from the source photograph by Go using Luna's coordinates" style={{width: "100%", height: "420px", objectFit: "contain"}} />
+    <p>363 × 390 PNG. No upscaling. Crop decision: excess body.</p>
+  </div>
+</Columns>
+
+Source photo credit displayed by IMDb: Tiziano Lugli. [Original photo page](https://www.imdb.com/name/nm0000117/mediaviewer/rm1863841537).
+
+### Measured decisions and cost
+
+These are actual OpenRouter `usage.cost` values, in USD, using the `profile-image-v2` prompt below. Completion tokens include reasoning. The second call per image is an experiment to test whether Luna accepts its finished portrait; it is **not required in the production path**.
+
+| Test | Decision | Input tokens | Completion tokens | Actual model cost |
+| --- | --- | ---: | ---: | ---: |
+| Patrick, source photo | `crop / excess_body` | 958 | 188 | $0.0004172 |
+| Patrick, finished PNG recheck | `crop / excess_body` again | 1,013 | 159 | $0.0003934 |
+| Neve, source photo | `crop / excess_body` | 994 | 238 | $0.0004844 |
+| Neve, finished PNG recheck | `keep / already_suitable` | 932 | 26 | $0.0002176 |
+
+The two initial crop calls averaged **$0.0004508 per image**, about **0.045 cents**, or **$0.45 per 1,000 images** if that token usage repeated. This excludes source retrieval, browser operation, compute, storage, and delivery. The four calls above cost $0.0015126 in total. All nine development and smoke-test calls, including earlier prompt checks, cost $0.00366035 in total.
+
+The normalized rectangles applied to the source pixels were:
+
+```json Actual Luna crop decisions
+{
+  "patrick": {"x0":0.08,"y0":0.01,"x1":0.82,"y1":0.56},
+  "neve": {"x0":0.19,"y0":0.08,"x1":0.83,"y1":0.62}
+}
+```
+
+<Warning>
+**Crop rendering passed; repeat-assessment consistency is mixed.** Luna accepted Neve's finished portrait but asked to tighten Patrick's again. An earlier Patrick output passed a keep recheck after we strengthened the prompt, so one passing example is not evidence of reliable idempotence. Keep a trusted output ID and policy-version manifest so a completed portrait is returned without another model call. Do not repeatedly crop until a model eventually says keep. Evaluate the keep/crop policy on a broader fixture set before rollout.
+</Warning>
+
+**Scope:** This was an operator-assisted smoke test using the selected photos from the live URLs, real Luna calls, and the local Go reference. Chrome could display both photos and verify Patrick's person-page-to-photo mapping, while a fresh automated browser received HTTP 403 on the Neve URL. We did not test a Luna-controlled browser loop, the automatic person-page resolver, the deployed GCP API, or the cache. Browser access from Cloud Run remains an integration test, and a blocked page must produce a source error rather than an invented photo.
+
+Neve's largest asset was 4103 × 5223 (21.43 MP), so the Go decoder correctly rejected it under the proposed 20 MP limit. We selected the page's advertised 720-pixel image variant and decoded its actual dimensions before assessment. A production resolver should prefer a sufficiently large advertised variant within limits, validate its downloaded dimensions, and never upscale a small crop. Do not infer pixel dimensions from a browser's `srcset` descriptor.
+
+The earlier [AI-edited square concept](/images/profile-image-crop/imdb-patrick-van-horn-after-ai-example.png) is retained for history only; it is not a Go output or an acceptance fixture. For repeatable tests, use the saved source bytes above. The person-profile URL can designate a different primary photograph from the exact event-photo URL and may legitimately receive `keep`.
 
 ## Recommended architecture
 
-Start with an Astra-first implementation. Make one assessment call for each new source image. Use a browser only to resolve webpage links that cannot be extracted confidently. Cache completed work. A local face detector is not required for v1.
+Start with a Luna-first implementation. Make one assessment call for each new source image. Use ordinary source extraction first and a browser only when extraction cannot establish the selected photo. Cache completed work. A local face detector is not required for v1. Reserve GPT-6 Astra for a bounded fallback on difficult browser navigation or uncertain image framing.
+
+| Stage | Default | Escalation |
+| --- | --- | --- |
+| Source extraction | Go, no model call | Browser resolver only when extraction is inconclusive |
+| Browser resolver | `openai/gpt-5.6-luna` | Up to two Astra turns within the shared resolver budget |
+| Keep/crop assessment | `openai/gpt-5.6-luna` | At most one `openai/gpt-6-astra` assessment for insufficient detail or invalid crop geometry |
+| Pixel rendering | Go | No generative image model |
+
+Use Luna as the selected default; do not claim superiority over another model without a representative evaluation. Both model routes use the same prompts, schema, and pixel-validation rules. A valid `keep` or `crop` result does not need a second model to approve it.
 
 ```mermaid
 flowchart TD
     A[Source URL] --> B[Go source resolver]
     B --> C{Direct photo available?}
     C -->|Yes| D[Fetch and normalize original]
-    C -->|No: webpage| E[Astra with browser tools]
+    C -->|No: webpage| E[Luna browser, bounded Astra fallback]
     E -->|Verified selected image| D
     E -->|Ambiguous or inaccessible| R[Return review or source error]
     D --> F{Cached decision and output?}
     F -->|Yes| G[Return PNG reference]
-    F -->|No| H[Astra: keep, crop, review, unusable]
+    F -->|No| H[Luna: keep, crop, review, unusable]
     H -->|Keep or crop| I[Validate coordinates and render in Go]
     I --> J[Store PNG and decision]
     J --> G
-    H -->|Review or unusable| R
+    H -->|Insufficient detail or invalid geometry| K[One Astra fallback]
+    K -->|Valid keep or crop| I
+    K -->|Unresolved| R
+    H -->|Ambiguous or unusable| R
 ```
 
 | Component | Responsibility |
 | --- | --- |
 | Go service on Cloud Run | HTTP API, source fetch, orientation, preview, OpenRouter client, crop validation, PNG encoding, caching |
-| GPT-6 Astra through OpenRouter | Assess composition and return one structured decision |
-| Private browser resolver on Cloud Run | Go + Chromium automation; expose a small browser tool set to Astra for webpage sources |
+| GPT-5.6 Luna through OpenRouter | Assess composition and return one structured decision |
+| GPT-6 Astra through OpenRouter | Exceptional fallback; not called for every image |
+| Private browser resolver on Cloud Run | Go + Chromium automation; expose a small browser tool set to Luna for webpage sources |
 | Cloud Storage | Immutable PNG objects and cached decision manifests |
 | Secret Manager | OpenRouter API key |
 | Cloud Logging | Stage timings, outcomes, model usage, errors |
@@ -92,7 +153,7 @@ Cloud Run supports Go services and Secret Manager integration. Keep the image se
 | UI display | Respect the returned aspect ratio. A downstream `object-fit: cover` or circular mask must not silently undo the approved framing |
 | Existing avatar | Caller replaces its current image only after a `kept` or `cropped` result |
 
-The earlier [YuNet avatar plan](/guides/open-work/yunet-avatar-pipeline) is related background. This page defines a separate, simpler v1: Astra-first assessment and rectangular portraits accepted. Do not inherit its square-only output or identity-verification requirements.
+The earlier [YuNet avatar plan](/guides/open-work/yunet-avatar-pipeline) is related background. This page defines a separate, simpler v1: Luna-first assessment and rectangular portraits accepted. Do not inherit its square-only output or identity-verification requirements.
 
 ## 1. Define the service contract
 
@@ -112,7 +173,7 @@ Expose an authenticated `POST /v1/profile-images/prepare` on the Go service. The
 | `source_kind` | `auto`, `image`, or `page`; default `auto`. Verify response content rather than trusting the URL extension |
 | `max_edge` | Optional integer, default 512; allow 128–2048. This is a size limit, not a promised square dimension |
 
-Derive the tenant or owning scope from authenticated server context. Do not trust a client-supplied scope for cache access. Make the Astra model and policy server configuration, not arbitrary request parameters.
+Derive the tenant or owning scope from authenticated server context. Do not trust a client-supplied scope for cache access. Make the Luna model and policy server configuration, not arbitrary request parameters.
 
 ```json Kept portrait
 {
@@ -123,9 +184,9 @@ Derive the tenant or owning scope from authenticated server context. Do not trus
   "height": 512,
   "crop": null,
   "reason_code": "already_suitable",
-  "decision_source": "astra",
+  "decision_source": "luna",
   "cache_hit": false,
-  "policy_version": "profile-image-v1",
+  "policy_version": "profile-image-v2",
   "llm_cost_usd": null
 }
 ```
@@ -151,8 +212,8 @@ Use `cropped`, `needs_review`, or `unusable` for the other decisions. Review/unu
 2. Initially support JPEG, PNG, and static WebP. Reject SVG, animated images, and unsupported formats explicitly; add formats only with fixtures.
 3. Apply EXIF orientation before producing any dimensions, previews, hashes of normalized pixels, or crop coordinates.
 4. Keep the full-resolution oriented image in memory for rendering.
-5. Create an aspect-preserving PNG preview with maximum edge 512. Send that preview and the original dimensions to Astra. A 512-pixel preview is a starting setting to evaluate; it does not imply a fixed image-token bill.
-6. If the preview hides a small face or makes the decision uncertain, allow one assessment at 1024 pixels. Never stretch the image or add letterboxing to the assessment preview.
+5. Create an aspect-preserving PNG preview with maximum edge 512. Send that preview and the original dimensions to Luna. A 512-pixel preview is a starting setting to evaluate; it does not imply a fixed image-token bill.
+6. If Luna reports insufficient detail or returns invalid crop geometry, allow one Astra fallback using a 1024-pixel preview, within the parent deadline. Do not add another Luna retry for the same visual decision. Never stretch the image or add letterboxing to the assessment preview.
 
 Recommended initial resource limits: 10 MiB download, 20 megapixels decoded, 10-second fetch deadline, three redirects. Check `image.DecodeConfig` before full decode and enforce both byte and pixel limits. Re-encoding the resulting image to PNG naturally avoids carrying the source EXIF metadata into the output.
 
@@ -164,7 +225,7 @@ An IMDb media-viewer URL is HTML. Passing that URL as OpenRouter `image_url` wil
 
 Try a source-specific extractor when it can establish the exact selected asset. For IMDb, preserve the `rm...` media ID from the supplied route; do not substitute the person's default image or a generic `og:image` thumbnail. If the selection cannot be established, use the browser resolver.
 
-**Astra's API response does not come with a running browser.** The Go resolver supplies browser tools, executes the model's tool calls, and sends tool results back through OpenRouter. Use Chromium through a Go browser library such as `chromedp`; its job is to expose rendered page state and retrieve the selected asset. [chromedp source and examples](https://github.com/chromedp/chromedp)
+**Luna's API response does not come with a running browser.** The Go resolver supplies browser tools, executes the model's tool calls, and sends tool results back through OpenRouter. Use Chromium through a Go browser library such as `chromedp`; its job is to expose rendered page state and retrieve the selected asset. [chromedp source and examples](https://github.com/chromedp/chromedp)
 
 Keep the browser tool surface small:
 
@@ -202,11 +263,15 @@ Your task ends when the exact source image is selected or the source is unresolv
 
 Define each browser tool with JSON Schema and `additionalProperties: false`. For each response containing `tool_calls`, execute permitted tools, append the assistant message and matching `role: "tool"` results using `tool_call_id`, then request the next turn. Preserve returned reasoning details across this tool loop as required by OpenRouter. Set hard server limits: six turns, one browser session, a 90-second total resolver deadline, and an allowed set of the source site and its image/CDN hosts. [Tool calling](https://openrouter.ai/docs/guides/features/tool-calling), [reasoning continuity](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
 
+Allocate at most four browser turns to Luna and reserve at most two for Astra if visual navigation remains unresolved. On a model switch, start a compact context with the task, current server observation, screenshot, and available asset IDs; do not assume encrypted reasoning from another model can be reused. Keep the same isolated browser session and original total deadline. Login, CAPTCHA, missing access, and genuinely ambiguous source selection are terminal source outcomes, not reasons to spend more on Astra.
+
 Keep the resolver private, use isolated browser contexts, close each context on completion, and keep the remote-debugging port off the public service interface. Pass its resolved image to the same assessment function used by the direct-image path. Browser resolution may require several model calls; the single-call expectation applies to the image assessment.
 
-## 3. Ask Astra to keep or crop
+## 3. Ask Luna to keep or crop
 
-Use `openai/gpt-6-astra`, image input, and a strict structured response. This model accepts images and returns text, including JSON-schema responses. [Model capabilities](https://openrouter.ai/openai/gpt-6-astra)
+Use `openai/gpt-5.6-luna`, image input, and a strict structured response. This model accepts images and returns text, including JSON-schema responses. [Model capabilities](https://openrouter.ai/openai/gpt-5.6-luna-20260709)
+
+The system prompt is model-independent. If the bounded fallback is needed, change the request's model to `openai/gpt-6-astra` and provide the higher-resolution preview; use the same response contract. Do not escalate identity ambiguity, valid `unusable` outcomes, authentication failures, or rate limits into a more expensive model call. If a valid `unusable` result specifically reports insufficient detail and the original has usable additional resolution, it may take the single detail fallback.
 
 ### Exact assessment system prompt
 
@@ -224,6 +289,13 @@ The goal is a natural, recognizable headshot. Exact square output is NOT require
 Accept well-framed rectangular portraits. Do not crop merely to change aspect ratio,
 make a square, remove a harmless background, or pursue a tiny aesthetic improvement.
 
+KEEP has priority for an already usable head-and-shoulders photograph. If the full
+head from hair to chin occupies roughly 45-80 percent of image height, the face is
+easy to read, and the frame shows shoulders or upper chest without waist or hands,
+KEEP the existing composition. Some shirt and background are normal. Do not keep
+tightening an acceptable portrait on repeated assessment. These are approximate
+composition guides, not a requirement to measure hair or reject unusual hairstyles.
+
 Choose exactly one action:
 KEEP: The existing frame is already a useful profile portrait. The face is large
 enough to read at profile size, with appropriate headroom and natural framing.
@@ -234,7 +306,9 @@ or the image does not provide enough visual evidence for a reliable decision.
 UNUSABLE: No usable human headshot can be obtained from this image by cropping.
 
 For CROP, include the whole head, hair, and chin where available, modest headroom,
-and some shoulders. A square or portrait rectangle is often appropriate, but
+and some shoulders. Aim for the complete head to occupy about 55-70 percent of
+the crop height, with a little upper chest rather than a large expanse of shirt.
+A square or portrait rectangle is often appropriate, but
 composition matters more than a fixed ratio. Do not invent missing pixels.
 If the source has a mildly tight existing crop that remains useful, KEEP it.
 If missing facial detail or severe blur makes a usable portrait impossible, UNUSABLE.
@@ -320,7 +394,7 @@ jq -n \
   --argjson source_width "$SOURCE_WIDTH" \
   --argjson source_height "$SOURCE_HEIGHT" \
   '{
-    model: "openai/gpt-6-astra",
+    model: "openai/gpt-5.6-luna",
     stream: false,
     max_tokens: 1200,
     reasoning: {effort: "low"},
@@ -390,7 +464,7 @@ internal/profile/response-schema.json
 
 Use Go's `net/http`, `image`, `image/png`, `encoding/json`, and `crypto/sha256`; use `github.com/disintegration/imaging` for EXIF orientation and aspect-preserving downsampling, and `golang.org/x/image/webp` to register the WebP decoder. Pin dependency versions and commit `go.sum`. [Go image package](https://pkg.go.dev/image), [imaging API](https://pkg.go.dev/github.com/disintegration/imaging), [WebP decoder](https://pkg.go.dev/golang.org/x/image/webp).
 
-The reference below was compiled and tested locally with Go 1.27.0, `imaging` v1.6.2, and `golang.org/x/image` v0.45.0. The checks covered rectangular keep behavior, original-pixel preservation for a crop, nonzero image origins, invalid geometry, no upscaling, and PNG decoding. They did not make a paid OpenRouter call or deploy a GCP service.
+The reference below was compiled and tested locally with Go 1.27.0, `imaging` v1.6.2, and `golang.org/x/image` v0.45.0. The checks covered rectangular keep behavior, original-pixel preservation for a crop, nonzero image origins, invalid geometry, no upscaling, and PNG decoding. The separate live-photo smoke tests above made real OpenRouter calls and rendered their decisions with this code. No GCP service was deployed.
 
 ```bash Dependencies for the reference package
 go get github.com/disintegration/imaging@v1.6.2 golang.org/x/image@v0.45.0
@@ -551,8 +625,8 @@ Cache both the decision and the final artifact. This is the first cost optimizat
 
 ```text Decision key
 SHA256(scope + source_content_hash + orientation_version +
-       policy_version + system_prompt_hash + schema_hash + model +
-       preview_policy_version)
+       policy_version + system_prompt_hash + schema_hash + primary_model +
+       fallback_model + routing_policy_version + preview_policy_version)
 
 Artifact key
 SHA256(decision_key + validated_original_pixel_rectangle +
@@ -563,9 +637,13 @@ Hash the fetched source bytes for the source-content key. For even broader dedup
 
 Store the PNG at an immutable GCS object name and a small JSON decision manifest. The manifest records source URL and resolved image URL, content hash, policy/model versions, action, crop in normalized and original pixel coordinates, output dimensions, model request IDs and usage, original cost, and timestamp. Treat source URLs with query credentials as sensitive and redact them from logs.
 
+Record `model_used` and `fallback_reason` for each stage. A final decision reached through Astra is cached under the same configured routing-policy key, so the next request does not repeat Luna and Astra. Aggregate both models' costs on that first request; cached metadata retains that historical cost.
+
+Recognize the service's own immutable output IDs and output-content hashes within the authenticated owning scope. When an existing output has a valid stored manifest for the current policy, return it directly. Treat arbitrary caller claims such as `already_cropped: true` as untrusted. This provenance check prevents gradual tightening when an enrichment job receives a previously prepared image.
+
 Upload the PNG successfully before publishing the manifest. Use GCS generation preconditions for immutable writes so parallel requests cannot overwrite an existing result. A cache hit is valid only if its output object exists. Cache review/unusable decisions too with an appropriate TTL; do not cache transient upstream failures as permanent visual rejection. [GCS uploads](https://docs.cloud.google.com/storage/docs/uploading-objects), [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions).
 
-For concurrent duplicate requests, `singleflight` reduces duplicate calls within one Go instance. If duplicate volume warrants it, add a distributed lease using your existing database; leases need expiration and owner checks. An object-existence check alone cannot prevent two instances from paying for Astra simultaneously.
+For concurrent duplicate requests, `singleflight` reduces duplicate calls within one Go instance. If duplicate volume warrants it, add a distributed lease using your existing database; leases need expiration and owner checks. An object-existence check alone cannot prevent two instances from paying for Luna simultaneously.
 
 Keep a short-lived webpage-to-asset resolver cache as well. An immutable media ID is a better key than a generic profile page. Revalidate changeable pages; a URL alone is not a permanent image identity.
 
@@ -575,36 +653,39 @@ Keep a short-lived webpage-to-asset resolver cache as well. An immutable media I
 - No assessment call on a valid decision cache hit; changing only `max_edge` can reuse the decision and render a new size.
 - Send the 512-pixel preview first; increase once only when insufficient detail warrants it.
 - Use a short response schema and low supported reasoning effort. Hiding reasoning text does not eliminate its billed tokens.
+- Use Luna for routine assessments and browser work; invoke Astra only through the bounded fallback rules. Log the fallback rate because it directly changes average cost.
 - Keep browser work off the direct-image path and cap browser turns and elapsed time.
 - Log measured cost for the browser and assessment stages separately. If volume later makes model cost material, evaluate a local pass-through gate against a labeled dataset before adding it.
 
-OpenRouter's model page currently lists standard Astra rates of $10/M input and $50/M output tokens, with a lower-cost Flex option. Rates vary by endpoint and can change; record actual usage and pricing rather than hard-coding a per-image promise. An illustrative 1,000 billed input tokens plus 150 total billed output tokens costs $0.0175 at the standard rates; image and reasoning tokens must be included. Browser turns add their own usage. [Astra pricing](https://openrouter.ai/openai/gpt-6-astra), [reasoning billing](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+OpenRouter currently lists standard Luna rates of **$0.20/M input and $1.20/M output tokens**, with Flex at $0.10/M and $0.60/M. Astra fallback uses its own higher rate, currently $10/M input and $50/M output at standard pricing. Record the actual model, endpoint, and returned cost for every call; do not assume Flex pricing from the model name. [Luna pricing](https://openrouter.ai/openai/gpt-5.6-luna-20260709), [Astra pricing](https://openrouter.ai/openai/gpt-6-astra).
 
 ### Estimated cost per image
 
-**Initial planning budget: about $0.04 for a new direct image, and about $0.27 for a webpage image that needs a short browser session.** Keep and crop have essentially the same assessment cost; cropping in Go adds no image-generation fee. These are calculated scenarios, not measured bills from the example above.
+**Initial planning budget without Astra escalation: approximately $0.002 for a new direct image and $0.012 for a webpage requiring a short Luna browser session, including the compute scenarios below.** That is about 0.2 cents and 1.2 cents respectively. Keep and crop have essentially the same assessment cost; Go cropping adds no image-generation fee.
 
-Use this formula, summing billed tokens across **all** requests, including repeated browser history, screenshot inputs, and reasoning output:
+These are calculated scenarios, not an all-in price guarantee. Sum billed tokens across all calls, including image inputs, repeated browser history, and reasoning output:
 
 ```text
-Standard Astra USD = (input_tokens × 10 + output_tokens × 50) / 1,000,000
-Total USD = Astra assessment + Astra browser calls + Cloud Run
+Luna USD = (input_tokens × 0.20 + output_tokens × 1.20) / 1,000,000
+Astra fallback USD = (input_tokens × 10 + output_tokens × 50) / 1,000,000
+Total USD = Luna calls + any Astra fallback calls + Cloud Run
             + storage operations + retained storage + network/delivery
 ```
 
-| Scenario | Assumed billed tokens | Standard Astra cost | Per 1,000 images |
+| Scenario | Assumed billed tokens | Model cost | Per 1,000 images |
 | --- | --- | --- | --- |
-| Small direct-image assessment | 1,000 input + 200 output | $0.020 | $20 |
-| Working direct-image estimate | 1,500 input + 400 output | $0.035 | $35 |
-| Larger assessment | 3,000 input + 1,000 output | $0.080 | $80 |
-| Browser-assisted working estimate | Browser totals: 15,000 input + 1,500 output, plus working assessment above | $0.260 | $260 |
+| Small Luna assessment | 1,000 input + 200 output | $0.00044 | $0.44 |
+| Working Luna assessment | 1,500 input + 400 output | $0.00078 | $0.78 |
+| Larger Luna assessment | 3,000 input + 1,000 output | $0.00180 | $1.80 |
+| Luna browser plus working assessment | Browser totals: 15,000 input + 1,500 output; assessment as above | $0.00558 | $5.58 |
+| Exceptional Astra assessment after Luna | Working Luna call + 1,500 input / 400 output on Astra | $0.03578 | $35.78 if every image escalated |
 | Valid cache hit | No new model tokens | $0 new LLM cost | $0 new LLM cost |
 
-Use **2–8 cents per new direct image** as the initial model-cost envelope for those token assumptions. Browser pages can cost substantially more depending on tool turns; the 26-cent example is not a cap. The lower-cost Flex rates shown on the model page would halve these token calculations if that endpoint serves the request at those rates. The curl example does not pin Flex, so do not assume Flex pricing.
+The browser row assumes Luna resolves the page without Astra; fallback browser turns add their actual cost. Do not present the exceptional Astra route as the normal per-image fee. For example, if 5% of direct images need the illustrated Astra assessment, mean model cost becomes `$0.00078 + 0.05 × $0.035 = $0.00253` per image, or $2.53 per 1,000, before compute. That 5% is a scenario to measure, not a predicted fallback rate.
 
-For infrastructure scale, request-based Cloud Run in `us-central1` currently lists $0.000024 per active vCPU-second and $0.0000025 per active GiB-second, before free tier or discounts. A 30-second direct request at 1 vCPU / 1 GiB is about **$0.000795** in compute. A browser scenario with 90 seconds on the image service plus 60 seconds on a 2 vCPU / 2 GiB resolver is about **$0.005565** in compute. These scenarios assume one request occupying each instance and include model wait time; actual shared concurrency, cold starts, and duration change the result. [Cloud Run pricing](https://cloud.google.com/run/pricing).
+For infrastructure scale, request-based Cloud Run in `us-central1` currently lists $0.000024 per active vCPU-second and $0.0000025 per active GiB-second, before free tier or discounts. A 30-second direct request at 1 vCPU / 1 GiB is about **$0.000795** in compute. A browser scenario with 90 seconds on the image service plus 60 seconds on a 2 vCPU / 2 GiB resolver is about **$0.005565** in compute. These examples assume one request occupying each instance and include model wait time; actual concurrency, cold starts, and duration change the result. [Cloud Run pricing](https://cloud.google.com/run/pricing).
 
-The rounded 4-cent / 27-cent planning figures include those compute scenarios. GCS operations, retention, image delivery, networking, and any OpenRouter account funding fees are additional and workload-dependent; the figures are not an all-in contractual ceiling. A cache hit still has fetch/cache/storage/delivery costs. Measure the first 50–100 smoke-test runs and replace these estimates with observed mean and p95 cost, broken out by direct image, webpage, and cache hit.
+The rounded $0.002 / $0.012 budgets combine the working Luna token scenarios with those compute scenarios. GCS operations, retention, image delivery, networking, and any OpenRouter account funding fees are additional and workload-dependent. A cache hit still has fetch/cache/storage/delivery costs. Measure the first 50–100 representative runs and replace planning values with observed mean and p95 cost, split by direct image, webpage, cache hit, and Astra fallback.
 
 ## 6. Deploy on GCP
 
@@ -641,7 +722,7 @@ gcloud run deploy profile-images \
   --no-allow-unauthenticated \
   --cpu 1 --memory 1Gi --concurrency 2 \
   --min-instances 0 --max-instances 5 --timeout 180 \
-  --set-env-vars "PROFILE_IMAGE_BUCKET=$PROFILE_BUCKET,PROFILE_POLICY_VERSION=profile-image-v1,OPENROUTER_MODEL=openai/gpt-6-astra" \
+  --set-env-vars "PROFILE_IMAGE_BUCKET=$PROFILE_BUCKET,PROFILE_POLICY_VERSION=profile-image-v2,OPENROUTER_MODEL=openai/gpt-5.6-luna,OPENROUTER_FALLBACK_MODEL=openai/gpt-6-astra,PROFILE_ROUTING_POLICY=luna-first-v1" \
   --set-secrets "OPENROUTER_API_KEY=profile-image-openrouter:$PROFILE_SECRET_VERSION"
 ```
 
@@ -665,19 +746,19 @@ curl --fail-with-body --silent --show-error --max-time 180 \
   }'
 ```
 
-The invoking identity needs access to the private service. In production, the calling backend obtains its ID token through its attached service identity rather than invoking `gcloud`.
+The invoking identity needs access to the private service. In production, the calling backend obtains its ID token through its attached service identity rather than invoking `gcloud`. Implement the model-routing environment variables in the Go orchestrator; setting them does not itself enable automatic OpenRouter fallback. The 180-second parent deadline covers source resolution, all model calls, and rendering; clip individual timeouts to the time remaining and stop when it expires.
 
 ## 7. Build and acceptance order
 
 <Steps>
   <Step title="Prove the image result">
-    Implement normalization, preview creation, the exact Astra request, crop validation, and PNG rendering. Run a small set of direct image fixtures. Verify that a good rectangular headshot is kept and a full-body photo receives a natural crop. This is the core product test.
+    Implement normalization, preview creation, the exact Luna request, crop validation, and PNG rendering. Run a small set of direct image fixtures. Verify that a good rectangular headshot is kept and a full-body photo receives a natural crop. This is the core product test.
   </Step>
   <Step title="Make repeated work cheap">
     Add GCS output, decision manifests, content-based cache keys, request bounds, and cost/timing logs. Repeat the same request and verify no additional model call. Request a second size and verify the decision is reused.
   </Step>
   <Step title="Handle webpage links">
-    Add the narrow Astra browser resolver and its cache. Use the IMDb example as an acceptance fixture: the retrieved asset must be the exact selected photo. Test ambiguous galleries, blocked pages, and browser deadlines. They must return a clear source/review outcome.
+    Add the narrow Luna browser resolver and its cache. Use the IMDb example as an acceptance fixture: the retrieved asset must be the exact selected photo. Test ambiguous galleries, blocked pages, and browser deadlines. They must return a clear source/review outcome.
   </Step>
   <Step title="Deploy and measure">
     Deploy private Cloud Run services, exercise authenticated calls, check GCS delivery, and run the representative image set. Tune the prompt or preview size only from observed failures. Add asynchronous queueing or a local detector only when measured workload needs it.
@@ -699,6 +780,9 @@ The invoking identity needs access to the private service. In production, the ca
 | Source region smaller than quality minimum | No upscaling; request another source or review |
 | Animated or oversized input | Explicit format/limit result before expensive processing |
 | Repeated source bytes | Decision reused; zero new assessment cost |
+| Routine valid Luna result | No Astra call |
+| Detail/geometry fallback | At most one Astra assessment; both calls included in cost |
+| Repeat after a successful Astra fallback | Cached final decision; no repeated model escalation |
 | Same URL with changed bytes | New assessment; no stale image reuse |
 | New maximum output edge | Reuse decision; render the new size without another call |
 | OpenRouter truncated JSON / refusal / 429 / timeout | Bounded failure handling; no partial image replacement |
