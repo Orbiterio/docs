@@ -1,6 +1,6 @@
 ---
 title: "Node Types"
-description: "All FalkorDB node types in the Orbiter knowledge graph with properties and real examples"
+description: "FalkorDB node inventory, properties and examples, including proposed Go theatre nodes"
 ---
 
 Core graph node types plus enrichment-specific graph nodes, organized by logical group.
@@ -8,18 +8,18 @@ Core graph node types plus enrichment-specific graph nodes, organized by logical
 Most product graph nodes carry the base label **`Entity`** plus one or more type-specific labels. Legacy non-`Entity` labels are called out in the [Master Label List](#master-label-list). Nodes are created during the person and company get-add pipelines, funding ingestion, IMDB credit processing, expertise identification, and MusicBrainz waterfall enrichment.
 
 <Note>
-  **Last reviewed & updated: 2026-07-09** — labels, properties, and writers audited against the live XanoScript graph writers (workspace 3, branch `v1`).
+  **Existing-writer audit: 2026-07-09** — the original inventory describes the legacy graph writers. **Theatre proposals added: 2026-09-06** — [the four theatre node shapes](#theatre-nodes) and their properties are a Go development specification, checked against primary source pages and current `orbiter-universe` ownership patterns. They are not implemented or migrated. This addition does not re-audit the rest of the legacy inventory.
 </Note>
 
 <Info>
-  Each node type below lists the Xano functions that **create** (<Icon icon="circle-plus" />) and **update** (<Icon icon="pen-to-square" />) it, in copy-paste call-out blocks (`function path — ID`). Every documented node type stamps `created_at` on create and `updated_at` on update as Cypher `timestamp()` (epoch-millis) — see [Timestamp coverage](#timestamp-coverage-audit).
+  Existing legacy node sections list the functions that **create** (<Icon icon="circle-plus" />) and **update** (<Icon icon="pen-to-square" />) them, in copy-paste call-out blocks (`function path — ID`). The proposed theatre section instead identifies future Go ownership; it has no live writers. See [Timestamp coverage](#timestamp-coverage-audit) for the historical audit and the proposed timestamp contract below.
 </Info>
 
 ---
 
 ## Master Label List
 
-This is the canonical label inventory for node label combinations used by the documented Cypher writers. It includes both full create-label shapes and subset / match-only label combinations such as `Person`, `Company`, `Film_TV`, or `Work`. Dynamic families are shown with the controlling source field.
+This is the canonical label inventory for node label combinations used by the documented writers, plus explicitly marked proposals. It includes both full create-label shapes and subset / match-only label combinations such as `Person`, `Company`, `Film_TV`, or `Work`. Dynamic families are shown with the controlling source field. **A proposed row reserves vocabulary; it does not assert that a writer or node exists.**
 
 <Note>
   `Entity` is the intended base label for graph entities. A few older writers still create legacy non-`Entity` nodes (`Funding_Round`, `Project`, `Honor`, `Film_TV_Award:*`); they are listed here because they still appear in live or documented Cypher.
@@ -62,6 +62,16 @@ This is the canonical label inventory for node label combinations used by the do
 | `Film_TV_Award:Winner` | IMDB award `nominee_or_winner` | Legacy non-`Entity` award node. |
 | `Film_TV_Award:Nominee` | IMDB award `nominee_or_winner` | Legacy non-`Entity` award node. |
 | `Film_TV_Award` | IMDB award Cypher | Subset / match label for any film/TV award node. |
+| `Entity:Stage_Production` | **Proposed Go** `stage_production`; source-defined credited production | Canonical theatre production/engagement; [property contract](#stage-production). No `Film_TV` label. |
+| `Entity:Stage_Production:Play` | **Proposed Go** elected `form = play` | Closed production subtype; optional when form is unknown. |
+| `Entity:Stage_Production:Musical` | **Proposed Go** elected `form = musical` | Closed production subtype; distinct from the underlying musical work. |
+| `Entity:Work:Theatrical_Work` | **Proposed Go** `theatrical_work`; independently resolved dramatic work | Canonical underlying work; [property contract](#theatrical-work). Not a music-work alias. |
+| `Entity:Work:Theatrical_Work:Play` | **Proposed Go** elected work `form = play` | Closed work subtype; never matched by `Play` alone. |
+| `Entity:Work:Theatrical_Work:Musical` | **Proposed Go** elected work `form = musical` | Closed work subtype; never matched by `Musical` alone. |
+| `Place:Venue:Theatre` | **Proposed Go** shared support-place ownership | Physical venue; durable support UUID, no canonical entity admission; [property contract](#theatre-venue). |
+| `Stage_Award` | **Proposed Go** stage award support record | One scoped award result; [property contract](#stage-award). |
+| `Stage_Award:Nominee` | **Proposed Go** elected `outcome = nominee` | Current result modifier; not an extra nomination node. |
+| `Stage_Award:Winner` | **Proposed Go** elected `outcome = winner` | Replaces `Nominee` on the same result when a win is established. |
 | `Entity:DomainExpertise` | Expertise sync | Top-level expertise domain. |
 | `DomainExpertise` | Expertise Cypher | Subset / match label for domain expertise nodes. |
 | `Entity:SubDomainExpertise` | Expertise sync / LLM-created expertise | Sub-domain expertise node. |
@@ -610,6 +620,222 @@ Represents a specific award nomination or win for a film/TV title. Carries an ad
 
   _Node labels: `Film_TV_Award`, `Nominee`_
 </Accordion>
+
+---
+
+
+<a id="theatre-nodes" />
+
+## Theatre nodes — proposed Go contract
+
+<Info>
+  **Planning only — 2026-09-06.** These additions specify the [Broadway / West End waterfall](/guides/open-work/roadmap/broadway-co-producers). There are no theatre migrations, Go implementations, graph writes or Xano tasks in this documentation change. Only `stage_production` and `theatrical_work` are proposed new canonical Go entity types; venues and award results are support records.
+</Info>
+
+A **production** is the scope of a credited engagement; a **work** is the dramatic work it stages; a **venue** is the physical place; an **award result** records a particular nomination or win. Existing `Person` and `Company` identities carry creators and producing parties across theatre, movies and music.
+
+Current Go uses `Music_Work` for music-owned works and support `Place` nodes without an `entities` row or `Entity` label. Those differ from the legacy MusicBrainz sections of this page. The theatre proposal follows current ownership: production/work use canonical entity IDs; venues/results use owner-held row IDs. See the current [music entity writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music.go) and [support writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music_support.go).
+
+### Primary source basis
+
+The source keys in the property tables below refer to these inspected pages. These are **proposed mappings from observed source content**, not claims that adapters already emit these fields. Confirm extraction, access and coverage in the plan's Phase 0.
+
+| Key | Source and observed basis | Intended authority |
+| --- | --- | --- |
+| **B** | [IBDB production record](https://www.ibdb.com/broadway-production/the-outsiders-537824): production reference, form, run context, producing sections and editorial completeness notice | Broadway production identity and explicit credits; preserve the notice and section scope |
+| **L** | [Official London Theatre show page](https://officiallondontheatre.com/show/the-producers-111447981/): venue, run information, duration, genre and audience guidance | SOLT discovery and production context; page presence does not prove producer-roster completeness |
+| **O** | Official production [visitor information](https://outsidersmusical.com/) and [creative credits](https://outsidersmusical.com/cast-creative/) | Production-specific runtime and named creative roles; map each role to work or production scope |
+| **V** | [IBDB theatre record](https://www.ibdb.com/theatre/bernard-b-jacobs-theatre-1346) | Venue ID, names/history, address, approximate capacity and building year |
+| **H** | [Venue operator's specification](https://shubert.nyc/theatres/bernard-b-jacobs) | Physical address, seating configuration and venue specification |
+| **T** | Official Tony [show results](https://www.tonyawards.com/shows/the-outsiders/) and [2024 category archive](https://www.tonyawards.com/winners/year/2024/category/musical/show/any/) | Award year/category/outcome and explicitly named recipient scope |
+| **A** | [Official Olivier 2025 archive](https://officiallondontheatre.com/olivier-awards/year/olivier-awards-2025/) | Award entry, category, outcome, named recipient and venue-qualified production context |
+
+[Playbill's production record](https://playbill.com/production/the-outsiders-broadway-bernard-b-jacobs-theatre-2024) remains the planned independent Broadway cross-check; full-page retrieval was unavailable in this review. Theatricalia remains a candidate UK discovery/corroboration source; no current payload or stable work/production ID contract was verified here. Neither is treated as verified primary authority for an additional property. Official programmes can supplement **O** when their production, edition and publication provenance are retained.
+
+Companies House and SEC filings belong to company identity and separately sourced company relationships. They do not establish a production credit, the identity of the underlying work, an award recipient, or a producer's investment amount.
+
+### Shared property and provenance rules
+
+**Notation:** `R` means required for a visible projected node; `O` means optional when supported. Optional source data may be absent in both SQL and graph. Graph absence represents unknown, not `0`, `false`, an empty string, or an invented date. Tables describe graph properties unless marked **SQL/DTO only**; nested evidence/history stays in SQL and typed DTOs.
+
+| Property | Type / requirement | Proposed meaning and origin |
+| --- | --- | --- |
+| `uuid` | UUID string · R | Orbiter identity: canonical entity UUID for production/work; durable owner row UUID for venue/result. Never a source ID or random ID per fetch. |
+| `entity_id` / `row_id` | UUID string · R, mutually exclusive | Production/work use `entity_id`; support nodes use `row_id`. These are the respective identity keys. |
+| `name` | string · R | Elected human-readable name; source title/venue name, or a deterministic award display name. |
+| `display_label` | string · R | Proposed UI label: `Stage_Production`, `Theatrical_Work`, `Place`, or `Stage_Award`. |
+| `visibility` | boolean · R | Orbiter publish/readiness policy, independent of whether a run has closed. Unresolved parties do not become visible speculative identities. |
+| `source_names` | string[] · R | Sources supporting the current projection. Summary only; not a substitute for field provenance. |
+| `source_url` | URL string · R | Selected public evidence record, possibly a production page supporting a work. A source URL is an alias/evidence location, not the node identity key. |
+| `projection_revision` | integer · R | Monotonically increasing owner revision; stale jobs cannot overwrite a newer projection or restore retracted claims. |
+| `provenance_ref` | UUID string · R | Reference to the durable SQL projection checkpoint/evidence manifest for this revision, including each field's selected claim. |
+| `created_at` / `updated_at` | epoch-millisecond integer · R | System creation / successful projection time. They are never show dates or source publication dates. |
+| `source_observed_at` | epoch-millisecond integer · R | Latest observation contributing to this projection. Each claim also retains its own observation time. |
+| `aliases` | string[] · O | Sourced alternative names of the same object. Work/production aliases are not automatically interchangeable. |
+| `description` | string · O | Attributed permitted summary from accepted content; any generated summary carries its model/prompt revision in evidence. |
+| `image_url` | URL string · O | Source-provided media only when approved for the intended use; retain source and credit in the media manifest. No guessed image URLs. |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | vecf32, string, integer · O together | Derived search projection only if a node's release slice enables embedding. Use the existing model/dimension contract; no mandatory extra paid step for award results. |
+
+For every selected field, preserve a **SQL/DTO-only claim envelope**: `source`, typed `source_record_id`, `source_url`, `snapshot_id`, evidence location, observation time, optional source publication/effective dates, source finality, mapping revision and election/review decision. Keep losing and superseded claims. Canonical production/work fields follow facts → election → distill; support fields need their owner's equivalent explicit selection/revision policy. A short source page must not blank richer accepted values.
+
+Graph properties use scalars or homogeneous primitive arrays; do not serialize whole credit blocks, JSON objects, private GCS paths or review notes onto nodes. Only reviewed source-identifier kinds may appear in an identifier registry. Their uniqueness includes **source namespace + object kind + normalized value**. Do not infer a work ID, venue ID or individual-party ID from a production ID.
+
+<a id="stage-production" />
+
+### Stage_Production
+
+**Labels:** `Entity:Stage_Production`, optionally `:Play` or `:Musical`.
+
+**Canonical Go type:** proposed `stage_production`.
+
+**Identity:** one source-defined credited production/engagement. Separate Broadway, West End and revival engagements retain separate identities. A venue rename or corrected opening date does not create a new production.
+
+**Proposed ownership:** entities owns identity; stage owns source/control records; facts owns the elected `stage_production_profile`; stage graph sync owns projection. Required in the direct-credit release.
+
+In addition to the shared envelope:
+
+| Property | Type / requirement | Source basis and mapping rule |
+| --- | --- | --- |
+| `entity_type` | string · R | Orbiter constant `stage_production`; never a film/music dispatch type |
+| `title` | string · R | **B/L/O** production heading; `name` mirrors the elected title |
+| `form` | enum · O | **B/L/O** → `play`, `musical`, `other`; unknown is absent. Only the first two add subtype labels; retain unmapped source wording in evidence. |
+| `market` | enum · R for initial scope | **B/L/O** verified engagement → `broadway` or `west_end`. London address alone does not establish West End scope; other engagements remain discovery context until approved. |
+| `production_kind` | enum · O | **B/L/O** explicit `original`, `revival`, `return_engagement`, or `other`; do not infer from title or award category alone |
+| `ibdb_production_id` | string · O | **B** validated numeric production ID, projected from the typed alias registry |
+| `official_website_url` | URL string · O | **O**, or a verified outbound link from **B/L/T**; confirm the page refers to this engagement rather than only its tour |
+| `season_label` / `season_scheme` | string, string · O together | Source-labelled season when supplied; otherwise a versioned Orbiter market-specific calculation. Keep its derivation; never assume award year equals production season. |
+| `first_preview_date` | ISO date string · O | Explicit preview start from an approved production record/programme; not available on every **B/L/O** page |
+| `opening_date` / `press_night_date` | ISO date string · O | **B/L/O**, corroborated by **T** where present; separate opening from UK press night when source semantics differ |
+| `announced_closing_date` | ISO date string · O | **L/O** or an explicit **B** announcement; future/planned end, not evidence the show already closed |
+| `closing_date` | ISO date string · O | **B/L/O** accepted evidence that the last performance actually occurred; remains absent for an open run |
+| `booking_until_date` | ISO date string · O | Only a source explicitly identifying its sales horizon. Last selectable ticket date is not a closing date. |
+| `run_status` / `run_status_as_of` | enum, ISO date string · O together | `announced`, `previews`, `running`, `suspended`, `closed`, `cancelled`; selected source status or documented derivation with an as-of date. No automatic close from a stale booking deadline. |
+| `running_time_minutes` | integer · O | **L/O** duration, normalized only when unambiguous; strictly positive |
+| `runtime_includes_intermission` | boolean · O | **L/O** explicit inclusion statement; unknown remains absent |
+| `intermission_count` / `intermission_minutes` | integer · O | **O** or programme explicitly supplies each value; absence does not mean zero |
+| `age_recommendation_text` / `content_advisory_text` | string · O | **L/O** attributed audience guidance; optional display context, not an invented standardized rating |
+| `work_entity_id` | UUID string · O | Resolved `theatrical_work` only; verified relation cache, never a title match. Missing work identity does not block credit intake. |
+| `credit_coverage` | enum · R | Derived from scoped snapshots: `unknown`, `partial`, `provisional`, `complete`, `empty_confirmed`. A source's unfinished-credit notice prevents `complete`. This does not describe identity-resolution progress. |
+| `accepted_credit_count` / `unresolved_mention_count` | integer · O | Derived from the same revision's credit ledger. Counts do not establish exhaustive coverage or capital participation. |
+
+Preserve source date text and precision in the claim envelope. Only exact dates become `YYYY-MM-DD` graph values; a year or month is not padded into a fabricated day. A preview, press night, opening, announced end and confirmed final performance are distinct facts.
+
+**Keep off the node:** producers belong in the credit ledger and accepted `PRODUCED` relationships, including literal billing, role, source group, evidence and any explicit credit dates. Venue associations belong in a dated SQL association list and the proposed `STAGED_AT` relationship, so a production can move without overwriting its history. Budgets, capitalization, recoupment and alleged investor amounts are outside this credit waterfall.
+
+<a id="theatrical-work" />
+
+### Work:Theatrical_Work
+
+**Labels:** `Entity:Work:Theatrical_Work`, optionally `:Play` or `:Musical`.
+
+**Canonical Go type:** proposed `theatrical_work`.
+
+**Identity:** the dramatic work shared by independently identified productions, with explicit edition/adaptation boundaries. It is separate from its source novel, film adaptation, musical score and cast recording.
+
+**Proposed ownership:** entities identity, facts-owned `theatrical_work` cache, dedicated work projection. Optional v1 linking; defer creation if identity is not established.
+
+| Property | Type / requirement | Source basis and mapping rule |
+| --- | --- | --- |
+| `entity_type` | string · R | Orbiter constant `theatrical_work` |
+| `title` | string · R | **O**, supported by **B/A** credit context; not sufficient by itself to merge productions into one work |
+| `form` | enum · O | Explicit source classification → `play`, `musical`, `other`; same closed subtype rule as production |
+| `original_title` | string · O | Official programme/work evidence explicitly distinguishes an original title; never reverse-translate |
+| `language_codes` | string[] · O | Explicit work-language evidence, normalized to the agreed language vocabulary; a production's location or page language is insufficient |
+| `edition_label` / `version_label` | string · O | Explicit credited adaptation/revision/translation designation; preserve conflicting editions for identity review |
+| `first_produced_year` | integer · O | Explicit authoritative work history/programme; earliest production in our database is not proof of the world premiere |
+| `setting_summary` | string · O | Source-supported dramatic setting, only when shown to belong to this work/version rather than a director's particular staging |
+| `creator_display_names` | string[] · O | Derived display projection from accepted, role-qualified work creator claims; literal names, no inferred identities |
+| `adaptation_summary` | string · O | **O/B/T/A** explicit source-material attribution, summarized with evidence; does not create or merge its underlying novel/film node |
+
+**Source IDs:** the inspected primary pages establish creative credits, but do not establish a universal stable underlying-work ID contract. Do not invent `ibdb_work_id`, reuse `ibdb_production_id`, or attach a music-work MBID to the whole stage work. Admit a work through a reviewed typed work identifier or reviewed opaque work registry key, retaining production/programme references as evidence.
+
+**SQL/DTO-only creator claims:** `role` (`playwright`, `book_writer`, `composer`, `lyricist`, `adapter`, `translator`), literal billed party/group, optional canonical party ID, evidence and work-version scope. These roles are proposed mappings, not a requirement that every source supplies each one. Directors, cast, orchestrators and producing teams generally belong to production-specific credits unless explicit evidence establishes a work-level contribution. A role-qualified accepted relationship can later be projected under a separately reviewed edge contract.
+
+Use family-qualified indexes and writer/retraction predicates. Shared `Work`, `Play` or `Musical` labels must never let theatre sync delete music nodes, or music sync rewrite theatrical works. Major adaptation/version identity questions stay in review; a renamed work does not automatically become a new entity.
+
+<a id="theatre-venue" />
+
+### Place:Venue:Theatre
+
+**Labels:** proposed `Place:Venue:Theatre`.
+
+**Canonical Go type:** none in this slice; use the current support-place architecture.
+
+**Identity:** one physical theatre or separately identified performance space, independent of its current name, owner and productions.
+
+**Proposed ownership:** an owner-approved shared-place lookup/alias and support-replay seam. Reuse any existing music place and UUID. Until that seam exists, retain pending venue evidence rather than create duplicate places.
+
+| Property | Type / requirement | Source basis and mapping rule |
+| --- | --- | --- |
+| `entity_type` | string · R | Existing support graph vocabulary `Place`; not a canonical `entities.entity_type` registration |
+| `place_type` / `venue_type` | string, string · R | Proposed `Venue` / `Theatre`, supported by source description. These modifiers do not change the owner identity. |
+| `ibdb_theatre_id` | string · O | **V** typed venue ID; separate namespace from IBDB production and party |
+| `mbid` | string · O | Retained only from a verified existing music-place match; never generated from a name/address |
+| `official_website_url` | URL string · O | **H/V/L** verified venue page |
+| `address` | string · O | **V/H** source-rendered physical address, preserving the source wording in evidence |
+| `street_address`, `city`, `region`, `postal_code`, `country_code` | string · O each | **H/V** explicit address components; normalize country codes only with evidence. Do not fill unknown components from guesses. |
+| `latitude` / `longitude` | float · O together | Verified source-supplied coordinates or existing accepted place data; valid paired ranges. No new geocoding dependency is required. |
+| `year_built` | integer · O | **V/H** explicit building year; distinguish it from opening or renaming dates |
+| `seating_capacity` | integer · O | Selected **H/V** capacity claim; positive, qualified by basis and as-of evidence |
+| `capacity_basis` | string · O, required with capacity | Source's configuration/approximation description; no silent averaging of conflicting totals |
+| `capacity_as_of` | ISO date string · O | Source-stated effective date; keep absent if only fetch time is known |
+| `stage_type` | string · O | **H** explicit physical stage specification, normalized only through an approved vocabulary |
+| `accessibility_url` | URL string · O | Source-provided official accessibility information, when supplied; no capability inferred from a venue label |
+
+**A real conflict to preserve:** the inspected IBDB venue page reports **1,078 approximate seats**, while the operator lists **1,092 total seats** with a seating breakdown. These observations motivate separate capacity claims with source, configuration and time. Prefer a current operator specification for its stated configuration; if configuration/effective-time equivalence is unclear, mark the dispute and do not represent either as an unqualified universal capacity. [IBDB venue](https://www.ibdb.com/theatre/bernard-b-jacobs-theatre-1346), [operator specification](https://shubert.nyc/theatres/bernard-b-jacobs).
+
+**SQL/DTO-only history:** dated names, former names with unknown dates preserved as unknown, source-ID aliases, source capacity claims, and separate owner/operator/lease relationships with evidence and validity intervals. Do not turn an operator's company ID into the venue identity. A complex and one of its auditoria are not the same place solely because they share an address.
+
+Adding the `Entity` label later would require a deliberate shared-place canonical-entity migration, preserving support UUIDs, existing music links and source aliases. It is not part of this stage proposal.
+
+<a id="stage-award" />
+
+### Stage_Award
+
+**Labels:** `Stage_Award`, optionally `:Nominee` or `:Winner`.
+
+**Canonical Go type:** none; a proposed stage-owned support record and bounded support replay.
+
+**Identity:** one award-body entry for a category/year and explicitly scoped production or recipient/group. It is not an award ceremony or a generic category node. A win updates the same nomination-entry identity. This is a deliberate theatre-specific contract: the current movie award writer includes outcome in identity and cannot be reused unchanged.
+
+| Property | Type / requirement | Source basis and mapping rule |
+| --- | --- | --- |
+| `entity_type` | string · R | Proposed support graph vocabulary `Stage_Award`; no automatic canonical entity admission |
+| `awarding_body` / `awarding_body_key` | string, string · R | **T/A** public series name plus controlled namespace, initially `tony` or `olivier` |
+| `award_year` | integer · R | **T/A** award edition year, independently of the production's opening year |
+| `category_name` | string · R | **T/A** category label with its original sponsor wording retained in evidence |
+| `category_key` | string · R | Orbiter-controlled, body-scoped category mapping; version renames/sponsor changes rather than silently combining different categories |
+| `outcome` | enum · R | **T/A** explicit `nominee`, `winner`, or `honoree`; never infer winner from promotional copy lacking scoped evidence |
+| `result_scope` | enum · R | `production`, `person`, `company`, or `joint`, derived from the actual entry's recipient definition |
+| `source_award_entry_id` | string · O | Only if an adapter verifies a durable award-entry ID. Otherwise use a reviewed scoped registry key; not an HTML list position or recipient-name hash. |
+| `production_entity_ids` | UUID string[] · O | Resolved exact engagements explicitly associated with the award entry; can include several only when the source entry itself does |
+| `recipient_entity_ids` | UUID string[] · O | Only explicitly named and resolved recipients. A production win does not populate this with its whole producer list. |
+| `recipient_display_names` | string[] · O | Literal source recipients, derived from the recipient ledger; retain unresolved groups without pretending they are individual IDs |
+| `production_titles` / `venue_names` | string[] · O | Source context for identifying the correct engagement; titles and venues are not strong identity keys |
+| `citation_summary` | string · O | Permitted summary of the **T/A** award citation; exact source text remains in the snapshot |
+| `ceremony_date` | ISO date string · O | Official award-series announcement when explicitly supplied; do not infer it from year or source fetch time |
+
+`name` is a deterministic display projection of body, year, category and entry subject; it is not the identity key. Store **SQL/DTO-only** entry history, recipient groups/members, nomination and winner observations, production associations and their resolution states. Keep one durable result row when a nomination becomes a win; the current `Winner` label replaces `Nominee`, while nomination history remains. Special honorees need no subtype label unless a future contract approves one.
+
+Award nodes may retain unresolved source context for discovery/admin use, but public recipient/production edges require resolved endpoints. Two separate entries for one person in the same year/category and different productions stay distinct; a genuinely joint entry stays one result with explicit members. Do not conflate a score/book award with ownership of the entire theatrical work.
+
+### Relationships and release boundary
+
+| Proposed connection | Ownership and limit |
+| --- | --- |
+| `Person/Company → PRODUCED → Stage_Production` | First-release direct-credit backbone, using the plan's agreed role weights and evidence envelope |
+| `Stage_Production → PRODUCTION_OF → Theatrical_Work` | Optional resolved work context; proposed weight 50, excluded from scoring |
+| `Stage_Production → STAGED_AT → Place:Venue:Theatre` | Dated support-place association; proposed weight 50, excluded; shared-place ownership required |
+| `Theatrical_Work → ADAPTED_FROM → resolved source work` | Later explicit adaptation evidence; proposed weight 55, excluded; no `SAME_AS` shortcut |
+| `Person/Music_Group → WROTE/COMPOSED/WROTE_LYRICS → Theatrical_Work` | Explicit work-level roles; proposed 10/8/12 using music precedents, excluded initially |
+| `Stage_Production → HAS_AWARD → Stage_Award` | Production/associated-recipient context; proposed weight 40, excluded initially |
+| `Explicit Person/Company → WON_AWARD/NOMINATED_FOR → Stage_Award` | Only named recipients; proposed 30/35, excluded initially; a production result is not copied to its producers |
+
+A shared work or venue must not create the same relationship strength as co-producing **the same production**. The [theatre edge contracts and property examples](/guides/ontology/edges#theatre-edges), [proposed weights](/guides/ontology/edge-weights#theatre-weights) and [Go build plan](/guides/open-work/roadmap/broadway-co-producers#proposed-theatre-node-types) are aligned documentation. Runtime schema, endpoint dispatch, scoring filters and API registration remain unbuilt; context graph writes stay disabled until their reader exclusions are verified.
+
+Individual showings are deferred. A future `Entity:Event:Theatre_Performance` could represent a dated performance if attendance/ticketing requires it, but it is **not added to the reserved label inventory or v1 work**. People and producing companies retain their existing canonical types.
+
+Before implementation, freeze the property/identifier enums and minimum fixture coverage; register both canonical types through admission, queues, facts, distill, graph sync, publish, merge and repair; define support-place/result ownership; and test cross-feature replay and corrections. These are development requirements, not changes performed by this documentation pass.
 
 ---
 
@@ -1498,7 +1724,7 @@ Published works authored by a person. Publications are now modeled as `Work` nod
 
 ## Timestamp coverage audit
 
-The convention is `created_at` set in the create/`ON CREATE SET` clause and `updated_at` set in the update/`ON MATCH SET` clause — both as Cypher `timestamp()` (epoch-millis). **Every documented node type on this page stamps both** — the gaps found by the 2026-06-01 sweep were all patched (creators that omitted `created_at`: Country, SubDomainExpertise, Event:Live\_\*, Certification, Honor, Project, Publication, Organization; updaters that omitted `updated_at`: the IMDB visibility flip #12880, the company dedup fold #10505, the VC\_Firm / Organization label-adds, and the certification `SET`).
+The historical writer convention is `created_at` set in the create/`ON CREATE SET` clause and `updated_at` set in the update/`ON MATCH SET` clause — both as Cypher `timestamp()` (epoch-millis). **The July audit reported both stamps for the legacy types it covered** — the gaps found by the 2026-06-01 sweep were all patched (creators that omitted `created_at`: Country, SubDomainExpertise, Event:Live\_\*, Certification, Honor, Project, Publication, Organization; updaters that omitted `updated_at`: the IMDB visibility flip #12880, the company dedup fold #10505, the VC\_Firm / Organization label-adds, and the certification `SET`). The proposed theatre nodes are not implemented and have no timestamp-coverage claim; their future timestamp requirements are specified in the shared theatre envelope above.
 
 <Note>
   **Known remaining gaps** (outside the enrichment pipelines' documented types): `contextFounded` (`mvp/yc/process-yc-people` #12700) sets no `created_at` on the hub node, and the `Document`/`DocumentChunk` (`#12850`, `#4596`) and user/organization-graph types `MasterPerson` / `MasterOrganization` (`#12869`, `#12884`) remain unstamped. The `qa/resolve-edges-*` functions (#12715/#12718/#12719) are QA mirrors of the production resolvers — patch them alongside if QA parity matters.
