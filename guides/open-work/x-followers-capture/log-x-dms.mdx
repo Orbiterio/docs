@@ -10,14 +10,14 @@ icon: "comments"
 </Danger>
 
 <Info>
-  **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none scheduled, called by anything, or read by the app: tables `x_dm_activity` (789) and `x_dm_sync_run` (790); read-only harnesses `twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403); reference writers `twitter-api-sync-dms` (13402, legacy DMs) and `twitter-api-sync-chats` (13404, encrypted chats). `x_oauth_token` (788) holds two real user tokens: row 2 @Orbiter_io and row 3 @Mark_L_Pederson, both with `dm.read`. Table 789 holds 81 smoke-test rows for Mark (3 legacy, 78 chat) and 790 holds 10 runs. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**.
+  **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none scheduled, called by anything, or read by the app: tables `x_dm_activity` (789) and `x_dm_sync_run` (790); read-only harnesses `twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403); reference writers `twitter-api-sync-dms` (13402, legacy DMs) and `twitter-api-sync-chats` (13404, encrypted chats). `x_oauth_token` (788) holds two real user tokens: row 2 @Orbiter_io and row 3 @Mark_L_Pederson, both with `dm.read`. Table 789 holds 86 smoke-test rows for Mark (3 legacy, 83 chat) and 790 holds 23 runs. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**.
 </Info>
 
 <Warning>
   **Charles, read this first.** In late 2025 X replaced Direct Messages with end-to-end encrypted **Chat**. That splits the feature into two sources that land in one table:
 
   1. **Legacy DMs** through `GET /2/dm_events`: conversations that were never upgraded to encryption. Full text, last 30 days only. Proven: 3 of Mark's conversations logged.
-  2. **Encrypted chats** through the **X Chat API**. The history API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body as ciphertext. Recorded: listing found 499 conversations; fetching events for the newest 140 logged 78 chat events across 16 conversations, back to November 2025. **The other 359 conversations were not scanned for events.**
+  2. **Encrypted chats** through the **X Chat API**. The history API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body as ciphertext. Recorded: listing found 499 conversations; fetching one event page for every one of them logged 83 chat events across 19 conversations, back to November 2025. **Five of those events sat beyond position 168 in the list**, which is why the plan scans every discovered conversation and treats list position as no proxy for activity.
 
   **Decision taken for this spec: Phase 1 logs encrypted chats as metadata-only rows (`text` empty) and never holds user keys or PINs server-side. Knowing that a conversation is happening, with whom, in which direction and how recently is the value for Orbiter's interaction log and KNOWS edges.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
 </Warning>
@@ -56,7 +56,7 @@ Work top to bottom. These eight steps deliver Phase 1.
     Build a canonical event writer shared by all fetch workers. Register the HTTPS webhook, pass CRC, and create user-authorized `chat.received` and `chat.sent` subscriptions referencing that webhook; save their routing metadata. Subscribe before beginning the import so concurrent activity is queued. Verify POST signatures over raw bytes, resolve the delivery to an active owned connection, persist an allowlisted inbox item, and acknowledge only after the durable write. Coalesce pending notifications by conversation and fetch its history through the canonical writer. `chat.conversation_join` can refresh membership; it is not a message. **Check:** replay plus a simultaneous history fetch yields one activity row, an invalid signature writes nothing, and a crash after acknowledgment does not lose the pending fetch. See [Webhook identity](#webhook-identity-and-delivery).
   </Step>
   <Step title="5. Encrypted chats: initial import and reconciliation">
-    Adapt 13404's response mapping, not its batching algorithm. Persist the conversation-list cursor and a discovered set of conversation ids, then maintain an independent event cursor for each conversation. Resume by cursor and id, never `skip_conversations` on a changing list. Scan all discovered conversations for the initial import, respecting time, request, and dollar budgets; exhausting a budget means paused, not complete. Empty conversations do not prove the rest are empty. Daily discovery and a rotating reconciliation sweep repair missed webhooks, including inactive conversations. **Check:** a long conversation resumes on page 2, new conversations inserted during the walk are eventually discovered, and a nonempty conversation after 28 empty ones is still captured. See [Recovery](#pagination-completeness-and-recovery).
+    Adapt 13404's response mapping, not its batching algorithm. Persist the conversation-list cursor and a discovered set of conversation ids, then maintain an independent event cursor for each conversation. Resume by cursor and id, never `skip_conversations` on a changing list. Scan all discovered conversations for the initial import, respecting time, request, and dollar budgets; exhausting a budget means paused, not complete. Empty conversations do not prove the rest are empty; the 2026-09-06 full walk found 5 events past position 168 after 56 empty conversations in a row. Daily discovery and a rotating reconciliation sweep repair missed webhooks, including inactive conversations. **Check:** a long conversation resumes on page 2, new conversations inserted during the walk are eventually discovered, and a nonempty conversation after 28 empty ones is still captured. See [Recovery](#pagination-completeness-and-recovery).
   </Step>
   <Step title="6. Legacy DMs: dispatcher and worker">
     Adapt 13402 into a leased worker. Cloud Scheduler ticks every 15 minutes; enqueue only due legacy scopes, initially every 4 hours. A one-event probe may avoid a larger fetch once a complete baseline exists, but process that event and retain a periodic overlap scan to repair holes. Commit each page with its cursor; advance the completed boundary only after the intended interval is covered. Cache handles and batch only unresolved ids. **Check:** partial imports never become incremental-complete; retries preserve rows; lag approaching the legacy 30-day window raises an actionable alert. Legacy Activity webhooks are an optional later optimization, pending an app-level fixture.
@@ -405,16 +405,16 @@ Shape facts the capture confirmed:
 2. **`participant_ids` on the list excludes the caller**, so a direct conversation has exactly one participant and the counterpart needs no derivation.
 3. **Paging was inconsistent.** The first events page said `has_more: true` with 6 events; the next two pages were empty. The reference stopped there. Production must record a partial interval and retry without looping indefinitely; this response is not proof of complete history.
 4. **Metadata is private relationship data.** The reference strips `encoded_event`, `conversation_token` and `message_event_signature`. Production uses an explicit field allowlist, ownership checks, and retention/deletion rules rather than retaining all future API fields by default.
-5. **This capture needed a separate handle lookup.** Its requests returned no expanded users; batch missing ids in groups of at most 100 and cache results. One of Mark's 140 walked conversations resolved to no user at all (deleted or suspended account); its rows keep the raw id.
+5. **This capture needed a separate handle lookup.** Its requests returned no expanded users; batch missing ids in groups of at most 100 and cache results. Across Mark's 499 walked conversations, 1 row with chat activity resolved to no user at all (deleted or suspended account) and keep the raw id.
 6. **The captured chat history extends beyond 30 days.** The oldest logged event is from 2025-11-15. This demonstrates older access for this account, not unlimited retention or guaranteed recovery for every conversation.
-7. **Most tested conversations returned zero chat events.** Of the newest 140, 16 had chat events and 124 had none. Both sources are needed; this sample does not establish global non-overlap or prove unvisited conversations are empty.
+7. **Most conversations returned zero chat events.** Of all 499, 19 had chat events on their first page and 480 had none. Both sources are needed. A one-page scan does not prove those 480 are empty beyond page one, and 5 of the 83 events were in conversations near positions 170, 370 and 400, so a walk that stops after a run of empty conversations loses real events.
 8. **The list is large and all direct.** 499 conversations for Mark, none of type `group`; 11 list pages at 50 per page.
 
 ## Reference tables
 
 ### x_dm_activity (789)
 
-Historical Xano shape, built on 2026-09-06. The final recorded smoke test had 81 rows (3 legacy, 78 chat). The Go proposal below changes the key and adds eligibility, deletion, and counterparty fields; do not copy the Xano uniqueness rule into production.
+Historical Xano shape, built on 2026-09-06. The final recorded smoke test had 86 rows (3 legacy, 83 chat). The Go proposal below changes the key and adds eligibility, deletion, and counterparty fields; do not copy the Xano uniqueness rule into production.
 
 <Warning>
   X ids (users, events, conversations) are 64-bit snowflakes and exceed the safe integer range. Store every X id as **text**, never int.
@@ -633,7 +633,9 @@ All on 2026-09-06, Xano workspace 3, live data source.
 | 14:15 | @Mark_L_Pederson | chat | Run 5, 13404 on `14382995-16826747`: 6 rows, `DM from @jasondiamond` and `DM to @jasondiamond`, `text` empty, `raw` stripped. |
 | 14:33 | @Mark_L_Pederson | chat | Run 6, newest 28 conversations, one page each, 13 seconds: 70 events, 64 new (busiest: @nicalo06 25, @neiltak 12, @JoinTheBNC 8, @_gbalaji 7). 16 of the 28 returned zero events. |
 | 14:48 to 15:37 | @Mark_L_Pederson | chat | Runs 7 to 10 in the background, one 28-conversation batch per rate-limit window (`skip_conversations` 28, 56, 84, 112): 3, 5, 0 and 0 events. A fifth batch at 15:35 threw the token-expiry guard and was re-run after `twitter-api-token` refreshed row 3. |
-| 15:40 | @Mark_L_Pederson | chat | List paged to the end: 499 conversations, all direct. Event walk stopped at 140 after conversations 85 to 140 returned nothing; **359 remained unvisited**. Recorded table: 81 rows, 3 legacy and 78 chat, 16 conversations, 37 sent and 44 received, oldest 2025-11-15, newest 2026-09-06. This is a partial history scan. |
+| 15:40 | @Mark_L_Pederson | chat | List paged to the end: 499 conversations, all direct. Interim table after 140 conversations: 81 rows. |
+| 16:24 to 19:32 | @Mark_L_Pederson | chat | Runs 11 to 23 in the background, batches of 28 with a token refresh before each, until the list was exhausted at 499. Five more events found: 2 near position 170, 1 near 370, 2 near 400, all in conversations Mark had written to. 502 events requests across 19 chat runs, all `complete`, none rate limited. |
+| 19:32 | @Mark_L_Pederson | chat | **Final table: 86 rows, 3 legacy and 83 chat, 19 conversations, 42 sent and 44 received, oldest 2025-11-15, newest 2026-09-06.** One event page (up to 100) was fetched per conversation; the busiest returned 25, so no page cap was reached. This is a complete first-page scan of every listed conversation, not proof of full history for any of them. |
 
 **Lessons that go straight into the Go build**
 
@@ -2967,7 +2969,7 @@ Created 2026-09-06 as references for the Go build. Nothing is scheduled, called 
 x_dm_activity — 789
 ```
 
-Reference table, columns as above including `source`, `conversation_key_version` and `event_uuid`. Unique on `(user_id, dm_event_id)`; btree on `(user_id, activity_timestamp)`, `dm_conversation_id`, `my_person_id`. Holds 81 smoke-test rows for user 12: 3 legacy, 78 chat.
+Reference table, columns as above including `source`, `conversation_key_version` and `event_uuid`. Unique on `(user_id, dm_event_id)`; btree on `(user_id, activity_timestamp)`, `dm_conversation_id`, `my_person_id`. Holds 86 smoke-test rows for user 12: 3 legacy, 83 chat, one event page from each of Mark's 499 conversations.
 
 </Card>
 
@@ -2977,7 +2979,7 @@ Reference table, columns as above including `source`, `conversation_key_version`
 x_dm_sync_run — 790
 ```
 
-Reference companion table with `source`, `mode`, `status`, counts, `next_token` and `newest_event_id`. Btree on `status` and `(user_id, created_at)`. Ten smoke-test runs.
+Reference companion table with `source`, `mode`, `status`, counts, `next_token` and `newest_event_id`. Btree on `status` and `(user_id, created_at)`. 23 smoke-test runs.
 
 </Card>
 
