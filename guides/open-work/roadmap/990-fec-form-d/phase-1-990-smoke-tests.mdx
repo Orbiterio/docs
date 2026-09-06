@@ -16,16 +16,33 @@ icon: "vial"
 | # | Fixture | EIN | Form | Already in graph? | Why it is in the set |
 | --- | --- | --- | --- | --- | --- |
 | F1 | **Veterans Future Foundation** (VFF) | `82-1433446` | 990 (full), TY2020–2023 | ✅ org node (`veteransfuture.org`) **and** board member **Katelyn Gallanty** as a Person node | The cleanest *net-new edge* proof: org + trustee both exist, joined today only by a LinkedIn-inferred `WORKS_AT`. Small roster, ~\$1M revenue — hand-verifiable |
-| F2 | **Hollywood Professional Association** (HPA) | `26-0017646` | 990, TY2020 + TY2022–2024, 501(c)(6) — TY2021 is in the IRS index but in no zip | ✅ org node and board member **Seth Hallen** | Second affiliation case; a (c)(6) trade association, so `subsection_code` ≠ 3 lands as a fact |
+| F2 | **Hollywood Professional Association** (HPA) | `26-0017646` | 990, TY2020–2023, 501(c)(6) | ✅ org node and board member **Seth Hallen** | Second affiliation case; a (c)(6) trade association, so `subsection_code` ≠ 3 lands as a fact |
 | F3 | **California Science Center Foundation** | `95-2210527` | 990, TY2020–2023, \$24M–\$131M | ✅ org node and board member **Rizwan Kassim** | Large roster (40\+ trustees) → most mentions stay `unresolved`; proves the cap and the sweep queue |
 | F4 | **Stanford** (The Board of Trustees of the Leland Stanford Junior University) | `94-1156365` | 990, TY2020–2023, \$8–9B | ✅ `School` node, **24 `ATTENDED`** \+ 3 `WORKS_AT` edges | Replaces the spec's Johns Hopkins case (**JHU is not in the graph**). `School` label must survive; trustee \+ officer double roles; Schedule I grants |
 | F5 | **New York University** | `13-5562308` | 990, TY2020–2023 | ✅ `School` node, 11 `ATTENDED` | Second School; large Schedule I |
-| F6 | **Harvard** (President and Fellows of Harvard College) | `04-2103580` | 990, TY2022–2025 all present in the IRS index (ProPublica's "with data" list was incomplete); two of the four zip entries are Deflate64 | ✅ `School` node, 12 `ATTENDED` | The gap-year tenure test: a 4-year window with two missing filings must not close a continuing trustee's `valid_to` |
-| F7 | **Ford Foundation** | `13-1684331` | **990-PF**, TY2020 + TY2022–2024 — TY2021 is in the IRS index but in no zip; 3.5–4K Part XV grants per year | ❌ not in Universe; **is** in `fundables.organizations` (`fordfoundation.org`, `is_investor`) | Fresh `ResolveStrong("ein")` create; Part XV grants (the Donors read); later the fundables-sync must attach `fundable` to the *same* entity, not mint a second |
+| F6 | **Harvard** (President and Fellows of Harvard College) | `04-2103580` | 990, **TY2021 and TY2023 only** have e-filed data | ✅ `School` node, 12 `ATTENDED` | The gap-year tenure test: a 4-year window with two missing filings must not close a continuing trustee's `valid_to` |
+| F7 | **Ford Foundation** | `13-1684331` | **990-PF**, TY2020–2023 | ❌ not in Universe; **is** in `fundables.organizations` (`fordfoundation.org`, `is_investor`) | Fresh `ResolveStrong("ein")` create; Part XV grants (the Donors read); later the fundables-sync must attach `fundable` to the *same* entity, not mint a second |
 | C1 | Cedars-Sinai Medical Center | `95-1644600` | 990, \$4.7B | ✅ org node; Kassim holds a "Board of Governors" title | **Negative control:** Board of Governors is a fundraising board, not Part VII. Kassim must **not** resolve onto Cedars' roster |
 | C2 | A public university in the graph (e.g. University of Florida, Indiana University Bloomington) | — | none — governmental, no 990 | ✅ `School` node | **Negative control:** ProPublica has no filings → queue row `last_error = ein_not_found`, `next_attempt_at = +30d`, released; zero entities, zero edges |
 
 Not in the graph and not needed: Gates, Knight, MacArthur, Rockefeller, RWJF, Schmidt Futures, Wellcome are all in the Fundable mirror without a Universe entity — F7 covers that path once.
+
+### Captured fixtures (Phase 0, 2026-09-06)
+
+All 32 filings are in `orbiter-universe` under `internal/features/filings/testdata/irs990/<ein>/<object_id>_public.xml.gz` with a `manifest.json` (index row, source zip, `returnVersion`, sha256 + bytes of the uncompressed XML). Captured by `go run ./scripts/capture-irs990` over HTTP range reads — two requests per batch zip, nothing downloaded whole. Roster elements are present at the spec'd xpaths on every filing; 11 `returnVersion` values are covered (2020v4.1 → 2025v4.2).
+
+| EIN | Filings captured | Part VII rows / yr | Grants / yr |
+| --- | --- | --- | --- |
+| 821433446 VFF | 990 TY2022–2025 | 3–5 | — |
+| 260017646 HPA | 990 TY2020, 2022–2024 | 12–15 | — |
+| 952210527 CSC | 990 TY2022–2025 | 79–88 | — |
+| 941156365 Stanford | 990 TY2022–2025 | 56–62 | Schedule I 97–127 |
+| 135562308 NYU | 990 TY2022–2025 | 66–75 | Schedule I 23–41 |
+| 042103580 Harvard | 990 TY2022–2025 | 35–39 | Schedule I 330–352 |
+| 131684331 Ford | 990-PF TY2020, 2022–2024 | 24–26 | Part XV 3,554–4,007 |
+| 951644600 Cedars-Sinai | 990 TY2022–2025 | 49–51 | Schedule I 182–217 |
+
+**What the IRS data taught us** (each changes the client; the full list with consequences is in the `filings-enrichment` skill): `index_2021..2023.csv` have **no `XML_BATCH_ID` column**; the index's batch id can be **wrong** (2025/2026 `05A` rows whose XML is in `05B`) and the 2022 index lists filings that are in **no** zip (Ford and HPA TY2021); batch ids are sometimes lowercase and the host is case-sensitive; Go's `archive/zip` refuses `2023_TEOS_XML_05A.zip` outright, so the client walks the central directory itself; some big filings are **Deflate64** (method 9), which Go's stdlib cannot inflate — the client needs a decoder before the lane ships; `990T` rows share `(ein, tax_period)` with the 990; VFF filed as **FITOPS FOUNDATION** through TY2022.
 
 ## Before-baselines (run first, keep the output)
 
@@ -124,9 +141,9 @@ Measured 2026-09-06: VFF / HPA / CSC each have the org node, the person node, an
 
 Same input shape as ST-1. **HPA:** Seth Hallen resolves via `affiliation` (0 Exa); `subsection_code = 6` lands as a fact; `nonprofit: true` still (a (c)(6) is a nonprofit, not a charity — the fact vocabulary does not distinguish in Phase 1, note it). **CSC:** Rizwan Kassim resolves via `affiliation`; with a 40\+ roster and `FILINGS_990_MAX_NEW_PERSONS_PER_RUN` left at 50, assert the unresolved census is printed with its denominator (never `vacuous`), that Exa was called **only** for mentions carrying an identity point beyond the name, and that the weekly sweep re-runs steps 1–2 for the `unresolved` tail without a fetch.
 
-## ST-5 — Gap-year tenure (F7, F2)
+## ST-5 — Gap-year tenure (F6)
 
-Harvard turned out to have all four years once the IRS index (not ProPublica's "with data" list) was the source. The gap-year fixtures are now **Ford Foundation and HPA**: TY2020, then TY2022–2024, with TY2021 listed in `index_2022.csv` but present in no 2022 or 2023 batch zip (`xml_missing`). A trustee present on TY2020 and TY2022 must get `valid_from = TY2020 begin`, `valid_to = NULL` (if still on TY2024) — the missing TY2021 is not a departure. A trustee present on TY2020 only gets `valid_to = TY2020 tax_period_end`. Assert both, then assert the same spans after seeding TY2024 before TY2020.
+Harvard has e-filed data for TY2021 and TY2023 only inside a 4-year window. A trustee present on both filings must get `valid_from = TY2021 begin`, `valid_to = NULL` — the missing TY2022 is not a departure. A trustee present on TY2021 only gets `valid_to = TY2021 tax_period_end`. Assert both, then assert the same spans after seeding TY2023 before TY2021.
 
 ## ST-6 — Negative controls
 
