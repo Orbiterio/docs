@@ -1,9 +1,13 @@
 ---
 title: "Log X DMs"
 sidebarTitle: "Log X DMs"
-description: "Spec for Charles's Go build that logs a connected user's X direct messages and encrypted chats into x_dm_activity the way email_activity logs email. Two sources, proven live on 2026-09-06: GET /2/dm_events for legacy DMs (text included, 30-day window) and the X Chat API for encrypted chats (metadata only, never text). Xano holds reference tables and functions; the page carries the ordered task list, the AlloyDB DDL, cost and cadence, and the smoke-test record."
+description: "Go build plan for logging legacy X DMs and encrypted-chat metadata: account-scoped storage, reliable imports, webhook-triggered reconciliation, contact attribution, cost controls, and release checks. Xano smoke tests are reference evidence, not a production implementation."
 icon: "comments"
 ---
+
+<Danger>
+  **HOLD on build until Universe has LIVE & DEV environments**
+</Danger>
 
 <Info>
   **Spec for Charles's Go build on GCP. Nothing is built in Go here.** Xano workspace 3 holds **reference artifacts** created on 2026-09-06 while scoping, none scheduled, called by anything, or read by the app: tables `x_dm_activity` (789) and `x_dm_sync_run` (790); read-only harnesses `twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403); reference writers `twitter-api-sync-dms` (13402, legacy DMs) and `twitter-api-sync-chats` (13404, encrypted chats). `x_oauth_token` (788) holds two real user tokens: row 2 @Orbiter_io and row 3 @Mark_L_Pederson, both with `dm.read`. Table 789 holds 81 smoke-test rows for Mark (3 legacy, 78 chat) and 790 holds 10 runs. The `activity_type` rows, the `data_source` row, the `log_crash` phase, and any schedule are **proposed**.
@@ -13,66 +17,156 @@ icon: "comments"
   **Charles, read this first.** In late 2025 X replaced Direct Messages with end-to-end encrypted **Chat**. That splits the feature into two sources that land in one table:
 
   1. **Legacy DMs** through `GET /2/dm_events`: conversations that were never upgraded to encryption. Full text, last 30 days only. Proven: 3 of Mark's conversations logged.
-  2. **Encrypted chats** through the **X Chat API**: every new conversation. The API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body only as ciphertext that decrypts on the user's device. Proven: a full walk of Mark's 499-conversation list logged 78 chat events across 16 conversations, back to November 2025, as metadata rows.
+  2. **Encrypted chats** through the **X Chat API**. The history API gives the user's own token each event's id, sender, timestamp and conversation in the clear, and the body as ciphertext. Recorded: listing found 499 conversations; fetching events for the newest 140 logged 78 chat events across 16 conversations, back to November 2025. **The other 359 conversations were not scanned for events.**
 
-  **Decision taken for this spec: Phase 1 logs encrypted chats as metadata-only rows (`text` empty) and never holds user keys or PINs server-side. Knowing that a conversation is happening, with whom, in which direction and how recently is the value for Orbiter's interaction log and KNOWS edges. Phase 2, message text through on-device decryption in the Orbiter client, is scoped as the last step of the build plan.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
+  **Decision taken for this spec: Phase 1 logs encrypted chats as metadata-only rows (`text` empty) and never holds user keys or PINs server-side. Knowing that a conversation is happening, with whom, in which direction and how recently is the value for Orbiter's interaction log and KNOWS edges.** The ordered task list is in [Build plan](#build-plan-for-charles); everything you need to reproduce the live results is in [Smoke-test record](#smoke-test-record).
 </Warning>
+
+<Info>
+  **Decryption starts when we deploy the Orbiter iOS app.** Encrypted X Chat text will be decrypted only on the user's iPhone, with their consent. Until that release, encrypted chats remain metadata-only. User PINs and private keys stay on the device.
+</Info>
 
 ## What this delivers
 
-When a user connects X to Orbiter with DM consent, we log one `x_dm_activity` row per message event, from both sources, keyed by `(user_id, dm_event_id)`. Every row carries the Orbiter fields that make it behave like `email_activity` (`user_id`, `my_person_id`, `activity_type_id`, `card_descriptor`, `activity_timestamp`, `direction`) plus the X identifiers (event, conversation, sender, counterpart) and a `source` of `legacy_dm` or `xchat`. Legacy rows also carry `text`; chat rows never do.
+When a user connects X to Orbiter with DM consent, log one row per captured API event and connected account. The production key is `(user_id, x_user_id, source, dm_conversation_id, dm_event_id)`. Legacy message rows can carry text; Phase 1 chat rows carry metadata only. Keep capture separate from eligibility for contact counts: encrypted events whose meaning is unverified, membership changes, and unresolved groups must not silently become direct messages.
 
-Downstream nothing changes: the interaction-log job counts DM rows next to email and calendar, and the resolver CRON from the parent page turns `sender_profile_url` into `my_person_id` and KNOWS edges. The loggers never touch the graph.
+**Log first, attach known people, resolve the rest on a CRON.** For a direct conversation, look up the counterparty's X identity in the Universe and attach their `entity_id` when already known. Here, **`entity_id` is the person node's UUID**. A missing match or unavailable lookup never blocks capture: save the row with `entity_id = NULL`. The CRON resolves missing people, adds and enriches them in the Universe, adds them to the user's contacts, and backfills their event rows. It also adds already-known people who are missing from that user's contacts. See [Identity and contact resolution](#identity-and-contact-resolution).
+
+Extend the interaction-log job with explicit X counters and timestamps keyed by `(user_id, entity_id)`. The existing in-app `chat_interactions` field belongs to Stream and must keep that meaning. Capture workers only look up existing identities; the CRON owns person and contact creation.
+
+<Note>
+  **Plan review, 2026-09-06.** The captured responses and Xano source below are historical evidence. The production decisions below supersede their offset pagination, dedupe keys, and completion rules. Webhook delivery, group behavior, complete historical coverage, and production billing have not been demonstrated by those smoke tests.
+</Note>
 
 ## Build plan for Charles
 
-Work top to bottom. Each step names its acceptance check.
+Work top to bottom. These eight steps deliver Phase 1.
 
 <Steps>
-  <Step title="1. Read the two source sections and the smoke-test record">
-    [Source 1: legacy DMs](#source-1-legacy-dms-get-2dm_events) and [Source 2: encrypted chats](#source-2-encrypted-chats-the-x-chat-api) carry the exact endpoints, real captured responses, rate limits and the shape quirks that cost us time. The [smoke-test record](#smoke-test-record) has the token, consent and CLI lessons. Nothing there is speculative; every number was observed on 2026-09-06.
+  <Step title="1. Prove the remaining API contracts">
+    Start with the [captured responses](#source-1-legacy-dms-get-2dm_events) and [smoke-test record](#smoke-test-record). In a consented test account, capture redacted fixtures for incoming/outgoing chat deliveries, replay, a group, a message request, and a conversation with multiple event pages. Establish how the subscription identifies the monitored account and whether undecrypted history events distinguish messages from edits, reactions, and other events. Confirm endpoint prices and quotas in the app's developer console. **Check:** record each result as verified, unsupported, or still unknown; an unknown event kind stays excluded from message counts.
   </Step>
   <Step title="2. AlloyDB tables">
-    Run the [copy-paste migration](#copy-paste-migration-alloydb). It mirrors Xano 789 and 790 including the three chat columns. Extend the token table (the Go equivalent of `x_oauth_token`) with `user_id`, `scope`, `dm_enabled`, `next_sync_at`, `sync_cadence_minutes` (default 240) and `needs_reconsent`. Keep every X id as `text`; they are 64-bit snowflakes. **Check:** the DDL applies cleanly and a row with `source = 'xchat'` and empty `text` inserts.
+    Apply the [proposed migration](#copy-paste-migration-alloydb) in a disposable database. It deliberately extends the Xano references with durable sync state and a webhook inbox. Use `user_id` for the Orbiter owner, `x_user_id` for the connected account, and nullable UUID `entity_id` for the counterparty's person node, consistent with the revised parent follower plan. Any older prototype input named `entity_id` for ownership must be translated to `user_id` at the boundary, never into the DM row's `entity_id`. Bind every job to an owned connection; never pick the newest token row. Add `dm_enabled`, `needs_reconsent`, a revocation generation, and subscription identifiers to the shared connection model. **Check:** identical event ids in different accounts, sources, or conversations coexist; retries of the same scoped event do not.
   </Step>
   <Step title="3. OAuth consent in Go">
-    Scopes `tweet.read users.read follows.read dm.read offline.access`, PKCE with S256 in production (`plain` with verifier `challenge` was only for the Xano exchange function). The callback handler must exchange the code **in the request that receives it**: codes are single-use and die in 30 seconds. Store access and refresh tokens encrypted; X rotates the refresh token on every refresh, so write the new pair back before anything else. **Check:** a consent from a second account lands a token row with `dm.read` in `scope` without any manual step. Prerequisite in the X developer console: the app's permission level must be *Read and write and Direct message* and the callback must be registered on that same app.
+    Reuse the parent OAuth flow with `dm.read` as an explicit opt-in; `follows.read` is needed only when connecting followers too. Use S256 PKCE and unpredictable, single-use `state` bound to the logged-in Orbiter user. Exchange promptly in the callback, confirm the X identity, and persist the encrypted token pair before enqueueing work. Serialize refreshes **across follower and DM workers** for a connection and atomically replace the rotated pair; refresh near expiry, not before every request. A failed refresh requiring new consent pauses that connection. **Check:** two overlapping workers cannot overwrite a fresh token pair, another user's callback state is rejected, and declining DM access still permits the follower feature.
   </Step>
-  <Step title="4. Encrypted chats: webhook receiver and subscriptions">
-    At connect time create Activity API subscriptions for the user: `POST /2/activity/subscriptions` with `{"event_type": "chat.received", "filter": {"user_id": "<x_user_id>"}}` and the same for `chat.sent` (free) and `chat.conversation_join` (free). Run a Cloud Run receiver that answers the CRC challenge (HMAC-SHA256 of the token with the consumer secret) and, on delivery, writes one metadata row: `source = 'xchat'`, `event_uuid` from the envelope, `conversation_id` (hyphen form), `sender_id`, `conversation_key_version`, `direction` from sender versus connected account, `card_descriptor` from a cached handle. Dedupe on `event_uuid`, never decrypt `encoded_event`. **Check:** send one chat to a subscribed account and see the row within a minute. Each `chat.received` costs $0.010.
+  <Step title="4. One writer, then webhook-triggered reconciliation">
+    Build a canonical event writer shared by all fetch workers. Register the HTTPS webhook, pass CRC, and create user-authorized `chat.received` and `chat.sent` subscriptions referencing that webhook; save their routing metadata. Subscribe before beginning the import so concurrent activity is queued. Verify POST signatures over raw bytes, resolve the delivery to an active owned connection, persist an allowlisted inbox item, and acknowledge only after the durable write. Coalesce pending notifications by conversation and fetch its history through the canonical writer. `chat.conversation_join` can refresh membership; it is not a message. **Check:** replay plus a simultaneous history fetch yields one activity row, an invalid signature writes nothing, and a crash after acknowledgment does not lose the pending fetch. See [Webhook identity](#webhook-identity-and-delivery).
   </Step>
   <Step title="5. Encrypted chats: initial import and reconciliation">
-    Port `twitter-api-sync-chats` (13404): `GET /2/chat/conversations?max_results=50` newest first, then `GET /2/chat/conversations/{id}/events?max_results=100` per conversation, one `GET /2/users?ids=` batch for handles, upsert on `(user_id, dm_event_id)`. Budget per user: 50 list and 30 events requests per 15 minutes, so a first import of a busy account spans several windows; checkpoint per conversation and resume with `skip_conversations`, and refresh the token before every batch (a 2-hour token expires mid-walk; the Xano reference refuses a token inside its 5-minute margin and lost one batch that way). Stop paging a conversation on the first already-logged event (incremental) or on an empty page (X can answer `has_more: true` and then return an empty page). **Stop the walk after 28 consecutive conversations with zero events**: the list is ordered by last activity, encrypted Chat began in November 2025, and everything older can only have legacy events. Mark's list has 499 conversations; the first 84 held every chat event and the next 56 held none. Run the reconciliation daily per account over the newest conversations only. **Check:** re-running the import inserts zero rows.
+    Adapt 13404's response mapping, not its batching algorithm. Persist the conversation-list cursor and a discovered set of conversation ids, then maintain an independent event cursor for each conversation. Resume by cursor and id, never `skip_conversations` on a changing list. Scan all discovered conversations for the initial import, respecting time, request, and dollar budgets; exhausting a budget means paused, not complete. Empty conversations do not prove the rest are empty. Daily discovery and a rotating reconciliation sweep repair missed webhooks, including inactive conversations. **Check:** a long conversation resumes on page 2, new conversations inserted during the walk are eventually discovered, and a nonempty conversation after 28 empty ones is still captured. See [Recovery](#pagination-completeness-and-recovery).
   </Step>
   <Step title="6. Legacy DMs: dispatcher and worker">
-    Port `twitter-api-sync-dms` (13402) for the pre-Chat conversations. Cloud Scheduler ticks every 15 minutes and a dispatcher enqueues only accounts whose `next_sync_at` has passed (default cadence every 4 hours, see [Cost, rate limits, and cadence](#cost-rate-limits-and-cadence)); a worker pages `GET /2/dm_events` newest first, stops at the first known event, fills sent-message counterpart handles with a `GET /2/users?ids=` batch, and sets `next_sync_at`. 15 requests per 15 minutes per user; on 429 read `x-rate-limit-reset`. **Check:** the cadence table's floor cost holds in the run rows for a week.
+    Adapt 13402 into a leased worker. Cloud Scheduler ticks every 15 minutes; enqueue only due legacy scopes, initially every 4 hours. A one-event probe may avoid a larger fetch once a complete baseline exists, but process that event and retain a periodic overlap scan to repair holes. Commit each page with its cursor; advance the completed boundary only after the intended interval is covered. Cache handles and batch only unresolved ids. **Check:** partial imports never become incremental-complete; retries preserve rows; lag approaching the legacy 30-day window raises an actionable alert. Legacy Activity webhooks are an optional later optimization, pending an app-level fixture.
   </Step>
-  <Step title="7. Resolver hand-off">
-    Never resolve counterparties in the loggers. The resolver CRON from the parent page sweeps rows with `my_person_id = 0` by `sender_profile_url`, or `counterpart_x_user_id` for sent 1-to-1 rows, back-fills `my_person_id`, and only then fans out KNOWS pairs as `known/ingest/_fanout_email_pairs` does for email. Chat rows resolve exactly like legacy rows; they only lack text.
+  <Step title="7. Universe resolution and contacts CRON">
+    At capture, attach an existing person's node UUID as `entity_id` using a bounded identity lookup. On the CRON, group pending work by direct `counterpart_x_user_id`, recheck the Universe, resolve and add missing people, enrich them, and upsert the user's contact by `(user_id, entity_id)`. Backfill matching activity rows with the canonical person UUID. Include known entities with missing user contacts; do not scan only `entity_id IS NULL`. Follow the retry and attribution rules below. Add explicit X rollups, including change detection when an old event becomes resolved or eligible. **Check:** a lookup outage loses no events; concurrent jobs create one person and one contact per user; a sent/received pair counts twice for the counterpart, zero for the owner.
   </Step>
   <Step title="8. Cost guards, observability, tests, rollout">
-    Per-account daily cap on events read (start at 3,000) and a global monthly budget behind a kill switch. One structured log line per run from the run row; metrics for accounts due, runs completed, 429s, reconsents needed, webhook deliveries and estimated spend. Unit tests for direction, counterpart from the hyphenated id, `card_descriptor` and colon-to-hyphen normalisation, driven by the recorded fixtures on this page; an idempotency test that runs a fixture twice. Feature flag per user; internal accounts first; a week of spend data; then everyone. **Phase 1 ships here.**
-  </Step>
-  <Step title="9. Phase 2, later: message text through on-device decryption (Option B)">
-    Phase 1 already tells Orbiter that a conversation is happening, with whom, in which direction and how recently. Phase 2 adds the words, and it can only happen on the user's device, because that is where X keeps the keys. **This does not wait for an iOS app.** X's own desktop web client decrypts chats in the browser with the WASM build of the Chat XDK, and the Orbiter web app can do the same. Scope, in order:
-
-    1. **Client integration, web first.** Embed `@xdevplatform/chat-xdk` (WASM, see X's "Building UI apps with WASM" guide) in the Orbiter web app; add the native binding when the iOS app exists. The client calls `unlock(pin)` once per device, keeps the key material in the XDK's own storage, and never sends the PIN or keys anywhere. Trade-offs by platform:
-
-       | | Web app (WASM) | iOS app (native binding) |
-       | --- | --- | --- |
-       | Ships | First; no new app needed | Later, with the mobile build |
-       | When text syncs | Only while an Orbiter tab is open | Background refresh keeps up with new chats |
-       | Key storage | Browser profile; PIN re-entry after a cleared profile or a new browser | Keychain-backed; PIN prompt recurs rarely |
-       | Coverage | Chats that arrived before the tab opened are fetched on open, so nothing is missed, only delayed | Near real-time |
-    2. **PIN prompt.** A one-time screen that asks for the user's XChat PIN with a plain explanation of what it unlocks and that it stays on the device. Users who decline stay on Phase 1; the metadata rows are unaffected.
-    3. **Decrypt and post.** On open, and while the app is in the foreground, the client fetches `GET /2/chat/conversations/{id}/events` for conversations with rows whose `text` is empty, runs `decrypt_events()`, and posts `{dm_event_id, text}` pairs to a new ingest endpoint that fills `text` and `snippet` on the existing row. Nothing new is inserted; Phase 1 rows are the anchor. Webhook events keep arriving as metadata and get their text the next time a client opens.
-    4. **Ingest endpoint.** Authenticated, per-user, idempotent on `dm_event_id`, rejects rows that do not belong to the caller's `user_id`. Rate-limit and size-cap the payload.
-    5. **Privacy and retention.** Explicit consent copy for storing plaintext of end-to-end encrypted chats, a retention window shorter than legacy DM text, deletion on disconnect, and a per-user switch to stop text sync while keeping metadata. Legal review before rollout.
-    6. **Acceptance.** A row logged by Phase 1 gains `text` within one client session; a user who never enters a PIN keeps working with metadata only; revoking the switch clears stored text for that user.
-
-    Do not start Phase 2 until Phase 1 has run for real users and the product has decided it needs the words. Everything above the metadata layer is reversible; a store of decrypted private messages is not.
+    Enforce configurable dollar and request budgets before dispatch, shared quota accounting, and a kill switch that also removes billable subscriptions. Track coverage, lag, stalled scopes, retries, unresolved events, subscription health, and estimated versus billed spend without message content in logs. Implement disconnect and deletion before the pilot. Run the [release checks](#release-checks), then pilot internal accounts for a week and expand only when coverage and measured cost meet the agreed targets. **Check:** all release checks pass, every pause is visible, and disconnect prevents queued work from restoring deleted data.
   </Step>
 </Steps>
+
+## Webhook identity and delivery
+
+**Use webhooks as fetch notifications in Phase 1.** X's [real-time example](https://docs.x.com/xchat/real-time-events) exposes `event_uuid`, conversation, and sender, but does not expose the history event's `id` or `created_at`. Its signed message id is available after decryption. Therefore a delivery UUID cannot safely fill `dm_event_id`, and receipt time cannot stand in for message time. The proposed flow is:
+
+```text
+X webhook → verify + route → durable inbox → coalesce conversation fetch
+                                             ↓
+history API / initial import / reconciliation → canonical writer → activity
+                                                                  ↓
+                                                          resolver → rollups
+```
+
+- Register with `POST /2/webhooks` using the required app authorization; manage private Activity subscriptions using user authorization and an explicit `webhook_id`. Capture the actual create response and routing envelope before implementation; do not infer the owner from `sender_id`.
+- Implement both CRC and POST signature verification. Compare the expected `x-twitter-webhooks-signature` in constant time over the original request bytes. CRC proves endpoint ownership; it does not authenticate deliveries. See X's [webhook quickstart](https://docs.x.com/x-api/webhooks/quickstart).
+- Dedupe the durable inbox on `(user_id, x_user_id, event_uuid)`. A shared delivery can legitimately belong to more than one authorized account. Store allowlisted metadata, not `encoded_event`, tokens, signatures, or the full request body.
+- Acknowledge within X's [10-second delivery requirement](https://docs.x.com/x-api/webhooks/introduction) after the inbox commit. A database failure gets a retryable response. A poller drains pending inbox rows, so a process crash between the commit and external queue publication cannot strand them.
+- Coalesce into the conversation sync scope transactionally with marking the inbox item processed. Increment that scope's pending generation. A worker only clears the generation it acquired; notifications arriving mid-fetch remain due. An inbox item's `processed` status means “fetch scheduled,” not “activity captured.”
+- An unmappable delivery produces a bounded, redacted diagnostic and leaves reconciliation responsible for discovery. Do not create an activity row with an invented account, id, or timestamp. Remove stale subscriptions on disconnect; report provisioning and removal failures separately from capture status.
+
+This design adds a history read after a delivery. Measure the resulting latency and cost. A direct webhook writer is a later optimization only if a verified clear-text identifier can correlate with history without decrypting on the server.
+
+## Pagination, completeness, and recovery
+
+Maintain durable state per `(user_id, x_user_id, source, scope_key)`: empty `scope_key` means legacy events or chat conversation discovery; a chat conversation id means that conversation's event scan. Run rows describe attempts; state rows describe unfinished work across attempts.
+
+1. **Discovery.** Persist each list page's conversation ids and next cursor in one transaction. Use a discovery generation to track the set being imported. List order may change during a walk, so periodically restart discovery and upsert ids. An exhausted list covers that scan; it does not prove future conversations cannot appear.
+2. **Event pages.** Commit normalized rows, retryable item failures, the page cursor, and counters atomically. Save the request fingerprint with opaque cursors. A timeout before commit retries the same page. If a cursor expires, restart that scope with overlap and idempotent writes; keep the last completed boundary.
+3. **Stopping.** Initial imports exhaust every discovered conversation's event pages. A known event is not an initial-import stopping condition. Incremental scans process the whole page and stop only after crossing a previously completed boundary with the configured overlap. Seeing one known event can otherwise skip older missing rows. Compare timestamps with deterministic id tie-breaks; never order numeric ids lexicographically.
+4. **Empty or repeated pages.** No `next_token` means the API interval is exhausted. An empty page with a continuation token, a repeated cursor, or an HTTP 200 body with unresolved errors pauses that scope as `partial`; record the reason and schedule a bounded retry. Do not hot-loop or claim complete coverage. A persistently inconsistent API needs an explicit, visible coverage exception.
+5. **Budgets and concurrency.** Lease one worker per scope with expiry and a fencing version. Reject a stale worker's commit after its lease has been replaced. Share request budgets across scopes for the same X account/app/endpoint. On 429, save the cursor and resume after the reset with jitter; on transient errors, back off; on a failed reauthorization requirement, pause the connection. A page, time, or spend cap produces a resumable pause.
+6. **Reconciliation.** Prioritize notified conversations and run daily discovery plus a rotating sweep of every known conversation. Keep recent incremental work separate from older import backlogs. Expose `last_complete_at`, oldest pending work, unresolved coverage gaps, and the legacy retention deadline. Completion applies to a stated source/scope and coverage interval, not “all history forever.”
+
+Start the pilot with a configurable 24-hour incremental overlap and a target seven-day full conversation sweep. These are proposed operating targets; large accounts may require more budget or a visibly longer sweep. Never claim the target was met merely because a worker exited successfully.
+
+## Attribution, counting, and deletion
+
+**Capture is broader than a direct-message count.** Add `count_eligible` with a default of false. Set it true only for a verified message event with valid timestamp/direction, a known direct counterpart, and a resolved contact owned by the same user. A history response's `is_trusted` is not proof of decrypted message semantics. Label unclassified encrypted rows `ChatEvent` until a fixture or documented contract establishes the countable kind; key changes, joins/leaves, edits, reactions, and deletion events must not inflate counts.
+
+For direct conversations, prefer explicit participant metadata. If parsing a captured two-id conversation format, require exactly two ids, require that one equals the connected account, and select the other. Normalize only verified direct-id formats; preserve opaque group ids, including `g`-prefixed ids supported by the [Chat events endpoint](https://docs.x.com/x-api/chat/get-chat-conversation-events). Never derive membership or participant count from an arbitrary id string.
+
+Resolve `counterpart_x_user_id` in both directions. Store `counterpart_profile_url` separately from `sender_profile_url`; handles are mutable hints and numeric X identity is the durable key. Cache handle lookups across runs, batch at most 100 distinct missing ids per request, and retain unresolved rows when accounts are deleted or unavailable. Groups remain captured but excluded from per-contact attribution in Phase 1. Message requests with unknown acceptance status remain ineligible; do not equate unsolicited contact with an established relationship.
+
+### Identity and contact resolution
+
+| DM field | Meaning |
+| --- | --- |
+| `user_id` | Orbiter user who owns this private activity row |
+| `x_user_id` | Connected X account whose history was captured |
+| `counterpart_x_user_id` | Numeric X account id of the person the user sent to or received from |
+| `entity_id` | That person's node UUID in the Universe; `NULL` until resolved |
+
+`entity_id` is the same person node UUID used elsewhere in Orbiter. It is not the owner's id, an X id, or the prototype's integer `my_person_id`. Contact membership is specific to `(user_id, entity_id)`: one person can already exist in the Universe while still needing to be added to this user's contacts.
+
+1. **Capture everything available in the connected account's authorized event stream.** Persist the scoped event even when its counterparty is unresolved. For a verified direct counterpart, perform a cached, bounded Universe lookup. Match by numeric X id when available; otherwise use the normalized handle/profile URL and verify the account identity before attaching a person. Handles can change or be reassigned. Store an existing canonical person node UUID as `entity_id`; a miss, ambiguity, or lookup failure leaves it `NULL`. No person creation or enrichment runs in the capture request.
+2. **Resolve missing identities on the CRON.** Group work by distinct counterparty, rather than paying to resolve every message. Recheck the Universe immediately before creation so another import or worker's match is reused. The existing `temp/resolve-x-to-linkedin` (13399) is reference logic for finding identity evidence; its `resolved` flag alone is not an identity-confidence guarantee. Accept corroborated matches, then use the normal deduplicated person-creation path and save the resulting person node UUID. Follow canonical merge redirects. Unavailable, ambiguous, or non-person accounts stay logged without inventing a person. See the [non-LinkedIn resolution scope](/guides/open-work/enrich-via-non-linkedin-scope) for why a bare X URL must not go directly into the legacy create path.
+3. **Enrich and add contacts.** Enqueue or reuse enrichment for newly resolved people, then upsert contact membership for each affected user by `(user_id, entity_id)`. Reuse existing enrichment when sufficient. This step also handles rows whose `entity_id` was attached during capture but whose user contact does not yet exist. Keep enrichment and contact-creation checkpoints independently retryable so an optional enrichment failure cannot permanently strand an identified person. Use the shared durable resolver job state for attempts, retry times, and unresolved reasons; processing the same event again must not create another person, enrichment job, or user contact.
+4. **Backfill and update interactions.** Attach `entity_id` to all matching unresolved direct rows in the authorized user's scope, including older events and both directions. Recheck contact membership and message eligibility before enabling counts; dirty the affected contact and original month. Keep every activity row after resolution. Jobs must recheck connection revocation before writing private rows or adding contacts, so disconnect cannot be undone by a late resolver.
+
+The CRON has two work sets: unresolved counterpart identities, and resolved identities with missing user contacts. Do not equate a non-null `entity_id` with completed processing. Use bounded batches and persisted backoff for repeated failures. Shared person creation/enrichment is deduplicated by canonical identity; user contact creation is deduplicated separately by `(user_id, entity_id)`.
+
+Only public profile identity and enrichment belong in the Universe. DM content, timestamps, conversation ids, and the fact that two people exchanged DMs stay in the user's private activity and relationship scope. Adding someone to contacts does not itself assert reciprocal KNOWS evidence.
+
+### Interaction rollups and deletion
+
+The [interaction-log consumer](/guides/open-work/contacts-interaction-log) needs a coordinated migration to `(user_id, entity_id)` attribution before enabling X rollups. Any adapter for its legacy `my_person_id` contact lookup belongs at that consumer boundary; it must not reinterpret the person node UUID as an integer contact id.
+
+| Proposed field | Meaning over eligible, non-deleted direct rows |
+| --- | --- |
+| `total_x_dms`, `to_x_dms`, `from_x_dms` | All, sent, received; total equals sent plus received |
+| `total_x_dm_threads` | Distinct `(x_user_id, dm_conversation_id)` across both transports, so an upgraded conversation remains one thread |
+| `last_x_dm_at`, `last_to_x_dm_at`, `last_from_x_dm_at` | Event time overall and by direction |
+| First/last interaction and monthly buckets | Include eligible X event times; keep Stream's `chat_interactions` separate |
+
+Count a source-scoped event once per connected account. If a later fixture proves the same message appears in both transports, add an explicit identity mapping before combining their counts; do not dedupe by similar text or timestamps. Internal conversations between two X accounts owned by the same Orbiter user are excluded from contact counts. Derive relationship evidence from eligible rows under the existing private relationship policy; one incoming event does not automatically assert a reciprocal relationship.
+
+Changes to resolution, eligibility, or deletion must dirty the affected contact and month using ingestion/change time, including when the event is old. On unchanged replays preserve `entity_id`, capture-time metadata, and future plaintext state; do not overwrite resolved values with defaults. Advance `updated_at` on meaningful changes, not every read.
+
+**Phase 1 includes a deletion path.** DM metadata reveals who talks to whom and is private user data. Allowlist `raw` fields; legacy `text`/`snippet` must not also survive inside `raw`, logs, or cached payloads. Define retention for activity, inbox diagnostics, exports, and backups before rollout. Default disconnect behavior: disable DM capture and invalidate the connection generation; remove its subscriptions; cancel pending work; delete account-scoped activity and inbox data; recompute affected rollups and remove only the corresponding relationship evidence. Recheck the generation inside the write transaction so late workers cannot restore deleted rows. Preserve unrelated follower access if the user disables only DMs. Provider deletions or expiry are applied when observable; disappearance from the legacy 30-day lookup is not a deletion signal.
+
+## Release checks
+
+| Scenario | Required result |
+| --- | --- |
+| Same event delivered twice, fetched twice, or fetched during webhook processing | One scoped activity row; resolved fields preserved |
+| Two Orbiter owners or two connected X accounts see matching event ids | Independent rows and correct owner checks |
+| Crash during page commit; expired lease; cursor reset | Atomic page recovery; stale worker cannot advance state |
+| Notification arrives during a conversation fetch | New generation remains pending and is fetched |
+| Conversation appears mid-discovery; page 2 contains history; 29th conversation is nonempty | All are eventually captured; no offset or empty-streak skip |
+| Empty page with next cursor; HTTP 200 plus errors; 429; exhausted budget | Visible resumable partial/pause, no false completion |
+| Sent/received direct pair; group; unknown kind; message request | Correct counterpart; only verified eligible direct messages count |
+| Universe lookup unavailable during capture | Event saved with null `entity_id`; CRON retries resolution |
+| Existing Universe person with no contact for this user | Person node UUID attached; CRON creates the missing user contact |
+| Many events/users reference one new person; jobs overlap or retry | One canonical person and deduplicated enrichment work; one contact per `(user_id, entity_id)`; historical rows backfilled |
+| Handle changes, is reassigned, or resolves ambiguously | Numeric X identity verified; no speculative person attachment |
+| Old event resolves after import; eligible event is deleted | Original contact/month rollup recomputed correctly |
+| Invalid signature; revoked connection; disconnect while worker runs | No unauthorized write or data resurrection |
+| Two concurrent OAuth refreshes across follower and DM jobs | One rotation persists; no stale pair overwrites it |
+| Seven-day pilot | Compare reported coverage and latency with fixtures; reconcile estimated spend to console billing; exercise subscription removal and recovery |
 
 ## How email does it today
 
@@ -80,17 +174,17 @@ The DM design mirrors the email path. What each step becomes for X:
 
 | Email today | Where | X equivalent |
 | --- | --- | --- |
-| Nylas `message.created` webhook fires per message | `mvp/nylas-webhook/message-created` (180) | `chat.received` Activity webhook for encrypted chats. A scheduled poll of `GET /2/dm_events` for legacy DMs, which have no usable webhook for us. |
-| Dedupe on `(grant_id, message_id)` before logging | `mvp/activity/message-created-parse` (1913) | Dedupe on `(user_id, dm_event_id)`, enforced by a unique index; webhook deliveries also dedupe on `event_uuid` |
+| Nylas `message.created` webhook fires per message | `mvp/nylas-webhook/message-created` (180) | Chat webhooks trigger a history fetch; legacy polling remains the baseline until its Activity webhook contract is verified for this app. |
+| Dedupe on `(grant_id, message_id)` before logging | `mvp/activity/message-created-parse` (1913) | Account/source/conversation/event key for activity; separate account-scoped delivery UUID key in the inbox |
 | Direction: `from.email == grant.email_account` means sent | `parse-from` (2126) / `parse-to` | `sender_id == connected x_user_id` means sent |
 | One `email_activity` row **per participant** with `activity_type_id` 1 to 4 (`email_from`, `email_to`, `email_cc`, `email_bcc`) | `mvp/activity/log-participant-activity` (12773) | One row **per event** with two new `activity_type` rows, `x_dm_from` and `x_dm_to`. Group chats keep `participant_ids` on the row instead of fanning out. |
-| Counterparty resolved at write time by email address into `my_person_id` | `mvp/identity/check-identity-email-to` inside 12773 | No email to key on. Store `sender_x_user_id` and `sender_profile_url`; `my_person_id` is filled later by the resolver CRON. |
+| Counterparty resolved at write time by email address into `my_person_id` | `mvp/identity/check-identity-email-to` inside 12773 | Attach known person's UUID as `entity_id`; CRON resolves missing people, enriches them, and adds user contacts. |
 | `card_descriptor` text like "from Emery Wells" | 12773 | "DM from @handle", "DM to @handle", "Group DM (4)" |
 | `data_source_id` 14 (NylasEmail), master person source 47 / 48 | `data_source` (161) | New `data_source` row "X DM Sync". Rows 7 (Twitter) and 41 (Twitter Resolve) mean profile enrichment, not activity. |
-| KNOWS fan-out per sender/recipient pair | `known/ingest/_fanout_email_pairs` (12781) | Same call, made by the resolver CRON once `my_person_id` is known, never by the loggers |
-| Interaction-log counts read `email_activity` by `my_person_id` and `direction` | [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) | Add `x_dm_activity` as a fourth activity source; `direction` is a first-class column from day one |
+| KNOWS fan-out per sender/recipient pair | `known/ingest/_fanout_email_pairs` (12781) | Adapt the private relationship evidence path for eligible direct rows; do not blindly reuse email group fan-out. |
+| Interaction-log counts read `email_activity` by `my_person_id` and `direction` | [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) | Add dedicated X counters keyed by `(user_id, entity_id)` and change detection; do not reuse Stream's chat counters. |
 
-`email_activity` (597) columns for reference: `user_id`, `my_person_id`, `activity_type_id`, `card_descriptor`, `activity_timestamp`, `subject`, `grant_id`, `thread_id`, `message_id`, `snippet`, `unread`, `interlocutor_email`, `participant_count`, `data_source_id`, `temp_email_body`, `clean_message`. The DM table keeps every one that has an X analogue and drops `subject`, `unread` (X does not expose read state) and `interlocutor_email`.
+`email_activity` (597) columns for reference: `user_id`, `my_person_id`, `activity_type_id`, `card_descriptor`, `activity_timestamp`, `subject`, `grant_id`, `thread_id`, `message_id`, `snippet`, `unread`, `interlocutor_email`, `participant_count`, `data_source_id`, `temp_email_body`, `clean_message`. The production DM table adapts the X analogues, uses UUID `entity_id` for person attribution, and drops `subject`, `unread` (X does not expose read state) and `interlocutor_email`.
 
 ## Source 1: legacy DMs (GET /2/dm_events)
 
@@ -185,30 +279,24 @@ Three shape facts the capture confirmed:
 
 1. **1-to-1 conversation ids are the two user ids joined by a hyphen**, smaller id first (`16826747-1250774754799149056`). The counterpart is the id left after removing the connected account's id and the hyphen. Group ids are a single snowflake.
 2. **Optional fields are omitted, not nulled.** `participant_ids`, `attachments` and `referenced_tweets` are absent when empty even though they were requested. Read them with a default.
-3. **`includes.users` covers senders only.** For a message the connected account *sent*, the recipient has no user object (third event above), so the reference writer produced `card_descriptor = "DM to 18799825"`. Fill sent-message handles with a `GET /2/users?ids=` batch, as the chat writer already does.
+3. **This capture's `includes.users` contains only senders.** For the sent message, the recipient has no user object (third event above), so the reference writer produced `card_descriptor = "DM to 18799825"`. Cache and batch missing counterpart handles; do not assume expansions are complete.
 
 ## Source 2: encrypted chats (the X Chat API)
 
-X ships a separate **X Chat API** plus a **Chat XDK** (Rust core; Go, Python, TypeScript/WASM, .NET and JVM bindings; Go package `github.com/xdevplatform/chat-xdk/go/chatxdk`, cgo over prebuilt static libraries). Verified against docs.x.com, the `xdevplatform/chat-xdk` Go example, and live calls on 2026-09-06.
+X ships a separate **X Chat API** plus a **Chat XDK**. The metadata endpoints and response shapes below were checked against docs.x.com, the `xdevplatform/chat-xdk` Go example, and live calls on 2026-09-06.
 
-**The rule that shapes everything:** each user's private keys live on their device, backed up in a PIN-protected store; X's guidance says "Servers must not hold user private keys" and "Never share [encryption PINs and private keys] with third parties, never put them on your servers." So a server can read **metadata** with the user's OAuth token, and **text** only if decryption happens in the Orbiter client on the user's device.
-
-| Option | What we get | Where keys live | Verdict |
-| --- | --- | --- | --- |
-| **A. Server-side metadata** | Every chat event's timestamp, conversation, sender, direction, counterpart, group flag. No text. | Nowhere; nothing is decrypted. | **This spec.** Proven with 13404. Exactly what the interaction-log job counts. |
-| **B. On-device text** | Full text, decrypted in the Orbiter web or mobile app with the WASM or native XDK after the user enters their XChat PIN there; the client posts decrypted events to an ingest endpoint that fills `text` on the Phase 1 rows. | On the user's device only. | **Phase 2**, step 9 of the build plan. Sync runs only while the client is open, and storing plaintext of end-to-end encrypted messages is a deliberate privacy decision. |
-| **C. Server-side text with the user's PIN** | Full text on the server. | On Orbiter's servers. | **Do not build.** Contradicts X's developer guidance and the encryption promise users were given. |
+The server reads metadata with the user's OAuth token and does not decrypt message bodies. The current build needs no user PINs or private keys; see X's [private-key guidance](https://docs.x.com/xchat/handling-private-keys).
 
 Bot accounts (`POST /2/bots`) only see messages sent to the bot, so they do not apply.
 
-**Endpoints used, all with the user's token**
+**Endpoints and authorization** — history reads use the user's token; webhook registration and Activity subscriptions have distinct authorization requirements described above.
 
 | | Path | Notes |
 | --- | --- | --- |
 | Conversation list | `GET /2/chat/conversations?max_results=50` | Newest first. Items are `{id, type, participant_ids, is_muted}`; `participant_ids` excludes the caller. `meta.next_token` pages; `meta.has_message_requests` flags pending requests. **50 requests per 15 minutes per user.** |
-| Conversation events | `GET /2/chat/conversations/{id}/events?max_results=100` | Newest first. `id`, `sender_id`, `created_at`, `is_trusted` and `conversation_id` in the clear; `encoded_event` is the ciphertext; `message_event_signature` carries the sender's signing key. `meta.conversation_key_events` are ciphertext key changes. **30 requests per 15 minutes per user.** |
-| Handles | `GET /2/users?ids=<up to 100>&user.fields=username,name` | One batch per run resolves every participant and sender. |
-| Real-time | `POST /2/activity/subscriptions` with `event_type` `chat.received`, `chat.sent` or `chat.conversation_join` and `filter.user_id` | Webhook payload: `conversation_id`, `sender_id`, `conversation_key_version` in the clear, `encoded_event` ciphertext, `event_uuid` for dedupe. CRC: HMAC-SHA256 of the token with the consumer secret. `chat.received` $0.010 per event; the other two not billed. |
+| Conversation events | `GET /2/chat/conversations/{id}/events?max_results=100` | Captured in newest-first order. `id`, `sender_id`, `created_at`, `is_trusted` and `conversation_id` are clear-text metadata. Request the needed `chat_message_event.fields` explicitly; `meta.conversation_key_events` is separate key material and is not activity. **30 requests per 15 minutes per user observed.** |
+| Handles | `GET /2/users?ids=<up to 100>&user.fields=username,name` | Cache by X id; split more than 100 distinct missing ids into multiple requests. Partial lookup failures do not block capture. |
+| Real-time | `POST /2/activity/subscriptions` with user authorization, event type, filter, and webhook routing | Documentation-backed, not live-tested here. Delivery identity differs from history identity; see [Webhook identity](#webhook-identity-and-delivery). |
 
 **Conversation list, captured live for @Mark_L_Pederson** (first 3 of 48 on page 1):
 
@@ -315,18 +403,18 @@ Shape facts the capture confirmed:
 
 1. **Ids come back in two spellings.** The list uses hyphens (`14382995-16826747`); the events use colons (`14382995:16826747`). Store the hyphen form so legacy and chat rows share one `dm_conversation_id`.
 2. **`participant_ids` on the list excludes the caller**, so a direct conversation has exactly one participant and the counterpart needs no derivation.
-3. **Paging can lie once.** The first events page said `has_more: true` with 6 events; the next two pages were empty. Stop on an empty page as well as on a missing `next_token`.
-4. **Nothing in the metadata is sensitive to store**, but `encoded_event`, `conversation_token` and `message_event_signature` are bulky and useless without keys; the writer strips them before saving `raw`.
-5. **Handles need one extra call.** Neither endpoint expands users; a single `GET /2/users?ids=` batch per run covers senders and counterparts. One of Mark's 140 walked conversations resolved to no user at all (deleted or suspended account); its rows keep the raw id.
-6. **Chat history is not capped at 30 days.** The oldest event logged is from 2025-11-15, the month X switched DMs to Chat. The 30-day window belongs to the legacy DM endpoint only.
-7. **Legacy-only threads return zero chat events.** Of the newest 140 conversations, 16 had chat events and 124 had none; the two sources do not overlap, so both loggers are needed and neither double-counts.
+3. **Paging was inconsistent.** The first events page said `has_more: true` with 6 events; the next two pages were empty. The reference stopped there. Production must record a partial interval and retry without looping indefinitely; this response is not proof of complete history.
+4. **Metadata is private relationship data.** The reference strips `encoded_event`, `conversation_token` and `message_event_signature`. Production uses an explicit field allowlist, ownership checks, and retention/deletion rules rather than retaining all future API fields by default.
+5. **This capture needed a separate handle lookup.** Its requests returned no expanded users; batch missing ids in groups of at most 100 and cache results. One of Mark's 140 walked conversations resolved to no user at all (deleted or suspended account); its rows keep the raw id.
+6. **The captured chat history extends beyond 30 days.** The oldest logged event is from 2025-11-15. This demonstrates older access for this account, not unlimited retention or guaranteed recovery for every conversation.
+7. **Most tested conversations returned zero chat events.** Of the newest 140, 16 had chat events and 124 had none. Both sources are needed; this sample does not establish global non-overlap or prove unvisited conversations are empty.
 8. **The list is large and all direct.** 499 conversations for Mark, none of type `group`; 11 list pages at 50 per page.
 
 ## Reference tables
 
 ### x_dm_activity (789)
 
-One row per event per Orbiter user; two users in the same group each get their own row, which is why the unique key includes `user_id`. Built in Xano on 2026-09-06 and holding 9 rows from the smoke tests (3 legacy, 6 chat).
+Historical Xano shape, built on 2026-09-06. The final recorded smoke test had 81 rows (3 legacy, 78 chat). The Go proposal below changes the key and adds eligibility, deletion, and counterparty fields; do not copy the Xano uniqueness rule into production.
 
 <Warning>
   X ids (users, events, conversations) are 64-bit snowflakes and exceed the safe integer range. Store every X id as **text**, never int.
@@ -345,9 +433,9 @@ One row per event per Orbiter user; two users in the same group each get their o
 | <code style={{color: "#16a34a"}}>card_descriptor</code> | text | derived | "DM from @handle", "DM to @handle", "Group DM (n)" |
 | <code style={{color: "#16a34a"}}>activity_timestamp</code> | timestamp | API `created_at` | When the event happened on X |
 | <code style={{color: "#16a34a"}}>x_user_id</code> | text | token row | The connected account. The `grant_id` analogue. |
-| `dm_event_id` | text | API `id` | Unique with `user_id`. The `message_id` analogue. |
+| `dm_event_id` | text | API `id` | Historical Xano key pairs it with `user_id`; production also scopes by account, source, and conversation. Not a webhook UUID or a decrypted signed message id. |
 | `dm_conversation_id` | text | API | Hyphen form for both sources. The `thread_id` analogue. |
-| `event_type` | enum | API | `MessageCreate`, `ParticipantsJoin`, `ParticipantsLeave`; chat rows use `MessageCreate` |
+| `event_type` | enum | API/reference | Xano labels chat rows `MessageCreate`; production uses `ChatEvent` until message semantics are established. |
 | `text` | text | API `text` | Legacy rows only. Always empty for `xchat`. |
 | <code style={{color: "#16a34a"}}>snippet</code> | text | derived | First 160 characters of `text`; empty for `xchat` |
 | `sender_x_user_id` | text | API `sender_id` | |
@@ -358,9 +446,9 @@ One row per event per Orbiter user; two users in the same group each get their o
 | <code style={{color: "#16a34a"}}>participant_count</code> | int | derived | 2 for 1-to-1, else members including the account |
 | <code style={{color: "#16a34a"}}>is_group</code> | bool | derived | |
 | `referenced_tweets`, `attachments` | json | API | Legacy rows only |
-| `raw` | json | API | Legacy: the event as returned. Chat: the event minus ciphertext, token and signature. |
-| <code style={{color: "#16a34a"}}>conversation_key_version</code> | text | webhook | Chat webhook rows only |
-| <code style={{color: "#16a34a"}}>event_uuid</code> | text | webhook | Chat webhook rows only, for dedupe |
+| `raw` | json | API/reference | Xano stores the legacy event or a stripped chat event. Production stores allowlisted metadata only, with no duplicate plaintext. |
+| <code style={{color: "#16a34a"}}>conversation_key_version</code> | text | reserved reference field | Production webhook metadata belongs to the inbox, not a fabricated activity row. |
+| <code style={{color: "#16a34a"}}>event_uuid</code> | text | reserved reference field | Production delivery dedupe belongs to the account-scoped webhook inbox. |
 | <code style={{color: "#16a34a"}}>data_source_id</code> | int | Orbiter | New `data_source` row "X DM Sync" |
 | <code style={{color: "#16a34a"}}>sync_run_id</code> | int | logger | Run that wrote or last touched the row |
 
@@ -368,7 +456,7 @@ Indexes on 789: unique `(user_id, dm_event_id)`; btree `(user_id, activity_times
 
 ### x_dm_sync_run (790)
 
-One row per logger attempt, so a large inbox resumes across rate-limit windows and incremental runs know where they stopped. Columns: `user_id`, `x_user_id`, `source` (`legacy_dm` or `xchat`), `mode` (`initial`, `incremental`), `status` (`running`, `paused_rate_limit`, `complete`, `failed`), `events_seen`, `events_new`, `pages_fetched`, `next_token`, `newest_event_id`, `started_at`, `finished_at`, `error_message`. Btree on `status` and `(user_id, created_at)`. Five runs recorded from the smoke tests.
+Historical run record: `user_id`, `x_user_id`, `source`, `mode`, `status`, counts, `next_token`, `newest_event_id`, timestamps, and `error_message`. Btree on `status` and `(user_id, created_at)`. Ten runs in the final smoke-test record. A single `next_token` cannot represent both conversation discovery and every conversation's event pages; production uses a separate durable state table.
 
 ## Reference functions
 
@@ -386,72 +474,121 @@ All four read the token row in their own stack and make no nested `function.run`
 {"sync_run_id": 5, "status": "complete", "account_id": "16826747", "username": "Mark_L_Pederson", "conversations_seen": 1, "events_seen": 6, "events_new": 6, "events_updated": 0, "requests": 3, "users_resolved": 1, "rate_limited": false, "last_status": 200, "conversations": [{"conversation_id": "14382995-16826747", "is_group": false, "counterpart": "14382995", "counterpart_username": "jasondiamond", "events_seen": 6, "events_new": 6, "pages": 3}]}
 ```
 
-**`twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403), read-only harnesses.** They return the raw response body and headers of one call, which is how every number on this page was observed. 13403 takes an optional `path` override to probe any Chat endpoint.
+**`twitter-api-dm-events` (13401) and `twitter-api-chat-events` (13403), read-only harnesses.** They return raw response bodies and headers used for the recorded fixtures. 13403 takes an optional `path` override to probe a Chat endpoint. Production rates and coverage targets elsewhere on this page are not measurements from these harnesses.
 
 **Deliberately missing from all four:** schedules, `log_crash` writes (the enum has no X phase yet), resolver calls, graph writes, `activity_type` and `data_source` rows. Those are Go work per the build plan.
 
 ## Cost, rate limits, and cadence
 
-{/* TODO(Mark): confirm the per-event prices on the app's plan in the developer portal before Charles hard-codes the defaults. */}
+The [pricing page](https://docs.x.com/x-api/getting-started/pricing), checked 2026-09-06, lists DM Event reads and User reads at \$0.010 per resource, `chat.received` at \$0.010 per delivered event, and `chat.sent`/`chat.conversation_join` as not billed. It also documents **deduplication within each UTC day as a soft guarantee**. Repeated reads of the same event are therefore not a guaranteed charge on every poll. The old \$1.80/month four-hour “floor” was incorrect. Chat history/list pricing and any cross-delivery/read billing overlap still need confirmation in this app's console.
 
-- **Pricing is pay-per-use.** docs.x.com lists DM event reads at $0.010 per resource, DM creates at $0.015 per request, the `chat.received` webhook at $0.010 per event, and `chat.sent`, `chat.conversation_join`, `dm.sent` and `dm.read` webhook events as not billed. No tiers.
-- **Legacy DMs have no `since_id`**, so every poll re-reads the newest page and pays for every event on it. The floor per user per month at one event per poll: every 15 minutes $28.80, hourly $7.20, every 4 hours $1.80, daily $0.30. Hence the dispatcher design: tick every 15 minutes, sync each account only when due, default cadence 4 hours, probe with `max_results=1` and page only when the newest id changed.
-- **Encrypted chats cost only on receipt.** The webhook bills new received events; the events endpoint's read price is not listed on the pricing page, and the API announcement described a limited-time free allowance of 500 messages per day. TODO(Charles): confirm before sizing the daily reconciliation.
-- **Per-user limits:** `dm_events` 15, `chat/conversations` 50, `chat/conversations/{id}/events` 30 requests per 15 minutes. Limits are per connected user, so accounts do not contend with each other; cap concurrency to protect AlloyDB and the budget.
+Use three separate budget categories: first import, ongoing reads (including user lookups), and billable deliveries. As an illustration, reading one unchanged legacy event on each of 30 UTC days costs approximately \$0.30 if daily deduplication holds; this excludes new events and all other resources. Model a conservative no-dedup case too. Cache handles: one request returning 100 users is 100 resources, not one. Do not size production around an unverified promotional allowance.
+
+Keep the four-hour legacy cadence as a pilot freshness choice, not a pricing theorem. Chat notifications trigger coalesced fetches; daily discovery and the rotating sweep consume separate read budgets. A “3,000 events/day” limit could permit \$30/day at \$0.010 per resource before other costs, so define caps in dollars as well as requests/resources. Reserve the maximum estimated batch cost before dispatch and reconcile actual units afterward. Unknown unit prices block broad rollout, not fixture-based development.
+
+The reference observed 15 legacy-event, 50 conversation-list, and 30 conversation-event requests per 15 minutes per user. Treat these as starting limits; respect returned headers and any shared app-level limits. Concurrent conversation workers consume the same account's endpoint budget. An application kill switch must stop polling **and remove billable subscriptions**; acknowledging or discarding already-delivered webhooks does not prevent provider charges. Use the console's spending limit as a second bound, and expose gaps caused by budget pauses.
 
 ## Copy-paste migration (AlloyDB)
+
+**Proposed new Go tables; not a migration of live Xano data.** These four tables replace the two-table prototype's production role. Validate in a disposable database first. Production person attribution uses nullable UUID `entity_id`, the counterparty's person node UUID; the historical Xano `my_person_id` column is not carried into this schema. This is a logical reference to the person node, not a cross-database foreign key. Connection ownership, encrypted tokens, revocation generation, and subscription routing belong to the existing connection model and must be integrated before enabling jobs. Add its foreign keys when that model's canonical table/key is chosen. `0` type/source sentinels retain reference compatibility; eligible rows require a resolved person, valid lookup ids, and application-verified contact membership for the same user.
 
 ```sql
 CREATE TABLE x_dm_activity (
   id                        BIGSERIAL PRIMARY KEY,
   created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-  user_id                   BIGINT      NOT NULL,
-  my_person_id              BIGINT      NOT NULL DEFAULT 0,
+  user_id                   BIGINT      NOT NULL CHECK (user_id > 0),
+  entity_id                 UUID,
   activity_type_id          INT         NOT NULL DEFAULT 0,
-  source                    TEXT        NOT NULL DEFAULT 'legacy_dm' CHECK (source IN ('legacy_dm', 'xchat')),
-  direction                 TEXT        NOT NULL DEFAULT 'received' CHECK (direction IN ('sent', 'received')),
+  source                    TEXT        NOT NULL CHECK (source IN ('legacy_dm', 'xchat')),
+  direction                 TEXT        NOT NULL CHECK (direction IN ('sent', 'received', 'unknown')),
   card_descriptor           TEXT        NOT NULL DEFAULT '',
   activity_timestamp        TIMESTAMPTZ,
-  x_user_id                 TEXT        NOT NULL DEFAULT '',
-  dm_event_id               TEXT        NOT NULL,
-  dm_conversation_id        TEXT        NOT NULL DEFAULT '',
-  event_type                TEXT        NOT NULL DEFAULT 'MessageCreate' CHECK (event_type IN ('MessageCreate', 'ParticipantsJoin', 'ParticipantsLeave')),
+  x_user_id                 TEXT        NOT NULL CHECK (x_user_id <> ''),
+  dm_event_id               TEXT        NOT NULL CHECK (dm_event_id <> ''),
+  dm_conversation_id        TEXT        NOT NULL CHECK (dm_conversation_id <> ''),
+  event_type                TEXT        NOT NULL CHECK (event_type IN ('MessageCreate', 'ParticipantsJoin', 'ParticipantsLeave', 'ChatEvent', 'Other')),
   text                      TEXT        NOT NULL DEFAULT '',
   snippet                   TEXT        NOT NULL DEFAULT '',
   sender_x_user_id          TEXT        NOT NULL DEFAULT '',
   sender_username           TEXT        NOT NULL DEFAULT '',
   sender_profile_url        TEXT        NOT NULL DEFAULT '',
   counterpart_x_user_id     TEXT        NOT NULL DEFAULT '',
+  counterpart_profile_url   TEXT        NOT NULL DEFAULT '',
   participant_ids           JSONB,
   participant_count         INT         NOT NULL DEFAULT 0,
   is_group                  BOOLEAN     NOT NULL DEFAULT false,
   referenced_tweets         JSONB,
   attachments               JSONB,
   raw                       JSONB,
-  conversation_key_version  TEXT        NOT NULL DEFAULT '',
-  event_uuid                TEXT        NOT NULL DEFAULT '',
+  count_eligible            BOOLEAN     NOT NULL DEFAULT false,
+  deleted_at                TIMESTAMPTZ,
   data_source_id            INT         NOT NULL DEFAULT 0,
-  sync_run_id               BIGINT      NOT NULL DEFAULT 0
+  sync_run_id               BIGINT      NOT NULL DEFAULT 0,
+  CONSTRAINT x_dm_phase1_metadata_only CHECK (source <> 'xchat' OR (text = '' AND snippet = '')),
+  CONSTRAINT x_dm_eligible_fields CHECK (
+    NOT count_eligible OR (
+      event_type = 'MessageCreate' AND direction IN ('sent', 'received')
+      AND activity_timestamp IS NOT NULL AND entity_id IS NOT NULL
+      AND activity_type_id > 0 AND data_source_id > 0
+      AND counterpart_x_user_id <> '' AND counterpart_x_user_id <> x_user_id
+      AND NOT is_group AND deleted_at IS NULL
+    )
+  )
 );
-CREATE UNIQUE INDEX x_dm_activity_user_event_uq ON x_dm_activity (user_id, dm_event_id);
-CREATE UNIQUE INDEX x_dm_activity_event_uuid_uq ON x_dm_activity (event_uuid) WHERE event_uuid <> '';
+CREATE UNIQUE INDEX x_dm_activity_user_event_uq
+  ON x_dm_activity (user_id, x_user_id, source, dm_conversation_id, dm_event_id);
 CREATE INDEX x_dm_activity_user_ts_idx        ON x_dm_activity (user_id, activity_timestamp DESC);
-CREATE INDEX x_dm_activity_conversation_idx   ON x_dm_activity (dm_conversation_id);
-CREATE INDEX x_dm_activity_unresolved_idx     ON x_dm_activity (my_person_id) WHERE my_person_id = 0;
+CREATE INDEX x_dm_activity_conversation_idx   ON x_dm_activity (user_id, x_user_id, dm_conversation_id);
+CREATE INDEX x_dm_activity_unresolved_idx     ON x_dm_activity (user_id, counterpart_x_user_id)
+  WHERE entity_id IS NULL AND NOT is_group AND deleted_at IS NULL;
+CREATE INDEX x_dm_activity_resolved_person_idx ON x_dm_activity (user_id, entity_id)
+  WHERE entity_id IS NOT NULL AND NOT is_group AND deleted_at IS NULL;
+CREATE INDEX x_dm_activity_changed_idx        ON x_dm_activity (updated_at, id);
+CREATE INDEX x_dm_activity_contact_ts_idx     ON x_dm_activity (user_id, entity_id, activity_timestamp)
+  WHERE count_eligible AND deleted_at IS NULL;
+
+CREATE TABLE x_dm_sync_state (
+  id                    BIGSERIAL PRIMARY KEY,
+  user_id               BIGINT NOT NULL CHECK (user_id > 0),
+  x_user_id             TEXT NOT NULL CHECK (x_user_id <> ''),
+  source                TEXT NOT NULL CHECK (source IN ('legacy_dm', 'xchat')),
+  scope_key             TEXT NOT NULL DEFAULT '',
+  mode                  TEXT NOT NULL DEFAULT 'initial' CHECK (mode IN ('initial', 'incremental', 'reconcile')),
+  status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
+                          ('pending', 'running', 'paused_rate_limit', 'paused_budget', 'partial', 'needs_reconsent', 'complete', 'disabled')),
+  checkpoint            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pending_generation    BIGINT NOT NULL DEFAULT 0,
+  processed_generation  BIGINT NOT NULL DEFAULT 0,
+  next_sync_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_complete_at      TIMESTAMPTZ,
+  lease_owner           TEXT,
+  lease_expires_at      TIMESTAMPTZ,
+  lease_version         BIGINT NOT NULL DEFAULT 0,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, x_user_id, source, scope_key),
+  CHECK (source = 'xchat' OR scope_key = '')
+);
+CREATE INDEX x_dm_sync_state_due_idx ON x_dm_sync_state (next_sync_at)
+  WHERE status NOT IN ('disabled', 'needs_reconsent');
 
 CREATE TABLE x_dm_sync_run (
   id                BIGSERIAL PRIMARY KEY,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sync_state_id     BIGINT      NOT NULL REFERENCES x_dm_sync_state(id),
   user_id           BIGINT      NOT NULL,
   x_user_id         TEXT        NOT NULL DEFAULT '',
   source            TEXT        NOT NULL DEFAULT 'legacy_dm' CHECK (source IN ('legacy_dm', 'xchat')),
-  mode              TEXT        NOT NULL DEFAULT 'incremental' CHECK (mode IN ('initial', 'incremental')),
-  status            TEXT        NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'paused_rate_limit', 'complete', 'failed')),
+  mode              TEXT        NOT NULL CHECK (mode IN ('initial', 'incremental', 'reconcile')),
+  status            TEXT        NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'paused_rate_limit', 'paused_budget', 'partial', 'needs_reconsent', 'complete', 'failed', 'cancelled')),
   events_seen       INT         NOT NULL DEFAULT 0,
   events_new        INT         NOT NULL DEFAULT 0,
   pages_fetched     INT         NOT NULL DEFAULT 0,
+  requests_made     INT         NOT NULL DEFAULT 0,
+  estimated_cost_usd NUMERIC(14,6) NOT NULL DEFAULT 0,
+  resume_at         TIMESTAMPTZ,
+  stop_reason       TEXT        NOT NULL DEFAULT '',
   next_token        TEXT        NOT NULL DEFAULT '',
   newest_event_id   TEXT        NOT NULL DEFAULT '',
   started_at        TIMESTAMPTZ,
@@ -460,7 +597,28 @@ CREATE TABLE x_dm_sync_run (
 );
 CREATE INDEX x_dm_sync_run_status_idx ON x_dm_sync_run (status);
 CREATE INDEX x_dm_sync_run_user_idx   ON x_dm_sync_run (user_id, created_at DESC);
+
+CREATE TABLE x_dm_webhook_inbox (
+  id                  BIGSERIAL PRIMARY KEY,
+  received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id             BIGINT NOT NULL CHECK (user_id > 0),
+  x_user_id           TEXT NOT NULL CHECK (x_user_id <> ''),
+  event_uuid          TEXT NOT NULL CHECK (event_uuid <> ''),
+  subscription_id     TEXT NOT NULL,
+  event_type          TEXT NOT NULL,
+  dm_conversation_id  TEXT NOT NULL CHECK (dm_conversation_id <> ''),
+  metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processed', 'ignored')),
+  processed_at        TIMESTAMPTZ,
+  UNIQUE (user_id, x_user_id, event_uuid)
+);
+CREATE INDEX x_dm_webhook_inbox_pending_idx ON x_dm_webhook_inbox (received_at)
+  WHERE status = 'pending';
 ```
+
+The unresolved index supports identity work. The resolved-person index supports selecting distinct `(user_id, entity_id)` pairs and checking for missing contact membership; a resolved row must not disappear from the CRON's work until that membership is handled. Person resolution and enrichment retries use the shared resolver's durable job state, separately from the API sync tables here.
+
+The versioned `checkpoint` object stores the opaque `next_token`, request fingerprint, discovery/import generation, completed event boundary, current scan's candidate boundary, and any unresolved item errors. Every state update checks the lease version and connection generation in the same transaction as the page writes. Do not promote a candidate boundary after a partial scan. Set `updated_at` explicitly on mutations; `DEFAULT now()` only handles inserts.
 
 ## Smoke-test record
 
@@ -475,7 +633,7 @@ All on 2026-09-06, Xano workspace 3, live data source.
 | 14:15 | @Mark_L_Pederson | chat | Run 5, 13404 on `14382995-16826747`: 6 rows, `DM from @jasondiamond` and `DM to @jasondiamond`, `text` empty, `raw` stripped. |
 | 14:33 | @Mark_L_Pederson | chat | Run 6, newest 28 conversations, one page each, 13 seconds: 70 events, 64 new (busiest: @nicalo06 25, @neiltak 12, @JoinTheBNC 8, @_gbalaji 7). 16 of the 28 returned zero events. |
 | 14:48 to 15:37 | @Mark_L_Pederson | chat | Runs 7 to 10 in the background, one 28-conversation batch per rate-limit window (`skip_conversations` 28, 56, 84, 112): 3, 5, 0 and 0 events. A fifth batch at 15:35 threw the token-expiry guard and was re-run after `twitter-api-token` refreshed row 3. |
-| 15:40 | @Mark_L_Pederson | chat | List paged to the end: 499 conversations, all direct. Walk stopped at 140 because conversations 85 to 140 held nothing and the rest are older. **Final table: 81 rows, 3 legacy and 78 chat, 16 conversations, 37 sent and 44 received, oldest 2025-11-15, newest 2026-09-06.** |
+| 15:40 | @Mark_L_Pederson | chat | List paged to the end: 499 conversations, all direct. Event walk stopped at 140 after conversations 85 to 140 returned nothing; **359 remained unvisited**. Recorded table: 81 rows, 3 legacy and 78 chat, 16 conversations, 37 sent and 44 received, oldest 2025-11-15, newest 2026-09-06. This is a partial history scan. |
 
 **Lessons that go straight into the Go build**
 
@@ -484,12 +642,14 @@ All on 2026-09-06, Xano workspace 3, live data source.
 - **Authorization codes die in 30 seconds and are single-use.** Hand-pasting failed three times; a one-shot local listener that exchanged the code 2 seconds after the redirect worked first time. The Go callback must exchange in the request that receives it.
 - **The console can mint a user token for the app owner.** Keys & Tokens → OAuth 2.0 Keys generates an access and refresh token for the owning account with chosen scopes; seeding the refresh token through `twitter-api-oauth-exchange` (13390) stores the rotated pair. Internal accounts only.
 - **Xano CLI runner quirks.** `xano function run --json -` (stdin) delivers an empty input; use `-d key=value` or inline `--json`. Nested `function.run` calls fail in the runner, which is why all four functions read the token row themselves. `function create` drops `?=0` defaults on optional ints.
-- **X Chat and legacy DMs disagree on id spelling and paging** (see Source 2). Normalise to hyphens and stop on empty pages.
+- **X Chat and legacy DMs disagree on id spelling and paging** (see Source 2). Normalize verified direct-id formats; preserve group ids. The reference stopped on empty pages, but production records contradictory continuation metadata as incomplete.
 
-**Reproduce**
+**Reproduce the historical prototype**
+
+These commands write Xano reference rows and make billable API calls; they are not the Go acceptance suite. The static `state`/plain PKCE values and `skip_conversations` offset below are historical harness inputs, not production patterns. Use the authenticated callback and durable cursor design above in Go. No calls were rerun during the plan review.
 
 ```bash
-# consent (in a browser signed in as the account to test; callback must be registered on the app)
+# consent (sign in as the account to test; callback must be registered on the app)
 https://x.com/i/oauth2/authorize?response_type=code&client_id={X_CLIENT_ID}&redirect_uri={CALLBACK_URI_URL_ENCODED}&scope=tweet.read%20users.read%20follows.read%20dm.read%20offline.access&state=log-x-dms&code_challenge=challenge&code_challenge_method=plain
 
 # exchange within 30 seconds of the redirect (or seed a console refresh token with -d refresh_token=...)
@@ -501,7 +661,7 @@ xano function run twitter-api-sync-dms -w 3 --no-input-check --json '{"user_id":
 # encrypted chats: one conversation, or omit conversation_id to walk the newest 10
 xano function run twitter-api-sync-chats -w 3 --no-input-check --json '{"user_id":12,"x_user_id":"16826747","conversation_id":"14382995-16826747","max_pages_per_conversation":3}'
 
-# full walk in 28-conversation batches, one per 15-minute window; refresh the token first each time
+# historical partial walk in 28-conversation batches; offsets are not production checkpoints
 xano function run twitter-api-token -w 3 --no-input-check --json '{"token_type":"user","x_user_id":"16826747"}'
 xano function run twitter-api-sync-chats -w 3 --no-input-check --json '{"user_id":12,"x_user_id":"16826747","max_conversations":28,"max_pages_per_conversation":1,"skip_conversations":0}'
 
@@ -516,6 +676,8 @@ curl -s -H "Authorization: Bearer $TOKEN" -H "X-Data-Source: live" \
 ```
 
 ## Sources
+
+The four XanoScript snapshots below are preserved unchanged so the smoke-test record remains reproducible. Their writes, completion statuses, and keys are prototype behavior. The revised Go plan and migration above take precedence.
 
 <Accordion title="XanoScript — twitter-api-sync-chats (13404), encrypted-chat writer">
 ````xanoscript
@@ -2783,13 +2945,17 @@ function "twitter-api-dm-events" {
 
 ## Open questions
 
-1. **When to start Phase 2.** Message text for encrypted chats is scoped as step 9 of the build plan (Option B, on-device decryption) and needs the user's XChat PIN entered in the Orbiter client. Decide the trigger: a product need for the words, or a share of connected users on encrypted-only conversations.
-2. **Retention of legacy text.** Email stores `clean_message`, so parity says store `text` for legacy DMs. Decide the retention and what happens on disconnect.
-3. **`user_id` versus `entity_id`.** Tables 789 and 790 use `user_id` to match `email_activity`; the parent page adds `entity_id` to `x_oauth_token` for the same Orbiter user. Pick one name before the Go tables are created.
-4. **Activity types.** `x_dm_from` and `x_dm_to` mirror email. Group chats could take a third (`x_dm_group`) if the interaction-log job wants to discount them the way `direct_emails` discounts cc-only mail.
-5. **Message requests.** The conversation list flags `has_message_requests`; whether those conversations are included in the list, and whether they should count, needs one probe.
-6. **Multiple X accounts per Orbiter user.** If allowed, the loggers run once per token row and `x_user_id` tells rows apart.
-7. **Deleted or protected counterparties.** Store `sender_username` at capture time so the row still reads if the user lookup later fails.
+| Decision / evidence | Owner | Needed before |
+| --- | --- | --- |
+| Verify subscription routing, required scopes, history event semantics, and message-request acceptance visibility with redacted fixtures | Charles | Enabling webhook routing or encrypted message counts |
+| Confirm Chat list/history and user-read billing, quota scopes, pilot dollar caps, and freshness/coverage targets | Mark + Charles | Paid pilot; broad rollout requires measured spend |
+| Choose retention periods, backup expiry, and disconnect deletion timing for private metadata and legacy text | Mark | Any real-user pilot |
+| Bind the shared connection model to `user_id`; translate older owner fields at the boundary; reserve `entity_id` for the counterparty's person node UUID across follower and DM plans | Charles | Enabling workers |
+| Add X activity-type/data-source rows; coordinate UUID attribution, resolver job state, contact membership, and interaction-log migrations | Charles | User-facing contact counts |
+| Decide whether to expose multiple X connections in the UI | Mark | UI rollout; storage is already account-scoped |
+| Define group attribution and relationship strength from unsolicited/request traffic | Mark | Expanding beyond eligible direct conversations |
+
+The implementation defaults are settled by this revision: `user_id` is the activity owner, direct counterpart identity drives resolution, group/request-unknown rows are not counted, account-scoped dedupe supports multiple connections, and disconnect removes DM data without letting stale work restore it.
 
 ## What exists in Xano today
 
@@ -2888,7 +3054,7 @@ The email table this design mirrors, the activity-type lookup (email uses ids 1 
 ## Related
 
 - [X Followers Capture](/guides/open-work/x-followers-capture) owns the OAuth flow, `x_oauth_token`, and the resolver CRON this page reuses.
-- [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) is the consumer that counts activity per contact and needs `x_dm_activity` as a fourth source.
+- [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) needs the dedicated X counters, eligibility filters, and change detection described above.
 - [message.created](/guides/log-parse/message-created) is the email webhook chain this design mirrors.
 - X Chat API docs: [introduction](https://docs.x.com/xchat/introduction), [getting started](https://docs.x.com/xchat/getting-started), [real-time events](https://docs.x.com/xchat/real-time-events), [handling private keys](https://docs.x.com/xchat/handling-private-keys), and the [chat-xdk repository](https://github.com/xdevplatform/chat-xdk) with the Go example under `examples/go`.
 - X DM API: [DM lookup introduction](https://docs.x.com/x-api/direct-messages/lookup/introduction), [rate limits](https://docs.x.com/x-api/fundamentals/rate-limits), [pricing](https://docs.x.com/x-api/getting-started/pricing).

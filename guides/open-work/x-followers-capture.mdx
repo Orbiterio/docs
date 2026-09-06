@@ -1,132 +1,193 @@
 ---
 title: "X Followers Capture"
 sidebarTitle: "X Followers Capture"
-description: "Build outline for capturing and logging a user's X (Twitter) followers after they connect X via OAuth: the OAuth handoff, the capture function, the x_follower table schema (every field the API returns plus entity_id and profile_url), rate limits, and what already exists in Xano."
+description: "Go build plan for X follower capture: owned connections, person UUID attribution, resumable imports, reliable follower-state reconciliation, Universe resolution, cost controls, and release checks. Xano artifacts are reference implementations."
 icon: "x-twitter"
 iconType: "brands"
 ---
 
 <Info>
-  **Build outline for Charles.** The OAuth bootstrap, token refresh, and a followers test harness already exist in Xano workspace 3 (listed below). The capture function and the `x_follower` table are **proposed** and not built. Anything marked TODO needs confirming before it is coded.
+  **Go build plan for Charles on GCP.** Xano workspace 3 contains OAuth, token-refresh, follower-fetch, and identity-resolution **reference artifacts**, listed below. The capture tables and worker described here are proposed. This review updates the specification; it does not deploy tables, workers, or schedules. API documentation and the token-table schema were checked on 2026-09-06; the sample responses below are earlier scoping evidence.
 </Info>
 
 ## What this delivers
 
-When a user connects their X account to Orbiter, we capture every account that follows them and log one row per follower in a new `x_follower` table. Each row carries the full user object the X API returns, plus two Orbiter fields: `entity_id` (the Orbiter user whose follower this is) and `profile_url` (`https://x.com/{username}`). The rows feed the X-to-LinkedIn resolver and, later, the Known relationship layer.
+When a user connects X with follower-import consent, capture the followers returned for that connected account into `x_follower`. Keep one durable row per `(user_id, x_user_id, follower_x_user_id)`, including unresolved accounts. These rows describe observed follower state; a completed paginated pass is not a transactionally frozen snapshot of X.
+
+Use **`entity_id` for the follower's person node UUID**, consistent with [Log X DMs](/guides/open-work/x-followers-capture/log-x-dms). Attach it when a bounded lookup finds a verified existing person; otherwise leave it null and let the CRON resolve and enrich missing people. Capture never waits for enrichment. Keep resolved rows so future scans can reconcile changes.
+
+A follower means **that account follows the connected account**. It does not prove that the connected user follows them back or personally knows them. Preserve that direction and source in the user's relationship data; do not automatically turn a follow into reciprocal KNOWS evidence.
+
+## Identity and ownership contract
+
+| Field | Meaning |
+| --- | --- |
+| `user_id` | Orbiter owner of the connection and private follower rows; proposed BIGINT matching the app user key |
+| `x_user_id` | Connected X account being scanned; text, same meaning as in the DM plan |
+| `follower_x_user_id` | X id from each returned follower's `id`; text |
+| `entity_id` | Follower's resolved person node UUID; nullable UUID, never an owner id or integer contact id |
+| `profile_url` | Current normalized X profile URL; a mutable identity hint, not the dedupe key |
+
+The old outline used `entity_id` for the owner and `x_user_id` for the follower. **Replace those meanings in the proposed Go contract.** Do not copy an old owner integer into the new UUID column. Keep connection ownership, X account identity, and person identity distinct at every boundary. A person's UUID is a logical graph reference; do not declare a foreign key to a separate database.
+
+Support account-scoped storage even if the first UI allows only one X account per user. Authenticate user actions in the App backend and derive `user_id` there. Workers must validate the owned connection; an arbitrary handle or a client-supplied owner id must not authorize a scan. Whether one X account can be connected by multiple Orbiter users is a product decision; never transfer an existing owner's connection silently.
+
+## Build plan for Charles
 
 <Steps>
-  <Step title="User connects X">
-    The app starts the X OAuth 2.0 authorization-code flow with PKCE. Request the scopes `users.read`, `tweet.read`, `follows.read`, and `offline.access`. The last one returns a refresh token so the capture can run again without the user present. The callback URL must match the X developer portal exactly.
+  <Step title="1. Establish the environment and connection contracts">
+    Define the owned connection and the identifier mapping above, with separate callback configuration and secrets per environment. Follower capture can be built independently of Universe environment readiness. When enabling Universe lookup and projection, bind each App environment to its matching Universe environment; a DEV job must never resolve or write against LIVE. **Check:** unavailable or misconfigured Universe routing defers resolution while follower capture continues with unresolved rows.
   </Step>
-  <Step title="Exchange the code and store the token">
-    The callback calls `twitter-api-oauth-exchange` (13390) with the code, redirect URI, and PKCE verifier. It exchanges the code at `/2/oauth2/token`, looks the account up at `/2/users/me`, and upserts the pair into `x_oauth_token` keyed by `x_user_id`.
-
-    **Change required:** `x_oauth_token` has no `entity_id` today, so a token row cannot be tied back to an Orbiter user. Add `entity_id` (int) to the table and accept it as an input on 13390. See the table notes below.
+  <Step title="2. Implement OAuth and shared token management in Go">
+    Request `users.read`, `tweet.read`, `follows.read`, and `offline.access`; DM access remains a separate opt-in. Use S256 PKCE and random, expiring, single-use `state` bound to the signed-in user and environment. Exchange the code immediately in the callback, confirm the account through `/2/users/me`, verify granted scopes, and durably store the encrypted token pair with its owned connection. Persist capture intent in the same database transaction so a failed queue send can be retried. **Check:** denied consent, duplicate callbacks, mismatched state, and cross-user connection claims are handled explicitly.
   </Step>
-  <Step title="Start the capture">
-    On a successful exchange, call the proposed `twitter-api-capture-followers` with the `entity_id`. Run it async (`runtime_mode = "async-shared"`) or through a queue row so the OAuth callback returns immediately. The function reads the user-context token row in its own stack, pages the followers endpoint, and upserts rows.
+  <Step title="3. Build storage and prove the API fixtures">
+    Implement the proposed row and capture-run contracts below in AlloyDB. Capture redacted fixtures for a first page, continuation page, empty account, missing fields, HTTP 200 with errors, and a protected account. Confirm endpoint pricing and returned rate-limit headers for this app. **Check:** the same follower under two connected accounts or owners stays independent; missing optional fields stay unknown instead of becoming false or zero.
   </Step>
-  <Step title="Checkpoint and resume">
-    The followers endpoint allows 15 requests per 15-minute window per user, at up to 1,000 followers per request, so one window covers about 15,000 followers. Accounts larger than that need a checkpoint: store `next_token` and the page count on a capture-run row and let a scheduled task resume until `next_token` is empty.
+  <Step title="4. Implement the resumable capture worker">
+    Use Cloud Scheduler to dispatch due durable work to a Go worker through the project's queue. Lease one active full pass per owned account, fetch bounded pages, and commit each page with its cursor. A time, page, rate, or dollar limit pauses the pass. Do not keep a callback or goroutine alive to finish a large import. Follow the [worker algorithm](#proposed-function-twitter-api-capture-followers). **Check:** a crash retries one page safely; a resumed pass gets a fresh per-attempt page budget; a stale lease cannot commit.
   </Step>
-  <Step title="Log the run">
-    Write one run-summary row per capture (followers seen, pages, duration, whether it completed) and telemetry to `log_crash` with a dedicated phase. `log_crash.phase` is a strict enum, so add the phase value before the first write or the logger itself fails.
+  <Step title="5. Reconcile follower state after complete passes">
+    Use run identity, not wall-clock comparisons, to identify unseen rows. Finalize only after every page has succeeded; make the finalization resumable and idempotent. Use the conservative [absence policy](#reconciling-missing-followers) below so an interrupted pass or temporary visibility problem cannot remove relationships. **Check:** zero followers can complete, while an empty page with errors cannot trigger removals.
   </Step>
-  <Step title="Hand off downstream">
-    <Warning>
-      **The capture function does not resolve, enrich, or write graph data.** It only writes `x_follower` rows. Everything past that — resolving LinkedIn, and adding the resulting entities and edges to the graph — is owned entirely by **a separate scheduled CRON task**, on its own cadence, decoupled from the capture run. See [Resolving Followers to Edges in User Graph](#resolving-followers-to-edges-in-user-graph) below.
-    </Warning>
+  <Step title="6. Resolve people and project relationship evidence">
+    Attach existing person UUIDs through a bounded lookup and let a separate CRON own new identity resolution, enrichment, and relationship projection. Retain the follower row after success. Deduplicate resolution across messages and followers for the same X account identity. Follow [Resolving Followers to Edges in User Graph](#resolving-followers-to-edges-in-user-graph). **Check:** known people need no paid identity search; retries do not create duplicate people or duplicate evidence.
+  </Step>
+  <Step title="7. Add operational controls and pilot">
+    Implement budgets, disconnect/deletion, queue recovery, and the release checks before enabling a schedule. Track capture coverage separately from resolution progress. Pilot with capped internal accounts in DEV, then verify LIVE routing and measured spend before expansion. **Check:** users can distinguish an import still running, a budget pause, a reconsent requirement, and unresolved people.
   </Step>
 </Steps>
 
+### OAuth and token rules
+
+X's [OAuth reference](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code) documents a 30-second authorization-code lifetime, exact callback matching, and refresh-token issuance with `offline.access`. Exchange during the callback; queue only the import. Derive access-token expiry from `expires_in` rather than hardcoding two hours.
+
+Build one token manager shared by follower and DM workers. Serialize refreshes across processes for the actual OAuth grant, re-read the latest version before refreshing, and atomically save the rotated pair with a token version. An in-memory mutex on one Cloud Run instance is insufficient. Never use the newest arbitrary token row or fall back to app-only authorization when the owned user's token fails. A lost refresh response may require reconsent; do not blindly retry a consumed refresh token.
+
+Keep token material out of queue payloads, responses, logs, and follower `raw`. The connection contract needs owner/account identity, encrypted credentials, granted scopes, expiry, token version, feature enablement, revocation generation, and scheduling metadata. Follower and DM enablement are independent; reconnect and additional-scope flows must preserve the user's selected features only when their required scopes remain granted.
+
 ## Proposed table: x_follower
 
-One row per (Orbiter user, follower). The column set is every field the API returns for the `user.fields` list the harness already requests, with `public_metrics` flattened, plus the two Orbiter fields at the front.
+One row per owned connected account and follower, with the latest allowlisted profile fields and durable resolution/state markers. This is retained capture data, not a disposable resolver queue. Use TIMESTAMPTZ in UTC, BIGINT for app row ids and counts, UUID for `entity_id`, and JSONB for structured profile data. Optional API fields are nullable.
 
 <Warning>
-  X user ids are 64-bit snowflakes (for example `1367171255879671808`) and exceed the safe integer range. Store `x_user_id` as **text**, never int.
+  Preserve X ids such as `1367171255879671808` as **strings end to end**: Go decoding, database, queues, and JSON responses. Both `x_user_id` and `follower_x_user_id` are text. Never pass them through a floating-point number.
 </Warning>
 
 | Column | Type | Source | Notes |
 | --- | --- | --- | --- |
-| <code style={{color: "#16a34a"}}>id</code> | int | GCP | Primary key |
+| <code style={{color: "#16a34a"}}>id</code> | bigint | GCP | Primary key |
 | <code style={{color: "#16a34a"}}>created_at</code> | timestamp | GCP | Row created |
 | <code style={{color: "#16a34a"}}>updated_at</code> | timestamp | GCP | Row last written |
-| <code style={{color: "#16a34a"}}>entity_id</code> | int | Orbiter | The Orbiter user whose follower this is. Required. |
-| <code style={{color: "#16a34a"}}>profile_url</code> | text | derived | `https://x.com/{username}`. Written on every upsert so a handle change updates it. |
-| `x_user_id` | text | API `id` | Follower's X user id. Unique with `entity_id`. |
+| <code style={{color: "#16a34a"}}>user_id</code> | bigint | Orbiter | Owner of the connected account; required |
+| <code style={{color: "#16a34a"}}>x_user_id</code> | text | connection | Connected account being scanned; required |
+| <code style={{color: "#16a34a"}}>entity_id</code> | uuid, nullable | Universe | Follower's person node UUID; preserve through capture replays |
+| <code style={{color: "#16a34a"}}>profile_url</code> | text | derived | `https://x.com/{username}`. Update when a valid returned handle changes; preserve when omitted. |
+| `follower_x_user_id` | text | API `id` | Follower's X id; required, durable identity even if their handle changes |
 | `username` | text | API `username` | Handle without the `@` |
 | `name` | text | API `name` | Display name |
 | `description` | text | API `description` | Bio |
-| `profile_image_url` | text | API `profile_image_url` | `_normal` size; swap the suffix for `_400x400` when displaying |
+| `profile_image_url` | text | API `profile_image_url` | Preserve the returned URL; image-size transforms belong in a tested display helper |
 | `location` | text | API `location` | Free text as typed by the user |
 | `url` | text | API `url` | Profile website, usually a `t.co` link |
 | `verified` | bool | API `verified` | Legacy verified flag |
 | `x_created_at` | timestamp | API `created_at` | When the follower's X account was created. Renamed to avoid the Xano system column. |
-| `followers_count` | int | API `public_metrics.followers_count` | |
-| `following_count` | int | API `public_metrics.following_count` | |
-| `tweet_count` | int | API `public_metrics.tweet_count` | |
-| `listed_count` | int | API `public_metrics.listed_count` | |
-| `like_count` | int | API `public_metrics.like_count` | |
-| `media_count` | int | API `public_metrics.media_count` | |
-| `protected` | bool | API `protected` | Add `protected` to `user.fields`. Protected accounts should be excluded from enrichment. |
-| `verified_type` | text | API `verified_type` | Add to `user.fields`. Values `blue`, `business`, `government`, `none`. |
+| `followers_count` | bigint | API `public_metrics.followers_count` | Nullable when absent |
+| `following_count` | bigint | API `public_metrics.following_count` | Nullable when absent |
+| `tweet_count` | bigint | API `public_metrics.tweet_count` or `post_count` | Normalize tested aliases; retain the original key in `raw` |
+| `listed_count` | bigint | API `public_metrics.listed_count` | Nullable when absent |
+| `like_count` | bigint | API `public_metrics.like_count` | Nullable when absent |
+| `media_count` | bigint | API `public_metrics.media_count` | Nullable when absent |
+| `protected` | bool, nullable | API `protected` | Request explicitly; true or unknown is excluded from automatic external enrichment |
+| `verified_type` | text | API `verified_type` | Preserve unknown future values; verification is not proof of a person's identity |
 | `entities` | json | API `entities` | Add to `user.fields`. Carries expanded bio and website URLs, which is where self-declared LinkedIn links live. |
-| `raw` | json | API | The full user object as returned, so nothing is lost if the field list changes |
+| `raw` | jsonb | API | Latest allowlisted user object, not an entire response or arbitrary newly exposed fields |
 | <code style={{color: "#16a34a"}}>first_seen_at</code> | timestamp | capture | First run that saw this follower |
 | <code style={{color: "#16a34a"}}>last_seen_at</code> | timestamp | capture | Most recent run that saw this follower |
-| <code style={{color: "#16a34a"}}>capture_run_id</code> | int | capture | Run that last touched the row |
-| <code style={{color: "#16a34a"}}>is_following</code> | bool | capture | False when a completed full run no longer returns this account |
-| <code style={{color: "#16a34a"}}>unfollowed_at</code> | timestamp | capture | Set when `is_following` flips to false |
+| <code style={{color: "#16a34a"}}>last_seen_run_id</code> | bigint | capture | Full pass that most recently observed this follower |
+| <code style={{color: "#16a34a"}}>last_reconciled_run_id</code> | bigint, nullable | finalizer | Prevents retrying a pass from counting the same absence twice |
+| <code style={{color: "#16a34a"}}>missing_complete_passes</code> | int | finalizer | Default 0; increment once per qualifying completed pass where absent |
+| <code style={{color: "#16a34a"}}>missing_since</code> | timestamp, nullable | finalizer | First completed pass that did not observe this follower |
+| <code style={{color: "#16a34a"}}>is_following</code> | bool | capture/finalizer | Last inferred presence state; see absence policy |
+| <code style={{color: "#16a34a"}}>unfollowed_at</code> | timestamp, nullable | finalizer | Time absence was confirmed by our policy, not the actual X unfollow time |
+| <code style={{color: "#16a34a"}}>resolution_status</code> | text | resolver | `pending`, `retry`, `resolved`, `ambiguous`, `skipped`; resolved requires `entity_id` |
+| <code style={{color: "#16a34a"}}>resolution_reason</code> | text, nullable | resolver | Machine-readable reason such as protected, non-person, or unavailable |
+| <code style={{color: "#16a34a"}}>resolution_attempts</code> | int | resolver | Default 0; prevent unbounded repeated paid searches |
+| <code style={{color: "#16a34a"}}>next_resolution_at</code> | timestamp, nullable | resolver | Due time; null for completed or deliberately deferred work |
+| <code style={{color: "#16a34a"}}>relationship_version</code> | bigint | projection | Increment on identity/presence changes; include in durable projection work |
+| <code style={{color: "#16a34a"}}>projected_version</code> | bigint | projection | Last applied version; separate from identity resolution success |
 
 Indexes:
 
-- unique on `(entity_id, x_user_id)`, which makes the upsert idempotent
-- btree on `(entity_id, last_seen_at)` for the unfollow sweep
-- btree on `username` for handle lookups from the resolver
+- Unique on `(user_id, x_user_id, follower_x_user_id)` for idempotent capture.
+- Btree on `(user_id, x_user_id, last_seen_run_id, id)` for scoped reconciliation.
+- Btree on `(next_resolution_at, id)` for due pending/retry resolution; on `(user_id, entity_id)` for resolved people.
+- Btree on `follower_x_user_id` for identity reuse across imports; normalized handles remain non-unique hints.
+- Track pending projection versions through the shared durable job/outbox mechanism. A non-null `entity_id` does not prove that relationship projection succeeded.
+
+Use typed Go response structs with nullable optional fields and `json.RawMessage` only for the allowlisted profile snapshot. Field absence must not erase previously captured values; an explicitly returned empty string or zero can. Keep field presence separately from value when applying updates. A missing `protected` field in the current observation still blocks new external enrichment until refreshed. The [current endpoint schema](https://docs.x.com/x-api/users/get-followers) uses `post_count` where the earlier fixture below uses `tweet_count`; cover both in fixtures and record conflicts rather than silently choosing an arbitrary value.
 
 ### Companion table: x_follower_capture_run
 
-One row per capture attempt so large accounts can resume and so a completed run can drive the unfollow sweep.
+One row per **logical full pass**, retained across retries and pauses. Each worker attempt increments `attempt_count`; its local page budget starts at zero. Keep attempt telemetry in structured logs. Do not start a second full pass for the same owned account while the first is resumable or finalizing.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `id` | int | Primary key |
+| `id` | bigint | Primary key; identity of this full pass |
 | `created_at`, `updated_at` | timestamp | |
-| `entity_id` | int | Orbiter user |
+| `user_id` | bigint | Orbiter owner |
 | `x_user_id` | text | The connected account being captured |
-| `status` | enum | `running`, `paused_rate_limit`, `complete`, `failed` |
-| `followers_total` | int | `public_metrics.followers_count` on the target at start |
-| `followers_seen` | int | Running count across pages |
-| `pages_fetched` | int | |
-| `next_token` | text | Empty when complete |
+| `status` | text | `pending`, `running`, `paused_rate_limit`, `paused_budget`, `partial`, `needs_reconsent`, `finalizing`, `complete`, `abandoned`, `cancelled` |
+| `connection_generation` | bigint | Revocation generation captured at creation; checked at every commit |
+| `followers_total` | bigint, nullable | Advisory metric at the start; never a stopping condition |
+| `followers_seen` | bigint | Distinct followers observed in this pass, not repeated page items |
+| `pages_fetched`, `requests_made` | bigint | Successful committed pages vs all HTTP requests, including retries |
+| `attempt_count` | int | Number of worker attempts |
+| `next_token` | text, nullable | Cursor for the next request; null also means first page, so it is not a completion flag |
+| `request_fingerprint` | text | Account, endpoint, field list, and page size bound to the cursor |
+| `pagination_exhausted` | bool | Default false; only true after a valid terminal page is committed |
+| `absence_reconciliation_allowed` | bool | Default false; set only after a clean full pass with no coverage anomaly |
+| `finalize_after_id` | bigint, nullable | Checkpoint for bounded finalization batches |
+| `next_attempt_at` | timestamp | Durable scheduling time, including rate-limit reset and backoff |
+| `lease_owner`, `lease_expires_at`, `lease_version` | text / timestamp / bigint | Cross-process lease and fencing version |
+| `estimated_cost_usd` | numeric | Estimated resource charges for this pass; reconcile against app billing |
 | `started_at`, `finished_at` | timestamp | |
 | `error_message` | text | Last error, if any |
 
+Index due nonterminal work by `(next_attempt_at, id)` and enforce one nonterminal pass per `(user_id, x_user_id)`. Include paused and finalizing states in that uniqueness rule. Abandoning an invalid cursor and creating a new pass happens transactionally. The shared connection keeps `next_capture_at` and `last_completed_capture_run_id` so dispatch also discovers new work and reports freshness.
+
 ## Proposed function: twitter-api-capture-followers
 
-Build it as a leaf function that reads the token row in its own stack, following the pattern in 13389. Returning tokens through a nested `function.run` gets them masked in the live runtime.
+This name identifies the proposed **Go worker**, not a new Xano function. Port the API mapping from 13389; Xano's nested-call secret masking and `async-shared` runtime are not Go requirements. Suggested boundaries: a shared token manager, a bounded X HTTP client, an AlloyDB capture store, and a separate Universe resolver/projector. Use request contexts, timeouts, response-body limits, and parameterized database writes.
 
 **Inputs**
 
 | Input | Type | Notes |
 | --- | --- | --- |
-| `entity_id` | int | Required. Selects the user-context token row. |
-| `capture_run_id` | int | Optional. Resume an existing run; when empty, create one. |
-| `max_pages` | int | Default 15, the per-window budget. |
+| `capture_run_id` | bigint | Required queue payload; worker derives owner/account from the persisted run and verifies its connection |
+| `max_pages_per_attempt` | int | Server configuration, not a provider quota; cap alongside elapsed time and spend |
 
-**Stack outline**
+**Worker algorithm**
 
-1. Load the `x_oauth_token` row for `entity_id` with `grant_type = user`. If `expires_at` is within 5 minutes, run `twitter-api-token` (13391) to refresh, then re-read the row. Throw when no row exists.
-2. Create or load the `x_follower_capture_run` row. Set `status = running`.
-3. Resolve the target: `x_user_id` from the token row, or `/2/users/me` when it is empty. Read `public_metrics.followers_count` into `followers_total`.
-4. Loop while `next_token` is not empty and `pages_fetched < max_pages`:
-   - `GET https://api.x.com/2/users/{x_user_id}/followers?max_results=1000&user.fields=id,username,name,description,profile_image_url,public_metrics,created_at,location,url,verified,protected,verified_type,entities` with the user-context bearer.
-   - On HTTP 429, set `status = paused_rate_limit`, store `next_token`, and return. The resume task picks it up after the window resets.
-   - For each item in `data[]`, `db.add_or_edit x_follower` on `(entity_id, x_user_id)` with every column above, `profile_url = "https://x.com/" ~ username`, `last_seen_at = now`, `capture_run_id`, and `is_following = true`. Set `first_seen_at` only when the row is new.
-   - Store `meta.next_token` on the run row after each page so a crash mid-run loses at most one page.
-5. When `next_token` comes back empty, set `status = complete` and run the unfollow sweep: rows for this `entity_id` whose `last_seen_at` predates `started_at` get `is_following = false` and `unfollowed_at = now`. Skip the sweep on partial runs.
-6. Write the run summary and a `log_crash` telemetry row with the new phase value.
+1. Claim a due run with a database lease. A terminal run or an unexpired lease held elsewhere is a no-op. Recheck follower consent, ownership, environment, and connection generation. If resuming `finalizing`, continue that phase without fetching page one again.
+2. Obtain a valid token through the shared token manager. Load the persisted cursor and initialize a **local** page counter to zero. Reserve request/resource budget before each call. Renew leases for bounded work; do not hold a database transaction open during an X request or enrichment lookup.
+3. Fetch the first page without `pagination_token`; continuation requests use the stored token. **Always fetch the first page even though its input cursor is empty.** Continue until a validated response lacks `meta.next_token`, or an attempt budget is reached. Do not stop on a familiar follower, matching follower count, or a short page that still has a cursor.
+4. Validate the response envelope and every follower id. HTTP 200 with unresolved `errors`, contradictory counts, an empty page with a continuation token, or a repeated cursor is `partial`. Valid items may be retained, but keep the input cursor for repair and do not enable absence reconciliation. An explicit zero-result response without errors or a cursor is a valid terminal page. Retry network/5xx failures with bounded backoff; on 429 use returned reset timing with jitter. On 401 recheck token version and allow one controlled refresh/retry; access, scope, and account-availability failures become visible pauses, never empty successful scans.
+5. Normalize profiles and perform a best-effort cached, batched Universe identity lookup outside the page transaction. In one transaction, verify the lease version and connection generation, upsert follower rows, set `last_seen_run_id`, clear absence markers for observed followers, preserve resolved identity fields, write any semantic-change projection intent, and commit the next cursor and counters. For a terminal page, **set `pagination_exhausted = true` and `status = finalizing` in that same transaction** so a crash cannot mistake its null cursor for an unstarted import. `first_seen_at` changes only on insert. Count a follower once per pass. A crash before commit retries the same page; a crash after commit resumes the next page or finalization.
+6. On time/page/dollar exhaustion, persist a resumable pause with `next_attempt_at`. A scheduler must rediscover durable due work even if queue publication failed. A lost/invalid cursor is not safely resumable: abandon that pass, start a new pass from page one, retain captured rows, and forbid the abandoned pass from inferring removals.
+7. In `finalizing`, assess coverage and apply bounded reconciliation batches and durable projection work as described below. Mark `complete` and advance the connection's completed-pass pointer only when finalization finishes. A completed pass may still have unresolved people; report those separately.
+
+### Reconciling missing followers
+
+Use `last_seen_run_id` to identify rows not observed in the current clean full pass. Never compare `last_seen_at` with a run's start time to infer removals. Only one pass may fetch or finalize this owned account at a time; every finalization batch checks the same lease and connection generation as capture.
+
+**Proposed pilot policy: require two consecutive qualifying full passes with absence before setting `is_following = false`.** The first absence sets `missing_since`; each clean pass increments `missing_complete_passes` once. `last_reconciled_run_id` makes batch retries idempotent. Reappearance in any valid page sets `is_following = true`, resets missing counters, and clears `unfollowed_at`. A partial or abandoned pass never adds absence evidence.
+
+This is an inference that the account is no longer observed as a follower, not proof of a deliberate unfollow or its exact time. Visibility changes and accounts becoming unavailable can produce absence too. Keep last-observed state and freshness visible. If a pass has unresolved API errors, an unexplained empty result after a populated baseline, or an anomalously large drop, leave `absence_reconciliation_allowed = false`, retain existing presence, and schedule a fresh verification pass. Release an anomaly hold only when the verification pass and current owned-account/access checks explain the change, or after a recorded operator review. Make the drop threshold configurable and verify it against pilot fixtures. A clean empty account with no populated baseline can complete normally.
+
+Finalization compares one run consistently, advances `finalize_after_id` in the same transaction as row changes, and enqueues versioned updates for the user's follower evidence. A retry cannot double-count absence or replay an old removal over a newer reappearance. Removing follower evidence must preserve DM/email evidence, unrelated relationships, and the canonical person.
+
+### API request and response examples
 
 **Example request (curl) — 1,000 followers per page, paged via `pagination_token`**
 
@@ -176,7 +237,7 @@ curl "https://api.x.com/2/users/44196397/followers?max_results=1000&pagination_t
   -H "Authorization: Bearer $X_USER_ACCESS_TOKEN"
 ```
 
-Keep requesting and feeding `meta.next_token` back in as `pagination_token` until a response comes back with **no `meta.next_token`** — that page was the last one. At 1,000 followers per request and 15 requests per 15-minute window, a full pass caps out at ~15,000 followers per window (see [Rate limits and access tier](#rate-limits-and-access-tier) below); anything larger needs the checkpoint/resume behavior in step 4.
+Repeat with each returned `meta.next_token`; omit the parameter on the first request. A validated terminal page has no next token. X documents up to 1,000 results per request; the response above is illustrative and truncated, so its one shown item is not a real `result_count` mismatch. See [rate limits and costs](#rate-limits-and-access-tier) for current limits and budgeting.
 
 **Response**
 
@@ -187,22 +248,33 @@ Keep requesting and feeding `meta.next_token` back in as `pagination_token` unti
   "followers_total": 13212,
   "followers_seen": 13212,
   "pages_fetched": 14,
-  "next_token": "",
+  "next_token": null,
   "new_rows": 13212,
   "updated_rows": 0,
-  "unfollowed": 0
+  "absence_reconciliation_allowed": true,
+  "newly_inactive": 0
 }
 ```
 
-**Resume task.** A scheduled task every 15 minutes queries runs with `status = paused_rate_limit` and calls the function with their `capture_run_id`. Keep the task inactive until the function is verified; a task created without `active = false` ships live.
+**Dispatcher.** Proposed pilot tick: every five minutes, enqueue due pending, paused, retryable partial, or finalizing work; expired worker leases also become recoverable. Honor `next_attempt_at`, budgets, and feature enablement. Do not select only rate-limited runs: time-budget pauses and crashed workers need recovery too. A tick is a dispatch opportunity, not a new full follower import. Keep schedules disabled until release checks pass.
 
 ## Rate limits and access tier
 
-{/* TODO(Charles): confirm current limits and tier on developer.x.com before sizing the resume task. */}
+Checked 2026-09-06: X's [rate-limit table](https://docs.x.com/x-api/fundamentals/rate-limits) lists **300 requests per 15 minutes** for follower lookup in both its per-app and per-user columns. The [endpoint reference](https://docs.x.com/x-api/users/get-followers) allows up to **1,000 users per page**. The original 15-request/four-hour sizing is not the current documented limit. Configure limits from the app's actual access and response headers; maintain shared accounting for every applicable account/app bucket and bound worker concurrency.
 
-- `GET /2/users/:id/followers` allows 15 requests per 15-minute window per user in user context, at up to 1,000 results per request. That is roughly 15,000 followers per window, so a 250,000-follower account takes about 17 windows, or a little over 4 hours, on the resume task.
-- The followers lookup is not on the free X API tier. Confirm the app's tier includes it before the OAuth screen goes in front of users.
-- Rate limits are per connected user, so many users capturing at once do not contend with each other, but the app-wide limit still applies. Cap concurrent runs on the resume task.
+The [pricing page](https://docs.x.com/x-api/getting-started/pricing) lists follower reads at **\$0.010 per returned resource**, not per page. Illustrative full-pass costs before other lookups or enrichment:
+
+| Followers returned | Full-pass estimate |
+| --- | --- |
+| 1,000 | \$10 |
+| 10,000 | \$100 |
+| 250,000 | \$2,500 |
+
+The listed \$0.001 Owned Read discount requires the authenticated target to also own the developer app; do not assume every connected customer qualifies. Daily UTC deduplication is a soft guarantee, not a guarantee that retries are free. Verify actual billing in the console before enabling imports. [Pricing and Owned Reads](https://docs.x.com/x-api/getting-started/pricing).
+
+**Recommended initial cadence:** one budgeted import at connect time; make automatic repeat full passes configurable and off by default until a per-account freshness/cost policy is chosen. Reserve the estimated maximum page charge before dispatch and reconcile actual returned units. If the remaining budget cannot cover a full page, lower page size only before starting a pass, or pause; do not mutate a cursor's request fingerprint mid-pass. Keep capture and paid resolution budgets separate, with user/account/app caps and visible budget pauses.
+
+Follow/unfollow Activity subscriptions are a possible later cost/freshness improvement. Prove app access, owner routing, replay identity, ordering, and observed billing before using them; keep periodic full reconciliation to repair gaps. They are not part of this first capture worker. Any later kill switch must also remove billable subscriptions.
 
 ## Sample follower API response and saved record
 
@@ -233,16 +305,18 @@ This is one item from `data[]` as the harness returns it today, with the current
 
 ### Saved `x_follower` record
 
-The row the capture writes from that response, after flattening `public_metrics`, renaming `id` to `x_user_id` and `created_at` to `x_created_at`, and adding the `entity_id` / `profile_url` / capture-tracking fields. `location`, `protected`, `verified_type`, and `entities` come back `null` here because the harness doesn't request those `user.fields` yet.
+Illustrative row under the revised Go schema: flatten `public_metrics`, rename the API `id` to `follower_x_user_id` and `created_at` to `x_created_at`, and attach the owned connection. `entity_id` stays null until a person is matched. Fields missing from this earlier fixture remain null; missing `protected` makes external enrichment ineligible until visibility is confirmed.
 
 ```json
 {
   "id": 48213,
   "created_at": "2026-09-05T14:02:11.000Z",
   "updated_at": "2026-09-05T14:02:11.000Z",
-  "entity_id": 42,
+  "user_id": 42,
+  "x_user_id": "44196397",
+  "entity_id": null,
   "profile_url": "https://x.com/th3j0yy",
-  "x_user_id": "1367171255879671808",
+  "follower_x_user_id": "1367171255879671808",
   "username": "th3j0yy",
   "name": "TheJ0y",
   "description": "",
@@ -280,19 +354,62 @@ The row the capture writes from that response, after flattening `public_metrics`
   },
   "first_seen_at": "2026-09-05T14:02:11.000Z",
   "last_seen_at": "2026-09-05T14:02:11.000Z",
-  "capture_run_id": 913,
+  "last_seen_run_id": 913,
+  "last_reconciled_run_id": null,
+  "missing_complete_passes": 0,
+  "missing_since": null,
   "is_following": true,
-  "unfollowed_at": null
+  "unfollowed_at": null,
+  "resolution_status": "pending",
+  "resolution_reason": "visibility_unknown",
+  "resolution_attempts": 0,
+  "next_resolution_at": "2026-09-05T14:07:11.000Z",
+  "relationship_version": 0,
+  "projected_version": 0
 }
 ```
 
 ## Open questions
 
-1. **Token to user mapping.** `x_oauth_token` is keyed by `x_user_id` only. Do we allow more than one X account per Orbiter user? If yes, the unique index becomes `(entity_id, x_user_id)` and the capture runs once per connected account.
-2. **Refresh cadence.** Capture once at connect time, then nightly? Weekly? The unfollow sweep only works on completed full runs, so cadence sets how fresh `is_following` is.
-3. **Following as well as followers.** `/2/users/:id/following` has the same shape and limits. The Known model may want both directions; the table would need a `direction` column or a sibling table.
-4. **Protected and empty profiles.** Protected accounts and accounts that fail the resolver's gate (no real name, no bio) are stored but should not be enriched. Decide whether they appear in the app at all.
-5. **Retention.** Bios and locations are personal data supplied by third parties. Decide how long to keep rows for users who disconnect X.
+These decisions remain explicit rather than being inferred from the old prototype:
+
+| Decision | Recommendation / implementation dependency |
+| --- | --- |
+| Universe integration routing | Confirm matching App/Universe routes when enabling resolution and projection; environment readiness does not block the follower capture build |
+| Multiple connected accounts and shared X accounts | Storage supports multiple accounts; product chooses UI limits and whether multiple owners may authorize the same X account |
+| Import spend and recurring freshness | Mark sets per-account dollar caps and repeat-scan cadence; Charles enforces them before requests |
+| Follower-only contacts | Do not assume every follower belongs in contacts. Decide automatic import vs an explicit add action; keep this separate from the agreed DM-to-contact flow |
+| Absence policy | Start with two clean full passes and an anomaly guard; select drop thresholds and maximum acceptable staleness using fixtures |
+| Protected, ambiguous, empty, and non-person accounts | Retain observed rows; no automatic external enrichment while protected/unknown; no fabricated Person for a brand or bot |
+| Following as well as followers | Separate later scope. Preserve direction with a sibling relation or explicit direction field; never silently mix the two |
+| Retention | Specify retention for profile snapshots, completed runs, diagnostics, and backups; implement disconnect cleanup before the pilot |
+
+## Disconnect, telemetry, and release checks
+
+Disabling follower import first clears its enablement, advances the relevant revocation generation, and cancels pending capture/resolver/projection work. Recheck that generation inside every private-data write transaction. Delete the user's account-scoped follower/profile rows and retract only their follower-derived evidence through durable cleanup work. Preserve DM access when only followers are disabled, and preserve contacts or relationships supported by other sources. Account-wide disconnect revokes the grant and disables both features. Shared Universe people are not deleted merely because one user disconnects.
+
+Use structured Go logs and run records with owner/account/run ids, status, committed pages, distinct followers, request counts, oldest pending age, estimated spend, resolution outcomes, and projection lag. Keep tokens, raw profiles, and bios out of telemetry. If the Go service still emits to `log_crash`, add the phase enum first and distinguish success telemetry from non-empty errors; failure of a secondary logger must not invalidate a committed page.
+
+| Scenario | Required result |
+| --- | --- |
+| Fresh run has a null cursor | First page is requested exactly as a first page; no empty-loop false completion |
+| More pages than one attempt budget; rate/time/dollar pause | Same logical pass resumes at its stored cursor with a fresh local page budget |
+| Queue duplicate; crash before/after page commit; expired worker lease | Idempotent rows/counters; correct cursor; stale worker cannot commit |
+| Crash immediately after the terminal page commits | Persisted `finalizing` state resumes reconciliation, never restarts page one |
+| Invalid or repeated cursor; changed request fields | No completion/removal claim; restart safely under a new pass when necessary |
+| Same follower under two users or two connected accounts | Independent relationship state; no cross-owner overwrite or cleanup |
+| Missing optional fields, `false`, zero, empty strings, and large X ids | Unknowns stay distinct; explicit values update correctly; ids remain exact strings |
+| `tweet_count` vs `post_count`; unexpected enum value | Tested normalization and visible conflict handling; no decoder panic |
+| HTTP 200 with errors; empty-with-cursor; valid empty account | Partial cases never infer absence; valid zero-follower baseline completes |
+| Finalization crashes halfway; same pass replays | Absence counters increment at most once; finalization resumes safely |
+| Missing in one pass, missing in two, then reappears | Inference follows the chosen policy; reappearance clears absence and supersedes old projection work |
+| Lookup outage, ambiguous handle, reassigned handle, protected account | Capture retained; no speculative person merge or external enrichment |
+| Existing person; concurrent creation via DM and follower jobs | Same canonical person UUID reused; paid work and projection deduplicated |
+| Identity resolves but relationship projection fails | Row retained with separate pending projection; retry never requires a new person |
+| Follow-only evidence | Correct follower-to-connected-account direction; no automatic reciprocal KNOWS or DM count |
+| Concurrent DM/follower token refresh; missing scopes; revoked grant | One valid token rotation; feature-specific pauses and owner checks |
+| DEV routed to LIVE; disconnect during in-flight work | Environment mismatch rejected; no private-data resurrection or cross-environment writes |
+| Pilot import | Measured page coverage, absence behavior, and console billing match the reported result before expansion |
 
 ## What exists in Xano today
 
@@ -302,7 +419,7 @@ The row the capture writes from that response, after flattening `public_metrics`
 twitter-api-oauth-exchange — 13390
 ```
 
-One-time bootstrap for the OAuth 2.0 user-context flow. Exchanges an authorization code (or, in seed mode, an existing refresh token) at `/2/oauth2/token` using env `X_CLIENT_ID` / `X_CLIENT_SECRET` as HTTP Basic, looks the account up via `/2/users/me`, and upserts the pair into `x_oauth_token` with `grant_type = user`. Inputs: `code`, `redirect_uri`, `code_verifier`, `refresh_token`. Needs an `entity_id` input added.
+One-time OAuth bootstrap reference. Exchanges an authorization code (or a seeded refresh token), looks up `/2/users/me`, and stores a user token pair. Existing inputs include `code`, `redirect_uri`, `code_verifier`, and `refresh_token`. The Go callback must add authenticated owner binding and the state/PKCE controls above; an owner integer must not be named `entity_id`.
 
 </Card>
 
@@ -312,7 +429,7 @@ One-time bootstrap for the OAuth 2.0 user-context flow. Exchanges an authorizati
 twitter-api-token — 13391
 ```
 
-Keeps a token row fresh. For `token_type = user` it refreshes the row at `/2/oauth2/token` when it expires within 5 minutes and writes the rotated pair back. It returns only the row id, never the token: Xano masks secret values returned through a nested `function.run`, so the caller must `db.get` the row in its own stack and build the `Authorization` header there.
+Token-refresh reference. It returns a row id so Xano callers can read masked secret values in their own stack. That workaround is Xano-specific. The Go token manager needs cross-worker serialization, version checks, secure credential handling, and ownership shared with the DM path.
 
 </Card>
 
@@ -322,7 +439,7 @@ Keeps a token row fresh. For `token_type = user` it refreshes the row at `/2/oau
 twitter-api-followers — 13389
 ```
 
-Test harness for `GET /2/users/:id/followers`. Takes a handle (or empty for the authorized account via `/2/users/me`), `max_pages` (1 to 15), and `pagination_token`. Pages at 1,000 followers per call and returns the target user, `followers[]`, `followers_total`, `pages_fetched`, and `next_token`. The paging loop and the token handling are the pieces the capture function should reuse.
+Follower-fetch harness accepting a handle, `max_pages`, and `pagination_token`. Returns target details, followers, counts, and a continuation token. Reuse its response mapping as fixture evidence; replace its runtime, token selection, page limits, and resume behavior with the Go contract above. Production scans use the authenticated connected account, not an arbitrary input handle.
 
 </Card>
 
@@ -332,7 +449,7 @@ Test harness for `GET /2/users/:id/followers`. Takes a handle (or empty for the 
 x_oauth_token — 788
 ```
 
-Columns: `grant_type` (enum user, app), `x_user_id` (text, unique), `username`, `access_token`, `refresh_token`, `expires_at`, `scope`, plus timestamps. Add `entity_id` (int) so the row maps to an Orbiter user, and index `(entity_id, grant_type)`.
+Schema rechecked 2026-09-06: `grant_type`, `x_user_id`, `username`, `access_token`, `refresh_token`, `expires_at`, `scope`, plus row id/timestamps. It has no Orbiter owner field. This is a reference gap to fix in the Go connection model with `user_id`, ownership constraints, encryption, and token/revocation versions; this review makes no change to the live Xano table.
 
 </Card>
 
@@ -342,7 +459,7 @@ Columns: `grant_type` (enum user, app), `x_user_id` (text, unique), `username`, 
 temp/resolve-x-to-linkedin — 13399
 ```
 
-Downstream consumer. Takes an X URL and resolves a LinkedIn URL through a ladder: self-declared link in the bio, PDL keyed on the handle, search plus LLM judge (OpenRouter web plugin or Parallel Search, judge model switchable), then an Enrich Layer pull that confirms the reverse edge. On a 60-follower sample it resolved about 30 percent of profiles that show a real name and a bio, and under 10 percent of the rest.
+Candidate identity resolver: self-declared LinkedIn URL, PDL, gated search plus judge, and Enrich Layer confirmation. Its `resolved` flag means a URL was found, not that every result meets an automatic-merge threshold. Preserve method, confidence, and evidence. The earlier 60-profile scoping result is not a production precision/recall or cost guarantee; this helper does not itself create people or contacts.
 
 </Card>
 
@@ -364,14 +481,14 @@ Smaller harness that runs only the PDL step for one X URL. Useful for checking w
 
 ## Resolving Followers to Edges in User Graph
 
-Each row's `profile_url` is the input to `temp/resolve-x-to-linkedin` (13399), which resolves a LinkedIn URL through PDL, search plus judge, and an Enrich Layer confirmation. Resolved rows are the candidates for `master_link` creation described in [Enrich via non-LinkedIn Scope](/guides/open-work/enrich-via-non-linkedin-scope).
+The capture writer may attach an existing person UUID through a cached, bounded lookup. The CRON owns everything that can create or enrich a person or write relationship data. Reuse the [DM identity-resolution contract](/guides/open-work/x-followers-capture/log-x-dms#identity-and-contact-resolution), with the follower identity supplied as `follower_x_user_id`.
 
-The CRON is responsible for the full downstream chain, end to end:
+1. **Reuse known identities.** Batch lookups by numeric X id. Normalize `x.com`/`twitter.com` profile URLs and handles as secondary hints, verify that a handle still belongs to that account, require a Person match, and follow merge redirects. Match the specific identity field, not arbitrary occurrences of the URL anywhere in the graph. Store the canonical person node UUID in `entity_id`. A missing Universe response leaves the captured row pending.
+2. **Resolve missing people within budget.** Process distinct eligible accounts, using captured expanded profile URLs before paying for another profile lookup. Feed candidate evidence through the normal identity-resolution path; recheck the Universe before creation to handle concurrent DM/follower imports. Skip external enrichment for protected or unknown-visibility accounts. Persist ambiguous, non-person, unavailable, retry, and budget outcomes with a next-attempt policy; do not repeatedly spend on every follower row. Correctly classify non-person accounts rather than manufacturing a Person.
+3. **Create and enrich through the Universe contract.** Deduplicate by verified canonical identity, save its person node UUID, and reuse/enqueue enrichment. Preserve evidence and confidence; do not trust a successful URL lookup alone. Do not send a bare X URL directly into the legacy person-creation path: [the non-LinkedIn scope](/guides/open-work/enrich-via-non-linkedin-scope) documents why that can create unusable placeholders. Profile text is untrusted data, including when an LLM judges identity.
+4. **Project the user's follower evidence.** Apply only the latest `relationship_version` under the same owner/account and current connection generation. Record the direction from follower to connected account with source `x_followers`, observed time, and presence state. Use the agreed user-graph projection API; idempotently upsert by the source relation's stable key. Do not invent a new edge schema or equate this with reciprocal KNOWS. Keep capture rows and use `projected_version` to retry projection separately from identity resolution.
+5. **Handle contacts under the chosen policy.** If follower contact import is enabled, upsert membership by `(user_id, entity_id)`, including known people who lack that user's contact. Keep the membership step independently retryable. The agreed DM-to-contact flow remains separate; follower capture does not silently opt a user into importing every follower as a contact.
 
-1. **Sweep for an existing graph match first.** For each `x_follower` row, check whether its `profile_url` (for example `https://x.com/th3j0yy`) already exists somewhere in the graph. If it does, read that node's `entity_id`, create the edge directly in the User Graph, and delete the `x_follower` row — no LinkedIn resolution needed for an X profile the graph already knows about.
-2. Query `x_follower` for the remaining rows not yet resolved.
-3. Call `temp/resolve-x-to-linkedin` (13399) for each to get a candidate LinkedIn URL.
-4. On a resolved match, create the `master_link` and the corresponding graph entities and edges (the follower as a `Person` node, connected to the Orbiter user via the Known relationship layer) — the capture function itself never touches the graph.
-5. Mark the `x_follower` row resolved so the CRON doesn't reprocess it on the next run.
+Durably enqueue resolution/projection work or make pending rows rediscoverable; a database commit followed by a failed queue publish cannot strand work. Coordinate paid jobs by canonical X/person identity across sources, and handle each user's membership/evidence separately. A capture replay must preserve `entity_id` and resolver-owned fields. Meaningful profile changes can explicitly requeue skipped or ambiguous identities under policy, rather than resetting all resolution on every scan.
 
-None of this happens synchronously during capture. A follower row can sit unresolved for one or more CRON cycles before it becomes a graph entity/edge.
+Public person identity/enrichment may be shared in the Universe. Keep the imported account list, consent, and user-specific relationship evidence in the App's owned scope. Resolved follower rows are **never deleted merely because resolution succeeded**; they remain the basis for rescans, absence reconciliation, and source-specific cleanup.
