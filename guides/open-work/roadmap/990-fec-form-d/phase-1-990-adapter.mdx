@@ -7,7 +7,23 @@ icon: "file-invoice"
 
 import BakeOffRules from '/snippets/bake-off-rules.mdx';
 
-**Status: build spec, nothing built (2026-09-05).** This page narrows the [990s, FEC & Form D](/guides/open-work/roadmap/990-fec-form-d) lane to its Phase 1 — the **IRS 990 adapter only** — and pins it to the runtime that actually exists today: the `orbiter-universe` Go repo (AlloyDB `universe.*` schema, the Universe FalkorDB graph, Cloud Run, Pub/Sub). FEC and Form D are Phases 2–3 of the parent page and are **out of scope here**; nothing on this page reaches EDGAR or the FEC.
+<Note>
+  **Status 2026-09-06: built, tested, committed on `ORBIT-1862/990-adapter` (10 commits, `8a910ce` → `a377c44`) — waiting for the PR.** The PR is deliberately held until the Donors lane's branch is ready so both merge and get tested on dev together. Merging is inert: `FILINGS_990_ENABLED` defaults to `false`, so nothing mounts or runs until the dev env is flipped.
+
+  **What exists:**
+  - **Storage** — the six `filing_990_*` tables (migration `20260906105510`), classified in the merge inventory; `ein` is a strong, company-scoped identifier.
+  - **Stage A** — ProPublica inventory + IRS index → range-read zips (incl. Deflate64) → verbatim XML in GCS → deterministic parser (990 / EZ / PF, Part VII, Schedule I, Part XV) → filing, mention and grant rows, one envelope per filing; org resolved by EIN, then Q6 domain corroboration, then create; org node written only for a created org. Residue titles classified by the LLM.
+  - **Stage B** — the person ladder `prior_filing → affiliation → search → adjudication` with the two-corroboration rule, review filing, tier-4 leaves on a LinkedIn key only. Org facts through facts' normalize/distill.
+  - **Stage C** — person-side `board_member_of` / `officer_of` relation facts, the edge ledger with recomputed tenure, `OFFICER_OF` in the graph writer, edges behind `FILINGS_990_EDGE_WRITES_ENABLED` and only for a *chosen* fact.
+  - **Providers** — Parallel Search, `openai/gpt-5.4`, `z-ai/glm-5.3-flash` per the [bake-offs](#bake-off-results--2026-09-06), each behind a config switch.
+  - **The door** — the company waterfall's step 16 hands every `Nonprofit` / `Educational` company to the adapter; the intake finds the EIN and attaches it to the entity the graph already holds.
+  - **Admin** — `POST …/orgs`, `GET …/orgs/{ein}`, `POST …/drain`, `GET …/mentions`; OpenAPI fragment lints.
+  - **Proof so far** — the fixture-world suite (32 committed filings) and `go test -tags live`, which ran the real IRS + ProPublica + Parallel + gpt-5.4 + glm against the in-memory stores: VFF in 35 s, Katelyn Gallanty by `affiliation`, one `BOARD_MEMBER_OF` once elected (see [Smoke tests](#smoke-tests)).
+
+  **Not yet:** the dev deploy (needs the PR), the resolution-sweep event and the two scheduler jobs, relabelling an existing `School` node with `:Organization`, the entity-population cap on tier-4 leaves. Decision log: `.claude/skills/filings-enrichment/SKILL.md` in the repo.
+</Note>
+
+**This page was written as the build spec (2026-09-05); the Note above is what was actually built.** It narrows the [990s, FEC & Form D](/guides/open-work/roadmap/990-fec-form-d) lane to its Phase 1 — the **IRS 990 adapter only** — and pins it to the runtime that actually exists today: the `orbiter-universe` Go repo (AlloyDB `universe.*` schema, the Universe FalkorDB graph, Cloud Run, Pub/Sub). FEC and Form D are Phases 2–3 of the parent page and are **out of scope here**; nothing on this page reaches EDGAR or the FEC.
 
 <Warning>
   **Two corrections to the parent page for this phase.**
@@ -368,7 +384,8 @@ admin POST /v1/admin/filings/990/orgs  ──►  filing_990_org_queue (upsert o
 
 | Event (`universe-enrichment-events`) | Payload | Handler |
 | --- | --- | --- |
-| `filings.org_requested` | `{ein, display_name?, priority_tier?, years_window?, source_function?, source_entity_id?, source_entity_type?}` | Upsert queue row (`count++`, tier = min) |
+| `filings.org_requested` | `{ein?, org_entity_id?, display_name?, domain?, priority_tier?, years_window?, source_function?, source_entity_id?, source_entity_type?}` | With `ein`: upsert the queue row (`count++`, tier = min). Without: the **company waterfall's door** (built 2026-09-06) — resolve the EIN through ProPublica, **domain first** (probe the exact-name hits + top three for a `website` on our domain; an exact name can be a shell — "Stanford University" vs the Board of Trustees filer), then the folded exact name with `have_filings` as tie-break; attach `ein` to `org_entity_id` **before** the row so the drain lands on the entity the graph holds; ambiguous → no row, one `qa_passed` line, acked |
+| *(publisher)* company orchestrator **step 16 `filings_request`** | after `node_sync`; fires when preflight's `company_type` is `Nonprofit` or `Educational` (or `is_school`), never `Government`; payload `{org_entity_id, display_name: legal_name ?? name, domain}` | Wired only when `FILINGS_990_ENABLED` (enrichment `Deps.FilingsEnabled`), so nothing publishes into a consumer-less topic. This is how a new school's 990 lands minutes after its first enrichment with no human in the loop |
 | `filings.queue_drain_requested` | `{}` | Claim ≤ `FILINGS_990_QUEUE_DRAIN_MAX_ROWS` rows (`FOR UPDATE SKIP LOCKED`), run Stage A→C per org, delete on success, release with `attempts++` / `last_error` / `next_attempt_at` (linear 2/4/6/8 min) on failure; reap locks older than `ENRICHMENT_QUEUE_LOCK_TTL` |
 | `filings.resolution_sweep_requested` | `{}` | Re-resolve `unresolved` mentions per the ladder cadence |
 | `filings.edge_sweep_requested` | `{}` | Write ledger rows with `graph_written_at IS NULL` when the gate is open |
