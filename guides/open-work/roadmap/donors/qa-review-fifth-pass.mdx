@@ -1,0 +1,196 @@
+---
+title: "QA Review 5th Pass"
+sidebarTitle: "QA REVIEW 5th PASS"
+description: "Fifth adversarial QA pass on the Donors and IRS 990 lanes at d73abf8: Q01/Q02/Q03 verified fixed, fresh probes, exact verification commands and limits."
+icon: "clipboard-check"
+---
+
+Reviewed 2026-09-07 at **`d73abf8aaa87a4ec96146ec6bfa8c7c89afa9ad0`**, against fourth-pass tip `d53105e`. Scope: Q01/Q02/Q03, their new tests, migration and decision-log changes, with focused adversarial probes of the revised paths. Implementation files were not edited. Only this report and external QA artifacts were written; test-owned local database rows were cleaned up.
+
+## 1. Verdicts
+
+**Donors — merge-ready for the reviewed scope, with the accepted deferrals and graph gate unchanged.** Q01's empty-generation and commit-order failures are closed by the durable per-object generation row and its transaction-held lock. Q03's same-parse consumer bump now supersedes the prior reading. The committed real-Postgres regressions pass, as do independent probes of repeated reconciliation and cancellation while waiting for that lock. Build, vet, lint and the complete lane race suite pass. No new actionable defect was found in this delta. B09 remains a prerequisite before opening its graph gate; this verdict does not claim that deferred deletion or the other recorded work is implemented.
+
+**IRS 990 — merge-ready for the reviewed scope, with the accepted deferrals unchanged.** Q02's whole-person publication now records ledger history for every organization it names. The committed public-drain regression passes and independently fails against the previous implementation. An additional public-drain probe verifies ledger coverage at the actual publication boundary, refusal to publish when the other organization's ledger write fails, and explicit withdrawal after a correction. A separate real-Postgres probe confirms unchanged governance content preserves the written timestamp and stays out of the pending queue. The complete lane race suite passes. No new actionable defect was found in this delta.
+
+**Result: Q01, Q02 and Q03 are Fixed — verified. No new findings.** The known local entities inventory test fails on unrelated schema references, reproduced below and excluded from these lane verdicts.
+
+## 2. Finding dispositions
+
+“Verified” applies to the named failure and traced production path. It does not certify every possible concurrent schedule.
+
+| Finding | Disposition | Fix and regression evidence |
+|---|---|---|
+| Q01 — generation guard neither durable for an empty revision nor serialized with page commit | **Fixed — verified** | `migrations/20260907173000_donors_source_generation.sql:19` creates the durable `(source_kind, source_object_id)` row. `internal/features/donors/queries/donors.sql:380` takes it through `INSERT … ON CONFLICT DO UPDATE`, holding the row lock to transaction end. Both `ApplyReplayBatch` (`internal/features/donors/repo.go:373`) and `ReconcileRevision` (`internal/features/donors/repo.go:656`) decide under that lock. An empty reconciliation writes the head even without mentions; an older page is refused; a newer page/reconcile waits for an older page to commit before superseding its rows. Real-Postgres tests at `internal/features/donors/repo_test.go:1008` and `internal/features/donors/repo_test.go:1032` pass. The latter holds the old job row, observes its checkpoint wait through `pg_blocking_pids`, then verifies the newer revision waits and ultimately retires the old second line. |
+| Q02 — current-org history does not cover the whole-person claim | **Fixed — verified** | `internal/features/filings/irs990_edges.go:178` collects every organization named by the person's linked mentions. `internal/features/filings/irs990_edges.go:202` recomputes and upserts each organization's ledger before the publication at `internal/features/filings/irs990_edges.go:262`. Targets without a successfully recorded span are removed at `internal/features/filings/irs990_edges.go:223`; prior ledger targets still supply withdrawals at `internal/features/filings/irs990_edges.go:229`. `TestStageCLedgersEveryOrgTheClaimNames` (`internal/features/filings/irs990_run_test.go:725`) drives the VFF/Stanford correction schedule through public `DrainEIN` and passes. Substituting only the previous `irs990_edges.go` makes that same committed test fail with the missing Stanford ledger row. The additional public-drain probe also checks the ledger **at publication**, not merely after the run. |
+| Q03 — a consumer bump at the same parse time cannot supersede | **Fixed — verified** | `internal/features/donors/types.go:489` orders by parse time, parser revision, consumer revision, then identity. `internal/features/donors/service.go:214` supplies the full revision on production replay/reconcile paths. Under the generation lock, `internal/features/donors/queries/donors.sql:408` supersedes other input revisions without the former strict parse-time predicate. `TestRepoConsumerRevisionOfTheSameParseSupersedes` (`internal/features/donors/repo_test.go:1093`) executes real SQL: the same parse under consumer 2 rejects the line, retires the earlier gift, refuses an elder page and marks its late reconcile stale. Passed. |
+
+The remaining T02 and T04 counterexamples from the fourth report are closed by Q01 and Q02. The named T01–T06 fixes remain covered by the full lane suites; the earlier T06 old-code failure evidence is preserved in the `fourth-pass report`. B03/B06's specific outstanding correctness failures tracked through those findings are closed.
+
+The `third-pass 43-finding disposition table` and subsequent fourth-pass deltas remain the historical record. This focused fifth pass does not re-grade untouched original findings. B09, S24, S12/S18/S19/S23, convention sweeps, private-helper coverage downgrades and the other recorded limitations stay recorded rather than being relabeled fixed. No new public-path coverage is claimed merely because the overall suite passes.
+
+## 3. Fresh adversarial checks
+
+**No new actionable findings by severity.** The following probes and source checks support that result.
+
+| Probe | Observed result and scope |
+|---|---|
+| Reconcile the same completed revision repeatedly, then repeat an empty successor | **Passed on real Postgres.** Three repeated reconciliations returned no content changes. Full gift/evidence snapshots, including their clocks, stayed identical. The empty successor kept all gifts retired and still refused a late elder page. Its `reconciled_at` advanced, as intended at `internal/features/donors/queries/donors.sql:396`. Test: `donors_repo_test.go`. This checks content idempotence, not an invariant that audit timestamps never move. |
+| Cancel both a page and a reconciliation while each waits on the generation row | **Passed on real Postgres.** Both returned deadline errors; neither advanced the head or wrote its candidate mention. A different object reconciled while the first object's row was held. After releasing the blocker, a new reconciliation of the original object completed within its one-second deadline and old pages remained refused. Test: `donors_repo_test.go`. The path uses the transaction's queries throughout, with no additional pool checkout inside the generation critical section. |
+| Lose the job lease while attempting a page | **Passed in the committed real-Postgres test.** `internal/features/donors/repo_test.go:205` now checks that the generation row rolls back with the stale-fence page. The checkpoint at `internal/features/donors/repo.go:411` must succeed before commit; a zero-row result rolls the page back. |
+| Publish another organization's target, including a failed other-org ledger write | **Passed through public `DrainEIN`.** A payload-writer guard reads ledger history at `PersistEnvelope`; every governance target is already recorded. An injected failure specifically on the other organization's upsert prevents this person's governance publication. Retry succeeds; correction later explicitly withdraws that organization's target. Test: `filings_run_test.go`. Providers/repository are the existing fixture doubles for this service-path probe. |
+| Re-upsert unchanged cross-org governance content after a graph-written stamp | **Passed on real Postgres.** Three identical upserts preserved `updated_at`, `graph_written_at` and graph edge UUID; the row stayed absent from pending results. Changing the title was the control: it moved `updated_at` and re-entered pending. The real query's `IS DISTINCT FROM` comparison is at `internal/features/filings/queries/filings_990.sql:388`, and pending selection at `internal/features/filings/queries/filings_990.sql:402`. Test: `filings_run_test.go`. The tenure recompute sorts contributing filing IDs deterministically at `internal/features/filings/irs990_tenure.go:132`, so an unchanged set does not become a reordered SQL array merely because another org initiated the run. |
+| Different input hashes with an identical order key | **No reachable production counterexample constructed.** The tie-break is deterministic and cannot make each distinct revision compare newer than the other. The current filing insert preserves an existing object's stored XML hash (`internal/features/filings/queries/filings_990.sql:134`); marking a parse stamps database time (`internal/features/filings/queries/filings_990.sql:196`). I did not independently prove the skill's absolute “impossible” wording for every future writer or manually constructed database state. Artificially constructing two `Revision` values alone would not prove a production defect. |
+
+The temporary overlay adds four tests and exercises actual repo methods or public service entry points. None calls `lockGeneration` or `claimGovernance` directly. No implementation overlay was used for the passing checks. The sole implementation substitution was the deliberately failing Q02 previous-code control.
+
+| Review dimension | Assessment |
+|---|---|
+| Correctness | The three reported failures are closed; focused counterexamples and controls pass. |
+| Security | No new finding in this delta; no identity or authorization behavior was changed. |
+| Performance | Per-object serialization is bounded to replay/reconcile transactions. Per-run filing caching and unchanged-row SQL behavior were traced. No production load benchmark was run. |
+| Maintainability | Durable generation state, explicit revision ordering, public/SQL regressions and corrected decision logs make the guarantees reviewable. |
+
+## 4. Exact verification observed
+
+Commands ran in `/Users/markpederson/dev_work/orbiter-universe-review` using `go1.27.0 darwin/arm64` and `golangci-lint 2.12.2`. For database commands, `TEST_DB_DSN` pointed to the local migrated `orbiter_universe` database on `localhost:5434`.
+
+| Command | Exit / output |
+|---|---|
+| `go build ./...` | **0**, no output — `build.log` |
+| `go vet ./...` | **0**, no output — `vet.log` |
+| `/Users/markpederson/go/bin/golangci-lint run ./...` | **0**, exact output: `0 issues.` — `lint.log` |
+| `git diff --check d53105e..HEAD` | **0**, no output |
+| `scripts/check-migration-order.sh origin/main` | **0**, output below — `migration-order.log` |
+
+```text
+✓ Migration ordering OK (latest on origin/main = 20260904113010).
+```
+
+`origin/main` here was the local recorded ref `97b242ce5a99f5590eeaa6e8377dc7fb6661e8d5`; it was not fetched or updated during review.
+
+### Complete lane suites, race detector and Postgres
+
+`TEST_DB_DSN=… go test -race ./internal/features/donors/... ./internal/features/filings/... -count=1` — **exit 0**. Exact output (`race-postgres.log`):
+
+```text
+ok  	orbiter-universe/internal/features/donors	120.002s
+?   	orbiter-universe/internal/features/donors/db	[no test files]
+ok  	orbiter-universe/internal/features/filings	171.679s
+?   	orbiter-universe/internal/features/filings/db	[no test files]
+?   	orbiter-universe/internal/features/filings/filingspub	[no test files]
+```
+
+Postgres-backed Donors repo tests executed, as the named output below confirms. The ordinary Filings service tests use fixture repositories; setting `TEST_DB_DSN` does not turn those into end-to-end Postgres tests. The additional Filings governance repo probe above explicitly used real Postgres. No live-provider build tag was enabled.
+
+### Named committed regressions
+
+`TEST_DB_DSN=… go test -race ./internal/features/donors ./internal/features/filings -run '^(TestRepoLatePageAfterEmptyRevisionIsRefused|TestRepoPageHeldPastGenerationCheckIsSupersededNotOvertaken|TestRepoConsumerRevisionOfTheSameParseSupersedes|TestRepoJobLeaseAndDeadLetter|TestStageCLedgersEveryOrgTheClaimNames)$' -count=1 -v` — **exit 0**. Exact output (`named-fixes.log`):
+
+```text
+=== RUN   TestRepoJobLeaseAndDeadLetter
+--- PASS: TestRepoJobLeaseAndDeadLetter (0.12s)
+=== RUN   TestRepoLatePageAfterEmptyRevisionIsRefused
+--- PASS: TestRepoLatePageAfterEmptyRevisionIsRefused (0.08s)
+=== RUN   TestRepoPageHeldPastGenerationCheckIsSupersededNotOvertaken
+--- PASS: TestRepoPageHeldPastGenerationCheckIsSupersededNotOvertaken (0.45s)
+=== RUN   TestRepoConsumerRevisionOfTheSameParseSupersedes
+--- PASS: TestRepoConsumerRevisionOfTheSameParseSupersedes (0.08s)
+PASS
+ok  	orbiter-universe/internal/features/donors	2.220s
+=== RUN   TestStageCLedgersEveryOrgTheClaimNames
+--- PASS: TestStageCLedgersEveryOrgTheClaimNames (1.84s)
+PASS
+ok  	orbiter-universe/internal/features/filings	3.727s
+```
+
+### Independent adversarial probes
+
+`TEST_DB_DSN=… go test -race -overlay=/Users/markpederson/Downloads/QA_d73abf8_evidence/overlay.json ./internal/features/donors ./internal/features/filings -run TestFifthQA -count=1 -v` — **exit 0**. The executed overlay initially lived in `/private/tmp/orbiter-fifth-qa-d73abf8`; its preserved equivalent uses the Downloads paths above. Exact final output (`probes.log`):
+
+```text
+=== RUN   TestFifthQARepeatedReconcileIsContentIdempotent
+--- PASS: TestFifthQARepeatedReconcileIsContentIdempotent (0.20s)
+=== RUN   TestFifthQAGenerationWaitCancellationReleasesTransaction
+=== RUN   TestFifthQAGenerationWaitCancellationReleasesTransaction/page
+=== RUN   TestFifthQAGenerationWaitCancellationReleasesTransaction/reconcile
+--- PASS: TestFifthQAGenerationWaitCancellationReleasesTransaction (0.44s)
+    --- PASS: TestFifthQAGenerationWaitCancellationReleasesTransaction/page (0.15s)
+    --- PASS: TestFifthQAGenerationWaitCancellationReleasesTransaction/reconcile (0.15s)
+PASS
+ok  	orbiter-universe/internal/features/donors	2.123s
+=== RUN   TestFifthQACrossOrgLedgerBeforePublishAndFailure
+--- PASS: TestFifthQACrossOrgLedgerBeforePublishAndFailure (1.73s)
+=== RUN   TestFifthQAGovernanceSQLNoopDoesNotRependWrittenRow
+--- PASS: TestFifthQAGovernanceSQLNoopDoesNotRependWrittenRow (0.11s)
+PASS
+ok  	orbiter-universe/internal/features/filings	3.368s
+```
+
+Two initial runs failed in the QA harness, not in production assertions about a defect: the first expected the injected public-drain failure in the result instead of the returned error; the second counted all envelopes, including legitimate organization-profile publication, rather than this person's governance envelopes. Both assertions were corrected, with implementation untouched. Those outputs are preserved as `probes-harness-correction.log` and `probes-harness-envelope-count.log`.
+
+### Previous-code control for Q02
+
+`go test -overlay=/Users/markpederson/Downloads/QA_d73abf8_evidence/q02-old-overlay.json ./internal/features/filings -run '^TestStageCLedgersEveryOrgTheClaimNames$' -count=1 -v` — **expected exit 1**. Only `irs990_edges.go` was substituted with its exact `d53105e` contents; the committed test stayed current. Exact output (`q02-old.log`):
+
+```text
+=== RUN   TestStageCLedgersEveryOrgTheClaimNames
+    irs990_run_test.go:749: 
+        	Error Trace:	/Users/markpederson/dev_work/orbiter-universe-review/internal/features/filings/irs990_run_test.go:749
+        	Error:      	"[]" should have 1 item(s), but has 0
+        	Test:       	TestStageCLedgersEveryOrgTheClaimNames
+        	Messages:   	the claimed target has a ledger row before it is published
+--- FAIL: TestStageCLedgersEveryOrgTheClaimNames (0.18s)
+FAIL
+FAIL	orbiter-universe/internal/features/filings	0.802s
+FAIL
+```
+
+### Reported local schema-inventory failure
+
+`TEST_DB_DSN=… go test ./internal/features/entities -run '^TestMergeInventoryMatchesTheSchema$' -count=1 -v` — **exit 1**, independently reproduced. Exact output (`merge-inventory.log`):
+
+```text
+=== RUN   TestMergeInventoryMatchesTheSchema
+    merge_inventory_test.go:51: 
+        	Error Trace:	/Users/markpederson/dev_work/orbiter-universe-review/internal/features/entities/merge_inventory_test.go:51
+        	Error:      	Should be empty, but was [universe.live_event.entity_id universe.live_event.entity_type universe.media_appearance.entity_id universe.media_appearance.entity_type universe.media_appearance_mentions.appearance_entity_id universe.media_appearance_mentions.person_entity_id universe.media_appearance_sources.appearance_entity_id universe.media_event_associations.appearance_entity_id universe.media_event_associations.live_event_entity_id universe.media_interaction_groups.appearance_entity_id universe.media_memberships.appearance_entity_id universe.media_memberships.person_entity_id universe.media_resolution_attempts.chosen_entity_id universe.media_work.subject_entity_id universe.news_comention_rollup.person_a universe.news_comention_rollup.person_b universe.news_pair_contributions.person_a universe.news_pair_contributions.person_b universe.news_person_index.person_entity_id universe.news_person_matches.person_entity_id universe.stage_credit.producer_entity_id universe.stage_credit.producer_entity_type universe.stage_credit.production_entity_id universe.stage_credit.production_entity_type universe.stage_credit_mention.accepted_entity_id universe.stage_credit_mention.accepted_entity_type universe.stage_credit_resolution_attempts.chosen_entity_id universe.stage_production.entity_id universe.stage_production.entity_type universe.stage_production_profile.entity_id universe.stage_production_profile.entity_type universe.stage_production_profile.work_entity_id universe.stage_production_profile.work_entity_type universe.stage_source_job.seed_entity_id universe.stage_source_record.resolved_entity_id universe.stage_source_record.resolved_entity_type universe.stage_source_snapshot.observed_entity_id universe.stage_work_checkpoint.production_entity_id universe.stage_work_checkpoint.production_entity_type]
+        	Test:       	TestMergeInventoryMatchesTheSchema
+        	Messages:   	new reference(s) to universe.entities: add a row to entityRefs with a merge decision
+--- FAIL: TestMergeInventoryMatchesTheSchema (0.10s)
+FAIL
+FAIL	orbiter-universe/internal/features/entities	0.621s
+FAIL
+```
+
+The local database has applied versions `20260907090213`, `20260907090253` and `20260907095520`; those migration files are absent from this review branch. The reported missing inventory entries are `live_event`, `media_*`, `news_*` and `stage_*`, not the new generation table, which has no entity references. The observed mismatch is consistent with the reported other-session schema changes; I did not audit that session or alter its schema/inventory. Persona and the pre-existing queue-pick failure were outside this focused test run.
+
+### Migration, documentation and cleanup
+
+`migrations/20260907173000_donors_source_generation.sql:19` is on the branch. Read-only Postgres metadata confirms the specified columns, composite primary key, and applied goose version `20260907173000`; the prior mention-generation migration `20260907142146` is also applied. Full metadata output: `migration-db.log`. I did not run migrations or certify a production rollout; app startup requires the migration to have run.
+
+The decision-log corrections are substantive: the old mention-only rejection is explicitly withdrawn at `.claude/skills/donors-enrichment/SKILL.md:749`, and D47 records the locked durable row at `.claude/skills/donors-enrichment/SKILL.md:754`. Filings records every-org history at `.claude/skills/filings-enrichment/SKILL.md:25`. The prior schema handoff is **closed on this branch**: `.claude/skills/universe-schema/SKILL.md:714` describes the mention column/index, and `.claude/skills/universe-schema/SKILL.md:715` describes the generation table.
+
+Post-test row counts (`post-tests-db.log`):
+
+```text
+         table_name         | count 
+----------------------------+-------
+ donation_source_generation |     0
+ donation_mention           |     0
+ donation_gift              |     0
+ donation_gift_evidence     |     0
+ donation_job               |     0
+ filing_990_governance_edge |     0
+(6 rows)
+```
+
+## 5. Limits and claims not independently confirmed
+
+- No new bug was found in the reviewed delta. This is not proof against every interleaving or future consumer/parser rollout. The same-parse consumer test uses the real revision/repo API; it does not deploy two application versions.
+- The absolute assertion that distinct hashes can never share an order key was not proved as a schema invariant. No current production path violating it was constructed, so it is not raised as a finding.
+- OpenAPI, shared stages, film/TV/music/person behavior and the `ReleaseJob`/`FinishJob`/`CheckpointJob` signatures were unchanged in this delta. Build/vet covers compilation; OpenAPI validation and unrelated behavioral suites were not rerun. Their earlier evidence remains in the prior reports.
+- No live IRS/search/LLM providers, production graph, production database, migration execution or deployed branch state were tested. The accepted graph-delete prerequisite and other deferrals remain in force.
+- The other session's schema inventory mismatch was reproduced locally, but ownership and the complete contents of that session's uncommitted work were not audited. No other lane or parked branch was changed.
+
+Report copies: `worktree QA_REVIEW.md` and `Downloads QA_REVIEW_FIFTH_PASS.md`. Runnable evidence and exact logs: `README.md`.

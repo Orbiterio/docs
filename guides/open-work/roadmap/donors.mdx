@@ -6,7 +6,23 @@ icon: "hand-holding-dollar"
 
 import BakeOffRules from '/snippets/bake-off-rules.mdx';
 
-**Status — 2026-09-06: revised build plan; Donors is not built.** Build the **foundation backbone in `orbiter-universe` next**, consuming the committed [Phase 1: 990 Adapter](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter). Curated announced gifts and honor rolls follow as separately gated phases. This pass reviewed the implementation through `a377c44`, its 32 committed filing fixtures, local Mintlify docs, and the Basic Memory ORBIT-1862 build record.
+<Note>
+  **Status 2026-09-07: Phase 1 foundation backbone is built (slices 1–4, slice 5 relational half), five QA passes remediated, on `ORBIT-1864/donor-enrichment` (tip `d73abf8`, pushed) — no PR yet by Mark's decision, nothing deployed.** The plan below was written on 2026-09-06 before the build; where it says *proposed* or *not built*, read the list here as what exists. Decision log D1–D46: `.claude/skills/donors-enrichment/SKILL.md`.
+
+  **What exists** (`internal/features/donors`):
+  - **Storage** — the eight tables in [Proposed AlloyDB storage](#proposed-alloydb-storage) (`20260906212956_donors_init`) plus `donation_mention.revision_parsed_at` and `donation_source_generation` (`20260907142146`, `20260907173000`): a filing revision is a *generation* ordered by parse time, never row time.
+  - **Consumer** — reads grants only through `filingspub.GrantReader`; never parses XML, never calls IRS/ProPublica/search/LLM. Four job kinds: `grantor_request` (EIN → publishes `filings.org_requested`), `feed_scan` (a singleton the tick re-pends; turns newly parsed filings into `filing_replay` jobs), `filing_replay` (pages a filing's grants → mentions → gifts → pair projection), `recipient_sweep` (re-gates held mentions after an allowlist widening).
+  - **Recipient gate** — filed EIN → reviewed alias (`data/recipient_aliases.json`: Stanford, NYU, Harvard; seeded with `make seed ONLY=donor-recipient-aliases`) → exact legal name goes to `needs_review`. A gift is minted only when the recipient is in `DONORS_RECIPIENT_ALLOWLIST`; an empty allowlist parks every grant `out_of_scope`.
+  - **Donor class** — `990PF` filer → `foundation` (weight 30; 40 when strictly more than 200 grants in a complete window). `990` / `990EZ` Schedule I grantors → `unsupported`: gift stored, no edge.
+  - **Ledger + graph** — `donation_edge` recomputed per pair from the complete eligible gift set; `donor_to` fact elected by distill; `DONOR_TO` written by `SweepEdges` only when `DONORS_EDGE_WRITES_ENABLED`, the fact is chosen and both nodes exist, with a conditional revision stamp.
+  - **Admin** — `POST /v1/admin/donors/jobs`, `GET …/jobs`, `GET …/jobs/{id}`, `POST …/drain`, `GET …/mentions`, `GET …/edges`, `GET …/edges/{id}`, `POST …/edge-sweep`. Events registered: `donors.job_requested`, `donors.queue_drain_requested`, `donors.edge_sweep_requested`.
+  - **Config** — every `DONORS_*` control in [Proposed runtime](#proposed-runtime-and-management) is parsed and wired; `DONORS_MAX_NEW_PERSONS_PER_RUN` must be `0` (non-zero is refused at construction); `DONORS_TRUSTEE_BRIDGE_ENABLED` requires the edge gate.
+  - **Proof** — the real-corpus suite: 32 parsed filings → 32 replays, Ford's 14,939 lines → mentions, exactly the labelled gifts (Stanford 15 / \$2,719,000, NYU 28, Harvard 37); Postgres-backed repo tests for leases, generations, pair locks and conditional stamps.
+
+  **Not yet:** the trustee bridge *projection* (derivations and dependencies are stored; `drawEdge` refuses `trustee_derived`), `donors.resolution_sweep_requested` (declared, not registered), Phase 2 announced gifts and Phase 3 honor rolls, the dev deploy.
+</Note>
+
+**Status — 2026-09-06: revised build plan.** Build the **foundation backbone in `orbiter-universe` next**, consuming the committed [Phase 1: 990 Adapter](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-adapter). Curated announced gifts and honor rolls follow as separately gated phases. This pass reviewed the implementation through `a377c44`, its 32 committed filing fixtures, local Mintlify docs, and the Basic Memory ORBIT-1862 build record.
 
 <Note>
   **Build target, confirmed by Mark: Go + AlloyDB on GCP. No Xano, including test harnesses.** Durable Donors state lives in AlloyDB `universe.*`; Go modules run in the existing API and worker on Cloud Run. GCS holds raw source artifacts. The existing Universe FalkorDB graph receives elected relationship projections through the Go graph feature. Test with Go fixtures and Go evaluation commands. Legacy function IDs and `master_person` / `master_company` lookups are not implementation dependencies.

@@ -5,9 +5,125 @@ description: "Entry point for the federal-filings lane and the Donors build: the
 icon: "hand-holding-dollar"
 ---
 
-## Overview for Denis
+## Notes for Dennis
 
-{/* TODO: Placeholder — write the handoff overview for Denis here. */}
+Two Go features in `orbiter-universe`, both on branch `ORBIT-1864/donor-enrichment` (tip `d73abf8`, 46 commits ahead of `main`, no PR yet, nothing deployed). Every flag defaults to `false`, so merging changes nothing until the dev env is flipped.
+
+### What it does
+
+**`internal/features/filings` — the IRS 990 adapter.** Given a nonprofit, it pulls the org's last four years of Form 990 filings (ProPublica for the inventory, IRS TEOS XML for the filing itself), stores the XML in GCS, and parses two things deterministically: the **board and officer roster** (Part VII) and the **grant lines** (Schedule I on a 990, Part XV on a 990-PF). The org is identified by EIN. People on the roster are only linked to a Person node when there is real corroboration (already affiliated with the org, a prior filing, or a LinkedIn profile plus an LLM adjudication at ≥ 0.85); a bare name never becomes a person.
+
+**`internal/features/donors` — the Donors lane.** It never touches the IRS. It reads the grant lines the adapter parsed (through `filingspub.GrantReader`), matches each recipient to a School we track, and keeps a gift ledger per (foundation, School) pair. Phase 1 recipients are Stanford, NYU and Harvard, matched by filed EIN or a reviewed alias list, and only when the School is in `DONORS_RECIPIENT_ALLOWLIST`.
+
+### Where it plugs into the waterfalls
+
+One place: **company waterfall step 16, `filings_request`** (`internal/features/enrichment/company/steps_filings.go`). After `node_sync`, if the LLM classified the company as `nonprofit` or `educational` (or `is_school` is set) and it is not `government`, the step hands `{OrgEntityID, Name, Domain}` to the adapter. The adapter finds the EIN via ProPublica, attaches it to the entity the graph already holds, and queues it. A scheduler tick (`filings.queue_drain_requested`, every 5 min once enabled) drains the queue. The person waterfall is untouched.
+
+Donors has no waterfall hook. Its `feed_scan` job runs on every Donors drain tick and turns each newly parsed filing into a `filing_replay` job automatically; a `grantor_request` job (an EIN) is how you ask for a foundation that is not yet in Universe.
+
+### What we get: edges
+
+| Edge | Direction | Weight | Written when |
+| --- | --- | --- | --- |
+| `BOARD_MEMBER_OF` | Person → Company:Organization | 8 | Roster row flagged trustee/director, person resolved, `board_member_of` fact chosen, both nodes exist, `FILINGS_990_EDGE_WRITES_ENABLED=true` |
+| `OFFICER_OF` | Person → Company:Organization | 14 officer / 20 key employee | Same, for officer or key-employee rows |
+| `DONOR_TO` | Company (990-PF foundation) → Company:School | 30; 40 if > 200 grants in the window | Recipient allowlisted, `donor_to` fact chosen, both nodes exist, `DONORS_EDGE_WRITES_ENABLED=true` |
+
+Every edge carries `title_as_filed` / `gift_count`, `total_usd_known`, `valid_from` / `valid_to` or `first_gift_year` / `last_gift_year`, `filing_refs` or `mention_ref`, `source_urls`, `confidence`, `source: irs_990` and a templated description. Tenure and totals are recomputed from every contributing filing, so re-running changes nothing.
+
+**When.** Rows land on the first drain; the graph edge lands on the next edge sweep (`filings.edge_sweep_requested` / `POST /v1/admin/donors/edge-sweep`) after the gate is open. For a school that enters through the company waterfall that is minutes after its first enrichment.
+
+**Not written, on purpose:** people from bare names; `DONOR_TO` from a plain 990 or 990-EZ (only 990-PF filers are classified as foundations today); trustee-derived person → School `DONOR_TO` (the routes are stored relationally, projection is off); anything while a gate is closed.
+
+### A smoke test you can run
+
+**Ford Foundation, EIN `13-1684331`.** It is not in Universe today, it files a 990-PF, and its four committed filings hold 14,939 grant lines — 15 of them to Stanford (\$2,719,000), 28 to NYU, 37 to Harvard. The fixture is checked in, so the offline suite proves the same numbers without the network:
+
+```bash
+TEST_DB_DSN=postgres://…  go test -race ./internal/features/filings/... ./internal/features/donors/... -count=1
+```
+
+Against a dev stack with the gates open (`FILINGS_990_ENABLED`, `FILINGS_990_QUEUE_DRAIN_ENABLED`, `FILINGS_990_EDGE_WRITES_ENABLED`, `DONORS_ENABLED`, `DONORS_QUEUE_DRAIN_ENABLED`, `DONORS_EDGE_WRITES_ENABLED`, and `DONORS_RECIPIENT_ALLOWLIST` set to the three School entity ids; `make seed ONLY=donor-recipient-aliases` once):
+
+<Steps>
+  <Step title="Kick it off: enrich Ford by domain, or queue the EIN">
+    The waterfall route is the real one. Enrich **`fordfoundation.org`** through the normal company waterfall. Preflight classifies it `nonprofit`, step 16 hands `{entity, "Ford Foundation", fordfoundation.org}` to the adapter, the adapter asks ProPublica by name, gets the single exact-name hit with filings, attaches EIN `131684331` to the entity, and queues it. Nothing else to call.
+
+    The admin route skips the waterfall and is the same from here on:
+    ```bash
+    curl -X POST $API/v1/admin/filings/990/orgs -H "Authorization: Bearer $ADMIN" -d '{"ein":"13-1684331"}'
+    ```
+    Either way, then:
+    ```bash
+    curl -X POST $API/v1/admin/filings/990/drain -H "Authorization: Bearer $ADMIN" -d '{"max_rows":1}'
+    curl $API/v1/admin/filings/990/orgs/131684331 -H "Authorization: Bearer $ADMIN"
+    ```
+    Expect four `990PF` filings `parsed` (TY2020, 2022–2024 — the IRS has no TY2021 XML for Ford), a `Company:Organization` entity with `nonprofit: true, foundation: true`, 24–26 roster mentions per filing, and a `grants` count of 14,939.
+  </Step>
+  <Step title="Let Donors replay the grants">
+    ```bash
+    curl -X POST $API/v1/admin/donors/drain -H "Authorization: Bearer $ADMIN" -d '{"max_rows":50}'
+    curl "$API/v1/admin/donors/jobs?state=completed" -H "Authorization: Bearer $ADMIN"
+    curl "$API/v1/admin/donors/edges?state=pending" -H "Authorization: Bearer $ADMIN"
+    ```
+    Repeat the drain until the four `filing_replay` jobs complete. `edges` shows three Ford pairs at weight 40 with `gift_count` 15 / 28 / 37 and `graph_state: pending`.
+  </Step>
+  <Step title="Sweep and read the graph">
+    ```bash
+    curl -X POST $API/v1/admin/donors/edge-sweep -H "Authorization: Bearer $ADMIN" -d '{}'
+    ```
+    ```cypher
+    MATCH (f:Company {ein: '131684331'})-[r:DONOR_TO]->(s:School)
+    RETURN s.name, r.weight, r.gift_count, r.total_usd_known, r.first_gift_year, r.last_gift_year
+    ```
+    Expect three rows. Stanford: weight 40, 15 gifts, 2,719,000. Ford's trustees who resolved also show up as `(:Person)-[:BOARD_MEMBER_OF]->(f)` after `filings.edge_sweep_requested`.
+  </Step>
+</Steps>
+
+Run the drains twice: nothing should change. The detailed pass criteria are on [990 Adapter Smoke Tests](/guides/open-work/roadmap/990-fec-form-d/phase-1-990-smoke-tests) (ST-3 is Ford) and in the Donors page's status note.
+
+### A second test: a school that is not in Universe yet
+
+This one exercises the path Ford does not: adding a recipient *after* the grants are loaded, without re-fetching anything. One constraint decides how it works — **990-PF grant lines carry no recipient EIN** (0 of Ford's 14,939 do), so a recipient is matched by a reviewed alias, and today only Stanford, NYU and Harvard have one. Ford's committed filings already hold gifts to schools that are not in the graph:
+
+| School | Domain | Ford grants | Total | Filed name to alias |
+| --- | --- | --- | --- | --- |
+| Georgetown University | `georgetown.edu` | 25 | \$8,790,000 | `GEORGETOWN UNIVERSITY` |
+| Howard University | `howard.edu` | 9 | \$3,833,500 | `HOWARD UNIVERSITY` |
+| Yale University | `yale.edu` | 16 | \$2,523,400 | `YALE UNIVERSITY` |
+| Columbia University | `columbia.edu` | 13 | \$1,933,000 | `THE TRUSTEES OF COLUMBIA UNIVERSITY IN THE CITY OF NEW YORK` |
+| MIT | `mit.edu` | 11 | \$1,195,250 | `MASSACHUSETTS INSTITUTE OF TECHNOLOGY` |
+
+Pick Georgetown (largest, cleanest name):
+
+<Steps>
+  <Step title="Enrich the school by domain">
+    Run the company waterfall on **`georgetown.edu`**. This creates the School entity and node, and because it is a nonprofit, step 16 also requests Georgetown's own 990 — so you get its board as `BOARD_MEMBER_OF` edges for free. Note the entity id.
+  </Step>
+  <Step title="Add the reviewed alias and widen the allowlist">
+    Add a row to `internal/features/donors/data/recipient_aliases.json`: recipient `georgetown` keyed by EIN `530196603` and domain `georgetown.edu`; alias `georgetown university`, region `DC`, `decision: map`, `approved: true`, with the Ford object id + ordinal lines as evidence (copy the Stanford row's shape). Then:
+    ```bash
+    make seed ONLY=donor-recipient-aliases
+    ```
+    Append Georgetown's entity id to `DONORS_RECIPIENT_ALLOWLIST` and restart the worker.
+  </Step>
+  <Step title="Sweep the recipient — no replay">
+    ```bash
+    curl -X POST $API/v1/admin/donors/jobs -H "Authorization: Bearer $ADMIN" \
+      -d '{"kind":"recipient_sweep","subject_entity_id":"<georgetown entity id>"}'
+    curl -X POST $API/v1/admin/donors/drain -H "Authorization: Bearer $ADMIN" -d '{"max_rows":5}'
+    curl -X POST $API/v1/admin/donors/edge-sweep -H "Authorization: Bearer $ADMIN" -d '{}'
+    ```
+    The sweep re-gates the Ford mentions already in `donation_mention` — zero IRS or ProPublica calls, no `filing_replay` — and mints 25 gifts. After the edge sweep:
+    ```cypher
+    MATCH (f:Company {ein: '131684331'})-[r:DONOR_TO]->(s:School {domain: 'georgetown.edu'})
+    RETURN s.name, r.weight, r.gift_count, r.total_usd_known
+    ```
+    Expect one row: weight 40, 25 gifts, 8,790,000. If the sweep completes with `no_matching_grants_in_loaded_corpus`, the alias did not seed — check that the Georgetown entity resolved by EIN or domain in the seeder log.
+  </Step>
+</Steps>
+
+Any school in the table works the same way. A school whose filed name is a legal-entity name (Columbia, Boston University's `TRUSTEES OF BOSTON UNIVERSITY`) is exactly what the alias file is for; do not add a substring rule.
 
 ## Pages
 
