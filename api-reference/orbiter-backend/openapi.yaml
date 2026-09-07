@@ -25,8 +25,8 @@ servers:
 tags:
   - name: Account Verification
     description: |
-      Identity verification on signup — a new user connects GitHub or
-      LinkedIn once; the backend compares the provider name with the
+      Identity verification on signup — a new user connects GitHub,
+      LinkedIn, or X once; the backend compares the provider name with the
       WorkOS signup name before person resolution/enrichment runs.
   - name: Activities
     description: |
@@ -526,6 +526,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
       requestBody:
         required: true
         content:
@@ -574,6 +575,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
         - name: code
           in: query
           required: false
@@ -9765,6 +9767,41 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /companies/{company_id}/founders:
+    get:
+      operationId: listCompanyFounders
+      tags:
+        - Companies
+      summary: List a company's founders
+      description: |
+        Powers the company sheet's founders section. Returns the people the
+        enrichment provider reports as the company's founders in the order they were linked, each with the lean person
+        card nested under `person`. The list is empty until the company's
+        package has been synced, and `meta.total` is its length.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: company_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The company's founders; empty when none are known.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCompanyFoundersEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /company-financials:
     get:
       operationId: getCompanyFinancials
@@ -10856,6 +10893,7 @@ components:
           enum:
             - github
             - linkedin
+            - x
             - null
           description: Provider of the latest verification attempt, if any.
         safe_reason:
@@ -21414,6 +21452,68 @@ components:
         funding:
           type: array
           items: {}
+    CompanyFounderPerson:
+      type: object
+      description: The lean person card nested under a founder row.
+      required:
+        - id
+        - full_name
+        - avatar
+        - current_title
+        - bio
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+        bio:
+          type:
+            - string
+            - 'null'
+    CompanyFounder:
+      type: object
+      description: One founder link with the person it names, keyed by its table name.
+      required:
+        - id
+        - company_id
+        - person_id
+        - person
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        person:
+          $ref: '#/components/schemas/CompanyFounderPerson'
+    ListCompanyFoundersEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompanyFounder'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     FinancialData:
       type: object
       description: |
@@ -21481,6 +21581,11 @@ components:
           description: Upstream revenue object, or null.
         acquired:
           type: boolean
+        acquired_by:
+          type:
+            - string
+            - 'null'
+          description: The acquirer as the enrichment provider names it.
         acquired_by_permalink:
           type:
             - string
