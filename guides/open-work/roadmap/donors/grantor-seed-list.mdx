@@ -1,0 +1,146 @@
+---
+title: "Grantor Seed List"
+sidebarTitle: "Grantor Seed List"
+description: "The reviewed list of private foundations whose 990-PF filings seed the Donors corpus — why an explicit seed is needed, forty EINs verified against ProPublica on 2026-09-07, the ambiguous entities that need a call, the exclusions, and the seeder that turns approved rows into grantor requests."
+icon: "seedling"
+---
+
+<Danger>
+  **Do this after the live Universe is built. Not in dev, not as part of slice 6.**
+
+  Seeding is a corpus decision, not a test. Each approved row makes the 990 adapter fetch that foundation's four-year filing window from ProPublica and the IRS and replay every grant line into `donation_*` against the production School set. Run against dev before the live graph exists and the result is tens of thousands of gift rows nobody can verify against real School nodes, a spent fetch budget, and pairs that will be recomputed anyway once the real allowlist exists. The sequence is: slice 6 with Ford only → slices 7 and 8 → the live Universe with its School nodes and the allowlist they define → **then** this seed, tranche 1 first.
+</Danger>
+
+**Status — 2026-09-07: drafted, EINs verified, nothing approved, nothing seeded.** This page is the reviewed manifest the [Donors plan](/guides/open-work/roadmap/donors) calls for under *Entry points and source coverage*: "Seed foundations explicitly: Ford first, then verified grantor EINs from available evidence or reviewed discovery." It follows the same protocol as the recipient alias manifest — Devin drafts, Mark approves or strikes each row, and only an approved row ever seeds.
+
+## Why an explicit seed
+
+The Donors lane runs whenever the 990 adapter parses a filing; its feed scan does not care how the filing got there. What causes a filing to be fetched is one of three doors:
+
+| Door | Who opens it | Automatic |
+|---|---|---|
+| Company waterfall step 16: the LLM classified `company_type` as Nonprofit or School | any company the pipeline is already enriching | yes |
+| `POST /v1/admin/filings/990/orgs {"ein"}` | an operator | no |
+| Donors `grantor_request` job (`POST /v1/admin/donors/jobs`) | an operator | no |
+
+Door one is incidental: it fires for nonprofits the company pipeline happens to touch for other reasons. Nobody enriches the Ford Foundation because a user asked about it — Ford's grants matter because of who receives them. And IRS filings are indexed by **grantor**, not grantee: a School's own Schedule I lists what it gave, never who gave to it. There is no query against the IRS data for "everyone who gave to Stanford." The foundation corpus only grows by someone naming foundations.
+
+Today that someone is an operator, one EIN at a time. This list is the named set.
+
+## What the seed is
+
+A manifest of reviewed rows, embedded in the binary like `data/recipient_aliases.json`, and a seeder registered in `cmd/seed` as `donor-grantor-seed`:
+
+```bash
+make seed ONLY=donor-grantor-seed            # local
+make seed-alloydb ONLY=donor-grantor-seed    # dev / prod through the tunnel
+```
+
+Each approved row becomes one `grantor_request` job keyed `grantor:<ein>` — the same job an operator creates by hand today, so the seeder is idempotent (a re-run lands on the same row) and everything downstream is already built: the 990 adapter fetches and parses, the Donors feed scan replays, the recipient gate resolves, the ledger recomputes. The seeder adds a manifest and roughly forty lines of Go; it adds no new path.
+
+Volume is bounded by the existing knobs. `DONORS_MAX_INSTITUTIONS_PER_RUN` (default 25) caps how many grantor requests a tick hands to the filings lane; `FILINGS_990_MAX_FILINGS_PER_RUN` (default 100) caps fetches; `DONORS_MAX_MENTIONS_PER_RUN` (default 500) caps grant lines per replay run. Forty foundations at four filings each is 160 fetches and, judging by Ford's 14,939 lines over four filings, on the order of a few hundred thousand grant lines — every one a `donation_mention`, most `unresolved` because most recipients are not Schools. That is the corpus the plan wants; it is also why this runs after the live Universe, not before.
+
+## How the list was drafted and verified
+
+Candidates are private grantmaking foundations known for higher-education and research giving in the United States. Every EIN below was looked up on 2026-09-07 through the ProPublica Nonprofit Explorer API (`/nonprofits/api/v2/search.json`, exact-name query, state filter) and the top hit's EIN, legal name, city and NTEE code are reproduced as returned. Nothing on this page is from memory.
+
+Two things the verification does **not** establish, and the reviewer should not read into it:
+
+- **Giving volume.** ProPublica's search returns no financials. Rank and hub status come from the 990 adapter's `GrantWindow` after the fetch — the `> 200 grants in the four-year window` hub rule will put nearly every row here at weight 40.
+- **School relevance.** The "why on the list" column is the drafter's reason for including the row, not a measured fact. The Donors gate decides scope at the gift: a foundation that turns out to give nothing to an allowlisted School produces mentions and no gifts, which is correct and cheap.
+
+NTEE codes are reproduced as the IRS Business Master File carries them; several are odd (Ford as `T21` "corporate foundation", Mellon as `B82` "scholarships"). They do not matter to the lane: donor class comes from the **return type** — a 990-PF filer is a foundation — never from NTEE.
+
+## Tranche 1 — the first bounded run
+
+Ten foundations with large, well-structured 990-PF Part XV schedules and heavy higher-education and research giving. Ford is already loaded from slice 6 and is listed for completeness.
+
+| Foundation (as filed) | EIN | City, State | NTEE | Why on the list (reviewer to confirm) | Review |
+|---|---|---|---|---|---|
+| Ford Foundation | 13-1684331 | New York, NY | T21 | The slice 1–6 fixture; 14,939 lines across four filings already committed | already loaded |
+| Gates Foundation | 56-2618866 | Seattle, WA | T22 | The largest US private foundation; global health and US education grantmaking. See the Trust in *Ambiguous entities* | ☐ |
+| William & Flora Hewlett Foundation | 94-1655673 | Menlo Park, CA | T21 | Education, environment and performing arts; Bay Area universities | ☐ |
+| David And Lucile Packard Foundation | 94-2278431 | Los Altos, CA | T20 | Science, conservation and children's programs; Stanford-adjacent | ☐ |
+| Andrew W Mellon Foundation | 13-1879954 | New York, NY | B82 | Humanities and higher education, the single largest funder of the humanities in the US | ☐ |
+| John D & Catherine T Macarthur Foundation | 23-7093598 | Chicago, IL | T20Z | Research, journalism and the MacArthur Fellows; university grantmaking | ☐ |
+| Simons Foundation Inc | 13-3794889 | New York, NY | T20 | Mathematics and basic science; Stony Brook and university research grants | ☐ |
+| Gordon E And Betty I Moore Foundation | 94-3397785 | Palo Alto, CA | T20 | Science and environment; Caltech and Bay Area research universities | ☐ |
+| Alfred P Sloan Foundation | 13-1623877 | New York, NY | B82 | Science, technology and economics research grants to universities | ☐ |
+| Carnegie Corporation Of New York | 13-1628151 | New York, NY | B124 | Education and international peace; university grantmaking since 1911 | ☐ |
+
+## Tranche 2 — the rest of the verified set
+
+| Foundation (as filed) | EIN | City, State | NTEE | Why on the list (reviewer to confirm) | Review |
+|---|---|---|---|---|---|
+| Lilly Endowment Inc | 35-0868122 | Indianapolis, IN | — | Among the largest US foundations; Indiana higher education | ☐ |
+| Bloomberg Family Foundation Inc | 20-5602483 | New York, NY | T20 | Bloomberg Philanthropies' 990-PF filer; Johns Hopkins and public health | ☐ |
+| Foundation To Promote Open Society | 26-3753801 | New York, NY | T22 | Open Society Foundations' principal US grantmaker; see *Ambiguous entities* | ☐ |
+| Robert Wood Johnson Foundation | 22-6029397 | Princeton, NJ | T20 | Health policy and research; university schools of public health | ☐ |
+| Walton Family Foundation Inc | 13-3441466 | Bentonville, AR | T20 | K-12 and higher education; University of Arkansas | ☐ |
+| Rockefeller Foundation | 13-1659629 | New York, NY | — | Health, food and energy; long history of university grantmaking | ☐ |
+| Rockefeller Brothers Fund Inc | 13-1760106 | New York, NY | T20 | Democratic practice, sustainable development; distinct from the Foundation | ☐ |
+| W K Kellogg Foundation | 38-1359264 | Battle Creek, MI | T21 | Children, families and communities; Michigan universities. See the Trust in *Ambiguous entities* | ☐ |
+| Kresge Foundation | 38-1359217 | Troy, MI | T22 | Cities, health, higher-education access; Detroit institutions | ☐ |
+| Conrad N Hilton Foundation | 94-3100217 | Westlake Village, CA | T22 | Catholic sisters, homelessness, hospitality education (Hilton College, Houston) | ☐ |
+| Leona M & Harry B Helmsley Charitable Trust | 13-7184401 | New York, NY | T20 | Health and medical research; academic medical centers | ☐ |
+| Laura And John Arnold Foundation | 26-3241764 | Houston, TX | T20 | Arnold Ventures' 501(c)(3); evidence-based policy research at universities | ☐ |
+| Chan Zuckerberg Initiative Foundation | 45-5002209 | Palo Alto, CA | T20 | CZI's 501(c)(3) arm; science and education; Biohub partners Stanford, UCSF, Berkeley | ☐ |
+| Bezos Family Foundation | 91-2073258 | Seattle, WA | T22 | Education; distinct from Jeff Bezos's personal giving | ☐ |
+| The Susan Thompson Buffett Foundation | 47-6032365 | Omaha, NE | T22 | Reproductive health and Nebraska college scholarships | ☐ |
+| Duke Endowment | 56-0529965 | Charlotte, NC | — | By indenture: Duke University, Davidson College, Furman University, Johnson C. Smith University | ☐ |
+| Robert W Woodruff Foundation Inc | 58-1695425 | Atlanta, GA | T21 | Emory University's principal foundation donor; Georgia institutions | ☐ |
+| Annie E Casey Foundation | 52-1951681 | Baltimore, MD | T21 | Child welfare; university research partnerships | ☐ |
+| Charles Stewart Mott Foundation | 38-1211227 | Flint, MI | T99 | Civil society, education; Michigan universities | ☐ |
+| Kavli Foundation | 77-0560142 | Los Angeles, CA | T22 | Kavli Institutes at universities (astrophysics, nanoscience, neuroscience) | ☐ |
+| The Heising-Simons Foundation | 26-0799587 | Los Altos, CA | T20 | Science, climate, education; university research grants | ☐ |
+| John Templeton Foundation | 62-1322826 | West Conshohocken, PA | T99 | Science and religion research at universities | ☐ |
+| Charles Koch Foundation | 48-0918408 | Arlington, VA | B82 | Higher-education grants, largely academic centers; see *Ambiguous entities* | ☐ |
+| Doris Duke Charitable Foundation Inc | 82-3691183 | New York, NY | T20 | Medical research, performing arts, environment; university clinical scientists. See *Ambiguous entities* | ☐ |
+| Michael & Susan Dell Foundation | 36-4336415 | Austin, TX | T20 | Education and family economic stability; University of Texas | ☐ |
+| The Wallace Foundation | 13-6183757 | New York, NY | T20 | Education leadership and arts; university-based research | ☐ |
+| Robertson Foundation | 13-7068398 | New York, NY | T22Z | Julian Robertson's foundation; Duke and higher education | ☐ |
+| Koret Foundation | 94-1624987 | San Francisco, CA | Z99Z | Bay Area higher education (Stanford, Berkeley, UCSF, SF State) | ☐ |
+| Ewing Marion Kauffman Foundation | 43-6064859 | Kansas City, MO | B82 | Entrepreneurship research at universities; Kansas City education | ☐ |
+| Burroughs Wellcome Fund | 23-7225395 | Research Triangle Park, NC | T21 | Biomedical research career awards at universities | ☐ |
+| Spencer Foundation | 36-6078558 | Chicago, IL | B99Z | Education research grants to universities | ☐ |
+| Russell Sage Foundation | 13-1635303 | New York, NY | — | Social science research; university-based scholars | ☐ |
+| John S And James L Knight Foundation Inc | 65-0464177 | Miami, FL | B82 | Journalism and communities; university journalism schools | ☐ |
+| The Schmidt Family Foundation | 20-4170342 | Palo Alto, CA | B82 | Eric and Wendy Schmidt's foundation; science and energy research | ☐ |
+
+## Ambiguous entities — a call is needed before they seed
+
+These resolved to more than one plausible filer, or to a filer whose role differs from the name. Seeding the wrong one is not harmful — the gate will produce mentions and no gifts — but it is a wasted fetch and a confusing corpus. Decide, then move the chosen row into a tranche.
+
+| Name | Candidate EINs (as returned) | The question |
+|---|---|---|
+| Gates | 56-2618866 Gates Foundation (T22) · 91-1663695 Gates Foundation Trust (T20Z) | The Trust holds the endowment and files its own 990-PF; the Foundation makes the grants. Seed the Foundation only, or both? Recommendation: the Foundation; the Trust's Part XV is transfers to the Foundation, not grants to recipients. |
+| Musk Foundation | 77-0587507 (T21, Austin) · 85-2133087 (T22, Austin) | Two filers of the same name. The older EIN has the long 990-PF history; the newer appeared in 2020. Which one currently files the grants schedule? |
+| Doris Duke | 13-7043679 Doris Duke Charitable Foundation (T20Z) · 82-3691183 Doris Duke Charitable Foundation Inc (T20) | A 2017 conversion from trust to corporation; the Inc entity is in tranche 2 on that assumption. Confirm which files the current 990-PF. |
+| W. K. Kellogg | 38-1359264 W K Kellogg Foundation (T21) · 36-6030614 W K Kellogg Foundation Trust (T21) | Same shape as Gates: the Trust holds the Kellogg stock, the Foundation grants. Tranche 2 lists the Foundation; confirm. |
+| Charles Koch | 48-0918408 Charles Koch Foundation (B82) · 85-4058882 Charles Koch Foundation II (T22) | Two active filers. Tranche 2 lists the first; is the second a successor or a parallel entity? |
+| Open Society | 26-3753801 Foundation To Promote Open Society (T22); Open Society Institute is a separate filer not returned by this query | OSF operates through several US entities. FPOS is the principal grantmaker; decide whether the Institute belongs too. |
+
+## Excluded, and why
+
+| Name | Reason |
+|---|---|
+| Howard Hughes Medical Institute (59-0735717, H920) | A medical research organization that files a 990, not a 990-PF. Its Schedule I grants would land as `donor_class_unsupported` under the Phase 1 gate. Revisit when a non-foundation institutional donor class exists. |
+| Wellcome Trust | UK charity; no IRS filing. |
+| Donor-advised fund sponsors — Fidelity Charitable, Schwab Charitable, National Philanthropic Trust, Silicon Valley Community Foundation, Vanguard Charitable | Public charities filing 990 with enormous Schedule I lists. The gift belongs to the advisor, not the sponsor; attributing it to the sponsor would draw a `DONOR_TO` from the wrong donor. A DAF policy is a Phase 2 decision alongside announced gifts. |
+| Corporate giving programs that are not foundations (Google.org, Ballmer Group, Arnold Ventures LLC) | LLCs or programs with no 990-PF. Their foundation arms, where one exists, are listed above. |
+| Sherman Fairchild Foundation, Stavros Niarchos Foundation (USA) | Not returned by the exact-name query on 2026-09-07. {/* TODO: retry with the legal name from the IRS BMF before the review sitting */} |
+
+## Review protocol
+
+Same as the alias manifest, so the two reviews look alike:
+
+1. Mark reads each tranche row and marks it approved or struck; a struck row stays on this page with the reason so it is not re-proposed.
+2. The ambiguous entities get one decision each and move into a tranche or the exclusions.
+3. The approved set becomes `internal/features/donors/data/grantor_seed.json` — one row per foundation with `ein`, `display_name`, `tranche`, `qualifies_reason`, `approved`, and the manifest-level `reviewed_by` / `reviewed_at`. The seeder refuses a manifest with no reviewer.
+4. Tranche 1 runs first, alone, with the run's exact outputs recorded here: fetches, parsed filings, grant lines, gifts per School, hub classifications. Tranche 2 follows only after those numbers are reviewed.
+
+## Open questions the seed does not settle
+
+- **Corporate foundations.** Several rows carry NTEE `T21`. The lane classifies by return type, so a 990-PF filer is `foundation` at 30/40 regardless — but the ontology has a separate `corporate` class at 35. Whether an NTEE `T21` filer should be classified `corporate` is a weight question for the edge-weights page, not for this list.
+- **Foreign foundations with US filers.** A Stavros Niarchos or Wellcome US entity, if one files a 990-PF, is a foundation like any other; the question is only which entity.
+- **Refresh cadence.** The 990 adapter's window is the latest four filing years; a re-request of a seeded grantor re-offers new filings. How often the seed re-runs is an operations decision after tranche 1 has run once.
