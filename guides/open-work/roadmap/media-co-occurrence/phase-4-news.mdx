@@ -1,0 +1,104 @@
+---
+title: "Phase 4: News Co-Occurrence"
+sidebarTitle: "Phase 4: News Co-Occurrence"
+description: "PR contract for bounded GDELT discovery, local Universe person matching, independently verified article contributions and evidence-only rollups."
+---
+
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
+**Status: planned Go PR; news tables exist, ingestion does not.** Suggested PR title: **Add closed-world news discovery and verified co-mention rollups**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations); other source adapters are not prerequisites. Integrates through [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) and [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication).
+
+## PR boundary and data location
+
+**All person, Fundable and accepted evidence data remain in Orbiter Universe AlloyDB.** BigQuery is only the external GDELT news discovery reader. Do not export Universe people/Fundable tables to BigQuery, join to an App database, or build a new person store. A bounded query stages public GDELT candidate records locally; matching against the frozen Universe index happens in Go/AlloyDB.
+
+Include a frozen-person index builder, bounded GDELT client, permitted article verification, contribution deduplication, rollup/recount and merge invalidation hooks. News work may fetch, verify and recount evidence, but it creates **zero people, appearances, events or person/company enrichment jobs**. The resulting `CO_MENTIONED_WITH` remains evidence only, always excluded from scoring.
+
+## External and local contracts
+
+Use [GDELT's partitioned table](https://blog.gdeltproject.org/announcing-partitioned-gdelt-bigquery-tables/), `gdelt-bq.gdeltv2.gkg_partitioned`. Verify current table metadata, column names, partition field/type and location before generating a query template. Fix the dataset and selected columns in server configuration; callers cannot supply SQL or arbitrary datasets. Enforce partition predicates, dry-run estimates, shared byte/spend reservations and `maximumBytesBilled`. A row limit is not a scan-cost cap. [BigQuery cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
+
+| Input | Normalized output / rule |
+| --- | --- |
+| GKG record ID and document identifier | `news_documents.source_record_aliases`, verified URL candidate; multiple records can refer to one article |
+| Collection identifier | Initially accept web collection records with a usable URL; quarantine unsupported collections |
+| GDELT date and independent publisher date | Preserve source-reported date, observation time, supported publication date and `date_basis`; missing/invalid dates cannot count |
+| Enhanced person/organization fields | Candidate name occurrences and approximate offsets; not accepted identities or evidence locators |
+| Authorized article body/page metadata | Policy-bounded snapshot, verified canonical URL, locatable article-person identity evidence |
+| Publisher/domain/canonical origin and content similarity | Versioned domain, publisher group and story cluster decisions; ambiguity remains in review |
+
+The [GKG 2.1 codebook](https://data.gdeltproject.org/documentation/GDELT-Global_Knowledge_Graph_Codebook-V2.1.pdf) describes enhanced names as semicolon-separated occurrences with a name and comma-separated approximate offset. Parse the final numeric offset explicitly, reject malformed blocks and retain repeated occurrences without treating them as new people. Confirm the BigQuery aliases such as `V2Persons` against metadata. These approximate offsets cannot substitute for exact locators in the independently fetched article, particularly across translated versions.
+
+## Frozen-index and batch boundary
+
+Build `news_person_index` from canonical people eligible before `batch_started_at`, with approved aliases, collision flags, identity context and `index_version`. Read through a consistent database snapshot. Freeze immutable index rows; do not add a name discovered in an article to that article's own index.
+
+The applied schema has no separate index-header table. Use a `media_work` job of proposed kind `news_index_freeze` as the completion authority: its checkpoint stores index version, snapshot cutoff, row count, sorted-content manifest hash and policy. Rows are staged under the new version; only a successfully completed manifest can be referenced by an admitted batch. A failed partial freeze is never usable, and cleanup cannot remove an index still referenced by a batch or audit.
+
+`news_batches` pins that completed index, policy, partition range, window bounds, generation, query project/location, job IDs, estimated/maximum/actual bytes, coverage and checkpoints. Initial jobs admit **at most seven partition days**; the pilot is one sample week. Initial history is bounded to the agreed 24-month window, expanded in independently budgeted jobs. Successful authentication and a dry run are not evidence of candidate yield or identity precision.
+
+Illustrative durable input:
+
+```json
+{
+  "schema_version": "news.batch.v1",
+  "index_version": "fixture-index-001",
+  "policy_version": "news-evidence.v1",
+  "partition_start": "2026-08-01T00:00:00Z",
+  "partition_end": "2026-08-08T00:00:00Z",
+  "window_end": "2026-09-07T00:00:00Z",
+  "max_people_per_document": 20,
+  "allow_new_people": false
+}
+```
+
+Project, location and positive byte/spend limits are supplied by validated server policy. Persist deterministic query/job identity before submission where the provider supports it. On an ambiguous timeout, retrieve the existing job rather than submit an unaccounted duplicate. Completed result pages produce durable local verification work before their checkpoint advances.
+
+## Verification and aggregation algorithm
+
+```text
+load completed frozen index and bounded batch contract
+dry run query; admit all byte/request/spend buckets; submit or resume provider job
+stage candidate URLs/record aliases; deduplicate before fetch
+fetch permitted article evidence; retain unavailable/review states
+independently verify each indexed person in article-local context
+resolve canonical article, story cluster and publisher group
+transaction: upsert accepted article-person matches and pair contributions
+recount affected ordered pairs from active evidence under pinned window/policy
+transaction: publish completed desired rollup generation + facts/replay intent
+```
+
+`news_person_matches` must bind document, person, index entry/version and policy. Both endpoint matches must pass independently; a shared employer somewhere in the article is insufficient. Contributions bind both exact accepted matches, preventing mixed-document, mixed-policy or mixed-index evidence. Order pair UUIDs as `person_a < person_b`, prohibit self-pairs and deduplicate by canonical article/pair. The applied composite foreign keys enforce structural consistency; Go must also enforce current accepted state and source permission.
+
+Cap expansion at 20 accepted people / 190 candidate pairs per document. Oversized documents enter review; do not select an arbitrary first 20. Canonical URL rules preserve meaningful query parameters, verify redirects and group syndication/reprints/translations conservatively. Source-domain counting uses a versioned public-suffix implementation, not string splitting.
+
+Keep the existing floor of **three accepted canonical articles and two source domains**. Recommend additionally requiring **three independent story clusters and two verified publisher groups**; this remains an explicit policy decision. Uncertain independence withholds graph eligibility while preserving SQL evidence. The rollup table name is **`news_comention_rollup`**, matching the applied migration.
+
+Compute the window as `[window_end minus 24 calendar months, window_end)` in UTC using supported publication dates, not fetch time. Use a UTC-midnight `window_end` for daily rollups. Calendar subtraction clamps the day to the last valid day of the destination month: `2024-02-29` minus 24 months is `2022-02-28`. Do not use Go's normalizing `AddDate` behavior without an explicit clamp. Compare date-only evidence as dates within these day-aligned bounds; do not store an invented publication instant. Recounts replace derived counts; retries never increment them blindly. A completed generation replaces its predecessor atomically. Partial/failed scans retain truthful partial coverage and cannot zero out prior valid evidence. Coverage means which partitions and supported source/language strata were processed, not complete knowledge of all news.
+
+## Refresh, corrections and identity changes
+
+Recommend a seven-day recent-partition overlap, daily local expiry and monthly local full-window reconciliation. An automatic monthly full BigQuery rescan is not part of this plan. New tracked people need budgeted historical discovery for uncovered periods; a local recount cannot recover candidate URLs never fetched.
+
+Source corrections, publication-date changes, revoked evidence, newly discovered namesakes and story-cluster changes invalidate affected contributions and trigger recount. Expiry runs even when fresh ingestion is paused. A person merge invalidates affected frozen-index matches and contributions; it does not silently repoint historical identity decisions. Rebuild under a new index and preserve original provenance. Phase 5 must implement the merge event/repair path before graph release; the existing generic merge classification alone is insufficient.
+
+## Evaluation and acceptance
+
+<BakeOffRules />
+
+Evaluate search corroboration and each actual LLM verification call site separately. Propose at least 200 stratified article/person judgments in the initial sample, including common names, misleading employers, translated copies, paywalls and near-threshold pairs. Report precision, recall, abstention, coverage and uncertainty; no claimed ≥99% result exists yet. Inaccessible full-text identity evidence produces zero accepted contribution.
+
+| Fixture | Required assertion |
+| --- | --- |
+| Two people; three independent articles across two publishers | One eligible ordered rollup, with exact evidence manifest |
+| Three URLs repeating one wire story | No three-story qualification; no fabricated independence |
+| Duplicate GKG IDs/offsets/URLs; reversed pair | One canonical contribution per article/pair |
+| Common name, unrelated employer, one endpoint ambiguous | Pair withheld; independently retained review states |
+| Partial index freeze or mixed match/index/policy versions | Batch admission rejected or contribution rejected |
+| Twenty-one accepted people in one document | Bounded review outcome; no uncontrolled pair expansion |
+| Leap day, month end, exact exclusive end, late update/date correction | Correct calendar window and deterministic recount |
+| Merge/split, endpoint deletion, expired source, old batch completion | Invalidated evidence cannot reappear through stale replay |
+| Retry after query timeout; exceeded byte budget; partial result page | Same provider job resumed, no unreserved duplicate, durable checkpoint |
+| Full batch and all retries | Zero new entity/alias/enrichment admissions; news always excluded from scoring |
+
+Exit with current query metadata, fixture manifest, measured sample yield/cost, proven contribution/recount behavior and a coverage report. A 60-day audit is observation, not automatic permission to enable relationship scoring.

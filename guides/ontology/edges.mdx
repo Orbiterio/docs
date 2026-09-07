@@ -16,7 +16,7 @@ Most core entries on this page are generated from the live `util.template_engine
 **Deployment convention:** an edge name shown in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> is specified on this page but has no live writer yet — see [Person Relationship Edges](#person-relationship-edges) and [Enrichment Engine v1.2 Edges](#enrichment-engine-v12-edges). The colour comes off when the writer ships.
 
 <Note>
-  **Last reviewed & updated: 2026-07-09** — patterns, weights, and the quoted Cypher below re-extracted from the live XanoScript writers (workspace 3, branch `v1`).
+  **Historical writer audit: 2026-07-09** — the original patterns and quoted Cypher describe the legacy writers. **Theatre specification revised: 2026-09-06** — [Go theatre edges](#theatre-edges), endpoint rules and property examples are proposed development contracts, not deployed writers. This addition does not re-audit unrelated sections.
 </Note>
 
 ---
@@ -1949,7 +1949,7 @@ Person appeared on stage as a speaker — keynote, panel, fireside, or interview
 |---|---|
 | **Pattern** | `(Person)-[SPOKE_AT]->(Event:Live_*)` |
 | **Weight** | **15**; **45** hub-damped when the event's speaker count is at or above the hub threshold (default 50) |
-| **Writer** | TBD |
+| **Writer** | orbiter-universe Deep Bio appearance replay (`person_appearance_replay.go`, 2026-09-07): `works[].type = talk` → `live_event_participants` → this edge; the event node is MERGEd on `event_key` (shared with the Xano `live_events` #702 seed) |
 
 <Note>
 **Deep Bio talks map here (2026-09-05).** The Deep Bio ledger's `works[].type = talk` rows become `SPOKE_AT` to the event the talk was given at — `session_title` from the row title, `role` from the row (`"speaker"` unless the source bills a keynote, panel, fireside or lightning talk), `session_date` from the row year, the event resolved from `venue` / `url` (a webinar is `Event:Live_Webinar`). Provenance travels as `source_urls` and `evidence_refs` per the [ledger contract](#shared-contract-for-ledger-written-edges). Reconciled with the media lane on 2026-09-05: speaking is **15** at events below the speaker-count hub threshold (webinars, panels, meetups — every Deep Bio talk so far) and **45** at or above it (large conferences), the bigger-hub-weaker-tie rule `LOCATED_IN` (70/80) and `DONOR_TO` (30/40) already follow. [`APPEARED_IN {role: speaker}`](#appeared_in) uses the same two values, so the two pages no longer disagree.
@@ -2855,7 +2855,7 @@ Two people who both invested in the same company. Keeps the planned two-tier val
 |---|---|
 | **Pattern** | `(Person)-[CO_INVESTORS]->(Person)` — symmetric, written once per pair per company |
 | **Weight** | **20** same round attested · **25** round unknown or different *(planned values, unchanged)* |
-| **Writer** | TBD — Deep Bio ledger `people[].relationship = co_investor` |
+| **Writer** | orbiter-universe structural derivation (`person/co_investors.go`, 2026-09-07) from the Fundable mirror — see below; Deep Bio `people[].relationship = co_investor` rows are a supplement for the subject's own angel ties |
 
 <Warning>
 **Gate rule the first batch exposed.** All four `co_investor` rows in the 2026-09-05 batch (three from Alessandro Chesser, one from Marc Klingen) paired a *founder* with an investor in his own company — a founder is not a co-investor. The writer must require that the subject also carries an `INVESTED_IN` edge (or an `investor` ledger row) to `via_entity_uuid`; otherwise the row is the counterpart's `INVESTED_IN` → company (a live edge), not a pair edge. The ledger gate (orbiter-universe `deepbio/ledger.go`) strips the pair edge from such a row and audits it as `co_investor_unbacked`; the row stays as evidence for the derived-pairs rule below.
@@ -2867,9 +2867,11 @@ Two people who both invested in the same company. Keeps the planned two-tier val
 |---|---|---|
 | `via_organization`, `via_entity_uuid`, `via_domain` | | Required — the company both invested in |
 | `round` | string | Funding round name when attested (`"Seed"`, `"Series A"`); drives the 20 tier |
-| `funding_round_uuid` | uuid | When the round resolves to a `Funding_Round` node |
+| `funding_round_uuid` | uuid | Set by the structural writer when the two investments are the SAME deal: the mirror deal id is looked up in `funding_rounds.external_deal_id` and the row's `graph_node_uuid` is stamped, so a consumer jumps from the pair to the `Funding_Round` node. Null when the pair shares the company through different rounds, or the round node is not written yet |
 | `valid_from` | integer | Year of the (latest) shared investment |
 | *shared contract* | | `description`, `weight`, `confidence`, `source_urls`, `source_names`, `evidence`, `source_published`, `provider`, `evidence_refs`, envelope |
+
+**Structural derivation (confirmed 2026-09-07).** The source of truth is the Fundable mirror, not a narrative: two people who each hold an angel investment (`angel_investments`) or a partner seat on an institutional investment (`institutional_investments_person`) into the same organization are co-investors. The pair is written once per pair per company on the subject's `person_relations` ledger with `provider = fundable`, `round` = the deal's financing type and weight **20** when the two investments are the same deal, **25** otherwise, `valid_from` = the year of the latest shared deal, `evidence_refs = fundable:deal:<id>`, and `funding_round_uuid` = the shared deal's `Funding_Round` node when the investments are the same deal. It runs at the end of a person's angel step and from the admin sweep `POST /v1/admin/enrichment/persons/co-investors/derive`. Both people must already be entities; a counterpart not yet in the estate is skipped, not minted.
 
 **Derived pairs from a founder's rows.** Rows that fail the founder gate still attest that each counterpart invested in `via_organization`. The writer may write `CO_INVESTORS` between two such counterparts when one source names both as investors in the same company — the pair is then attested, not structural — with `evidence_refs` pointing at both rows.
 
@@ -3042,146 +3044,966 @@ Three design rules the lanes share, restated once here because every entry below
 - **Hub targets sit in the Moderate band or below — never stronger than 30.** Institutions, committees and conferences connect thousands of people, so their edges never compete with the structural bonds (`FOUNDED` 5, family 1–10) — the 2026-05-31 audit rule; `WON_AWARD` (30) is the ceiling and most hub edges land in Weak. Same wording as [Edge Weights → Principles](/guides/ontology/edge-weights) (aligned 2026-09-06). A **hub threshold** is a per-edge, measured count that flips the edge to its damped weight: `SPOKE_AT` / `APPEARED_IN {role: speaker}` use speaker count ≥ 50 (15 → 45); foundation `DONOR_TO` uses **> 200 grants in the 4-year filing window** (30 → 40, derived trustee edges 38 → 48; Donors lane default, Phase 0 may tune it).
 - **Evidence-layer edges carry `layer: "evidence"` and `excluded_from_scoring: true`** and a traversal weight in the Weak band. They exist for corroboration and research, not for closeness.
 
-Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — both are required and they are not interchangeable. QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
+Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — public-source variants require both and they are not interchangeable. The theatre submission-only pilot variant may omit public URLs, while retaining mandatory source names and immutable evidence/provenance references under its [specific contract](#theatre-edges). QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
+
+<a id="theatre-edges" />
+
+### Theatre relationships — proposed Go contract
+
+<Info>
+  **Graph build contract — synchronized 2026-09-07; no theatre writer is built.** This replaces the earlier stage-as-`Film_TV` proposal. Endpoints follow [Node Types → Theatre](/guides/ontology/nodes#theatre-nodes); delivery follows the [Go build plan](/guides/open-work/roadmap/broadway-co-producers). The property examples below are synthetic contract examples, not records written to any graph.
+</Info>
+
+The [closed build output manifest](/guides/open-work/roadmap/broadway-co-producers#theatre-graph-output-manifest) is the developer checklist; every relationship below has complete property data, with reused endpoint ownership documented in Node Types.
+
+**Three new relationship names are proposed:** `PRODUCTION_OF`, `STAGED_AT` and `ADAPTED_FROM`. Existing names cover producing, creative authorship and awards. Reusing a name does not make its current movie/music writer valid for new endpoint types.
+
+| Relationship | Allowed direction / endpoints | Weight | Initial scoring / release |
+| --- | --- | --- | --- |
+| **`PRODUCED`** — stage extension | `Person or Company → Stage_Production` | Agreed **12 / 16 / 22 / 28 / 35** | Direct credit; first-release backbone |
+| **`PRODUCTION_OF`** — new | `Stage_Production → Work:Theatrical_Work` | Proposed **50** | Evidence context, excluded; optional work slice |
+| **`STAGED_AT`** — new | `Stage_Production → Place:Venue:Theatre` | Proposed **50** | Evidence context, excluded; optional venue slice |
+| **`ADAPTED_FROM`** — new | `Work:Theatrical_Work → independently resolved source work` | Proposed **55** | Evidence context, excluded; later work-lineage slice |
+| **`WROTE`** — theatre extension | `Person or Music_Group → Work:Theatrical_Work` | Proposed **10**, existing music precedent | Authorship context, excluded initially |
+| **`COMPOSED`** — theatre extension | Same creator endpoints → `Work:Theatrical_Work` | Proposed **8**, existing music precedent | Authorship context, excluded initially |
+| **`WROTE_LYRICS`** — theatre extension | Same creator endpoints → `Work:Theatrical_Work` | Proposed **12**, existing music precedent | Authorship context, excluded initially |
+| **`HAS_AWARD`** — theatre extension | `Stage_Production → Stage_Award` | Proposed **40**, existing award precedent | Recognition context, excluded; later awards slice |
+| **`WON_AWARD`** — theatre extension | Explicit `Person or Company → Stage_Award:Winner` | Proposed **30**, existing award precedent | Named recognition, excluded initially |
+| **`NOMINATED_FOR`** — theatre extension | Explicit `Person or Company → Stage_Award:Nominee` | Proposed **35**, existing award precedent | Named recognition, excluded initially |
+
+The seven new endpoint contracts and three new names are proposals; only the direct-credit billing bands were already agreed. The context weights are conservative positive traversal costs on the [1–100 scale](/guides/ontology/edge-weights), not claims of social closeness. No new `WON`, `CO_PRODUCED_WITH`, theatre-specific person/company, automatic spouse, or company-principal copy edges are introduced.
+
+The current Go [music edge registry](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music_edges.go) restricts creative credits to `Music_Work`; the [film award writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/film_tv_award.go) uses `HAS_AWARD`, `WON_AWARD` and `NOMINATED_FOR` at 40/30/35. Add theatre-owned endpoint dispatch and replay, preserving those existing families and owners.
+
+```mermaid
+flowchart LR
+  P[Person or company] -->|PRODUCED| S[Stage production]
+  S -->|PRODUCTION_OF| W[Theatrical work]
+  S -->|STAGED_AT| V[Theatre venue]
+  W -->|ADAPTED_FROM| O[Resolved source work]
+  C[Explicit creator] -->|WROTE / COMPOSED / WROTE_LYRICS| W
+  S -->|HAS_AWARD| A[Scoped award result]
+  R[Explicit recipient] -->|WON_AWARD / NOMINATED_FOR| A
+```
+
+Only the `PRODUCED` branch contributes to the initial theatre co-credit policy; the other branches provide separately gated context.
+
+#### Shared theatre edge envelope
+
+All visible theatre edges carry the existing graph envelope plus the following proposed ownership/evidence fields. Graph endpoints must already exist with the allowed labels and current canonical IDs. An edge never creates a speculative person, company or work node.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `uuid` | UUID string · required | Stable owner-ledger projection identity; preserved on retries, billing changes and source election |
+| `created_at`, `updated_at` | epoch-ms integer · required | System materialization times, not relationship dates |
+| `weight` | integer · required | 1–100; selected by the endpoint-specific policy below |
+| `description`, `description_generated_at` | string, epoch-ms integer · required | Deterministic evidence-based sentence and its generation time; no per-edge LLM call |
+| `source` | string · required | Writing lane `stage`; exact source of evidence is recorded separately |
+| `source_names` | string[] · required, nonempty | Actual providers/submission sources supporting the selected claim |
+| `source_urls` | string[] · conditional, nonempty when present | Permitted public evidence URLs when available. Omit for a submission-only pilot credit; `evidence_refs` and `provenance_ref` still identify its reviewed immutable evidence. Never invent a URL or expose a private attachment path. |
+| `evidence_refs` | string[] · required, nonempty | Durable references to immutable snapshot/claim locations; raw text remains in SQL/GCS |
+| `provenance_ref` | UUID string · required | Durable owner checkpoint/evidence manifest, including the selected claim and projection inputs |
+| `projection_revision` / `policy_version` | integer, string · required | Monotonic owner revision and pinned mapping/weight policy |
+| `active` | boolean · required | True for current accepted support; false for a retained tombstone. All theatre readers exclude inactive edges. Durable SQL deletion state also prevents stale resurrection if an owner physically removes an edge. |
+| `chosen_fact_id` | UUID string · conditional | Required for canonical-to-canonical credit/work edges whose relationship fact is elected |
+| `support_claim_ref` | UUID string · conditional | Required instead for venue/award support edges; their targets are not canonical entities and cannot use an entity-target fact |
+| `layer` | enum · required | `credit`, `evidence` or `recognition`, as assigned above |
+| `excluded_from_scoring` | boolean · required | Initially false only for accepted direct stage `PRODUCED`; true for every other theatre edge |
+| `observed_at` | epoch-ms integer · required | Observation time of the selected evidence; never a fabricated effective start |
+| `source_finality` | enum · required | `complete`, `partial`, `provisional` or `unknown` for the selected source scope; distinct from confidence in identity |
+| `valid_from` / `valid_to` | ISO date string · optional | Only explicit relationship-effective dates. Omitted graph property means unknown, not automatically current. |
+| `temporal_basis` | enum · required | `explicit_credit_interval`, `production_context`, `source_effective_interval`, `award_edition`, `multiple_intervals` or `unknown`, restricted by edge below |
+
+An empty/missing optional field does not erase another source's accepted value. Explicit correction/retraction does remove a stale graph property when the elected current claim no longer supports it. Persist revision/tombstone state in SQL; a late event cannot resurrect an old edge.
+
+**Copyable examples:** every per-family JSON example below contains its full required property envelope. `edge_type`, `from` and `to` are writer/fixture metadata; only the nested `properties` object is stored on the relationship. Endpoint UUIDs refer to the [synthetic node and reused-endpoint examples](/guides/ontology/nodes#theatre-nodes). Canonical endpoint IDs remain DTO fields, not duplicate scalar properties on the edge. Source IDs/URLs are never the endpoint identity.
+
+#### Identity, correction and scoring gates
+
+- **Canonical credit/work edges:** one current edge per owner + family + canonical endpoint pair. Keep multiple source claims, roles and periods in SQL. Role, URL, billing order and weight are not identity keys. Resolve merged IDs, then merge duplicate ledger pairs and reconcile their stable graph identity.
+- **Venue engagements:** one `STAGED_AT` edge per durable engagement-association row, allowing separately evidenced returns to the same venue. Use `association_id` in projection identity; never regenerate it from dates that may be corrected.
+- **Award recipient edges:** one current outcome-family edge per recipient and durable award entry. Outcome transitions replace the incompatible current relationship; nomination history remains in the support ledger.
+- **Replay:** canonical edges require the current elected fact and matching metadata; support edges require the owner's current accepted claim. Recheck revision and endpoint identity under the same fenced projection lease immediately before mutation. The graph mutation must also enforce the revision/fencing token, including deletion/tombstone semantics; a SQL check before a delayed network call is insufficient. Missing endpoints leave durable pending work.
+- **Scoring:** the flag alone is not enforcement. Every candidate/path/scoring reader must apply the source/family/endpoint allowlist and exclude flagged edges. Until verified, keep context graph writes disabled. No path through a shared venue, underlying work, adaptation, or award can be reported as a direct co-producing connection.
+- **Pair derivation:** accepted producing credits on the same production permit a co-credit explanation. Counts of sources, credit roles and joint-group mentions do not multiply the pair's evidence. A two-edge raw cost is the sum of the selected billing weights, before existing score normalization/hub policy; it is not a claim that the people know each other.
+
+<a id="stage-produced" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> (stage)
 
-A producer credit on a Broadway or West End production. Pattern-dependent with the music waterfall's `PRODUCED` (Artist → Recording, 18) — the target label disambiguates, the `INVESTED_IN` precedent. Stage productions extend the film/TV credit node family with a `stage: true` discriminator rather than a new label. Co-production pairs are derived through the production node, never written as `CO_PRODUCED_WITH`.
+**Pattern:** `Person or Company → PRODUCED → Entity:Stage_Production`. **Go owner:** proposed stage credit replay and stage graph writer; not the IMDb or music writer. A literal credited producing role is required. Source basis: explicit production-role rows in the preferred [BroadwayWorld directory evaluation](https://www.broadwayworld.com/shows/creative.php?showid=334560), reviewed official programmes/pilot submissions, and other source adapters only when enabled. [Tony nominee lists](https://www.tonyawards.com/press/2024-tony-award-nominations/) add coverage candidates; IBDB collection remains separately gated in the plan.
 
-| | |
-|---|---|
-| **Pattern** | `(Person\|Company)-[PRODUCED]->(Film_TV {stage: true})` |
-| **Weight** | **12 / 16 / 22 / 28 / 35** by billing tier |
-| **Writer** | TBD — [Broadway co-producers lane](/guides/open-work/roadmap/broadway-co-producers) |
+| `billing_tier` | Weight | Admission |
+| --- | --- | --- |
+| `lead_producer` | **12** | Explicit lead designation or separately accepted evidence of that role; not first position alone |
+| `producer` | **16** | Explicit untiered production credit, such as a production staff row “Producer” or source block “Produced by”. A generic Tony nominee-list heading “Producers” does not by itself establish this tier. |
+| `co_producer` | **22** | Explicit co-producing role |
+| `associate_producer` / `executive_producer` | **28** | Preserve which role the source actually states |
+| `in_association` | **35** | Explicit association credit; not inferred from a slash in a name |
 
-| `billing_tier` | Weight | Derived pair | Anchor |
-|---|---|---|---|
-| `lead_producer` | **12** | 24 | At `ADVISOR_TO`'s level (12), just ahead of `INVESTED_IN` (15) |
-| `producer` | **16** | 32 | Below lead, above the check-writer tier |
-| `co_producer` | **22** | 44 | ≈ angel round check (25); two random co-producers stay weakly linked |
-| `associate_producer` / `executive_producer` | **28** | 56 | Moderate band, past-role territory |
-| `in_association` | **35** | 70 | `NOMINATED_FOR`-grade |
+Role context is part of the mapping: explicit “Produced by” is `producer`, not `lead_producer`; generic award-list membership stays `unclassified_producing` in SQL until tier evidence or review supports a mapped role. It creates no tiered `PRODUCED` edge by itself. Billing is not evidence of an investment amount, ownership stake or individual service interval.
 
-**Description template:** `{Producer} produced {Title} ({billing tier}, {market}, {season}).`
+| Property | Type / requirement | Additional contract |
+| --- | --- | --- |
+| `credit_id` / `chosen_fact_id` | UUID string · required | Canonical producer/production ledger pair and the current elected relationship fact |
+| `stage_credit_version` | integer · required, positive | Current `stage_credit.desired_version`; equals this direct edge's `projection_revision`. These are the same revision, not separately advanced counters. Fence replay and retained tombstones with this value. |
+| `mention_ref` / `credit_group_id` | UUID string · required | Selected literal member mention and billed group; all supporting references remain in SQL |
+| `billing_tier` / `source_role` | enum, string · required | Normalized explicit role and source wording; no promotion from prominence |
+| `billing_order` / `member_order` | integer · required | 1-based billed-group position within the selected role block; separate member ordinal within that group |
+| `group_credit` | boolean · required | Whether the selected source group contains multiple credited members; does not mean married |
+| `market` | enum · required | `broadway` or `west_end`, from the resolved production |
+| `identity_confidence` | number 0–1 · required | Recorded identity decision, not a billing-strength multiplier; use the build plan's corroboration/review gate |
+| `resolution_method` | enum · required | `approved_alias`, `corroborated_auto_link` or `reviewed_link` |
+| `production_opening_date` / `production_closing_date` | ISO date string · optional | Context copied from elected production data; never silently written into relationship `valid_from/to` |
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `billing_tier` | enum above | ✓ | Drives the weight |
-| `billing_order` | integer | ✓ | 1-based position within the tier line |
-| `couple_credit` | boolean |  | `true` on both spouse edges split from one couple token |
-| `via_entity_uuid` | uuid |  | Set on person-level derivations when the credit is held by a shingle company |
-| `market` | enum `broadway` \| `west_end` | ✓ | Mirrors the production |
-| `mention_ref` | id | ✓ | Audit link to `stage_credit_mention` |
-| `valid_from` / `valid_to` | date | ✓ / opt | Inherit production opening / closing |
-| `source_urls`, `confidence` | | ✓ | Provenance \+ resolution outcome |
+For several roles in the elected source, retain every accepted role in SQL; choose the lowest-weight explicitly supported tier, then earliest order in that tier. Source election happens first: never pick a disputed source because its billing would give a stronger weight. Single explicit credit intervals may populate `valid_from/to`; disjoint periods use `temporal_basis = multiple_intervals` and remain separately represented in SQL, without a fabricated min/max span.
 
-**Example** — the lane's own worked case (a real 2024 Broadway credit), values as the writer would set them:
+No `via_entity_uuid` copy to a company's principals. No spouse flag derived from punctuation; any separately proven family relationship belongs to its own evidence and owner.
+
+**Synthetic property example** — one independently resolved member of a joint co-producing credit:
 
 ```json
 {
-  "description": "Angelina Jolie produced The Outsiders (lead producer, Broadway, 2023-24).",
-  "billing_tier": "lead_producer",
-  "billing_order": 1,
-  "market": "broadway",
-  "valid_from": "2024-04-11",
-  "valid_to": null,
-  "weight": 12,
-  "confidence": "confirmed",
-  "source_urls": ["https://www.ibdb.com/broadway-production/the-outsiders-537824"],
-  "mention_ref": "stage_credit_mention:<id>"
+  "edge_type": "PRODUCED",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000011",
+    "entity_id": "00000000-0000-4000-8000-000000000011",
+    "node_family": "Person"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:101:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010101",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 22,
+    "layer": "credit",
+    "excluded_from_scoring": false,
+    "temporal_basis": "production_context",
+    "credit_id": "00000000-0000-4000-8000-000000000103",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000104",
+    "mention_ref": "00000000-0000-4000-8000-000000000105",
+    "credit_group_id": "00000000-0000-4000-8000-000000000106",
+    "stage_credit_version": 1,
+    "billing_tier": "co_producer",
+    "source_role": "Co-Produced by",
+    "billing_order": 7,
+    "member_order": 2,
+    "group_credit": true,
+    "market": "broadway",
+    "identity_confidence": 0.96,
+    "resolution_method": "corroborated_auto_link",
+    "description": "Example Writer is explicitly credited as a co-producer of Example Musical (Broadway)."
+  }
 }
 ```
 
+<a id="stage-produced-private-example" />
+
+**Complete private-pilot company-credit example:** a reviewed submission has no public URL, so `source_urls` is omitted. Evidence/identity/election requirements still apply; private pilot routing and publication isolation are enforced outside this property envelope.
+
+```json
+{
+  "edge_type": "PRODUCED",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000012",
+    "entity_id": "00000000-0000-4000-8000-000000000012",
+    "node_family": "Company"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000111",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "pilot_submission"
+    ],
+    "evidence_refs": [
+      "fixture:submission:pilot-1:revision:2:group:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010111",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 16,
+    "layer": "credit",
+    "excluded_from_scoring": false,
+    "temporal_basis": "production_context",
+    "credit_id": "00000000-0000-4000-8000-000000000113",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000114",
+    "mention_ref": "00000000-0000-4000-8000-000000000115",
+    "credit_group_id": "00000000-0000-4000-8000-000000000116",
+    "stage_credit_version": 1,
+    "billing_tier": "producer",
+    "source_role": "Produced by",
+    "billing_order": 1,
+    "member_order": 1,
+    "group_credit": false,
+    "market": "broadway",
+    "identity_confidence": 1.0,
+    "resolution_method": "reviewed_link",
+    "description": "Example Producing Company is explicitly credited as a producer of Example Musical in the reviewed pilot submission."
+  }
+}
+```
+
+<a id="stage-production-of" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCTION_OF</span>
+
+**New. Pattern:** `Entity:Stage_Production → PRODUCTION_OF → Entity:Work:Theatrical_Work`. **Proposed weight: 50; evidence layer, excluded from scoring.** Owner: stage work-link mapping → facts election → dedicated stage work replay.
+
+The source must identify which dramatic work/version the production stages. Explicit programme/creative credits plus independently resolved work identity can support it; a title-only match cannot. Each production has at most one accepted primary dramatic-work target in this initial contract. Multi-work programmes remain reviewable SQL evidence until programme-item modelling is specified.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `chosen_fact_id` | UUID string · required | Elected production-to-work relationship |
+| `work_version_ref` | string · optional | Source-backed version/edition designation, not a substitute entity ID |
+| `identity_basis` | enum · required | `verified_work_identifier` or `reviewed_work_link`; actual review evidence retained |
+| `temporal_basis` | enum · required | `unknown` unless the relationship itself has a sourced effective interval |
+
+**Synthetic property example:**
+
+```json
+{
+  "edge_type": "PRODUCTION_OF",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000002",
+    "entity_id": "00000000-0000-4000-8000-000000000002",
+    "node_family": "Theatrical_Work"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000201",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:201:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010201",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 50,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "unknown",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000202",
+    "identity_basis": "reviewed_work_link",
+    "work_version_ref": "Example licensed stage edition",
+    "description": "The example Broadway production stages the independently identified dramatic work Example Musical."
+  }
+}
+```
+
+<a id="stage-staged-at" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>STAGED_AT</span>
+
+**New. Pattern:** `Entity:Stage_Production → STAGED_AT → Place:Venue:Theatre`. **Proposed weight: 50; evidence layer, excluded from scoring.** Owner: accepted stage venue-association ledger plus the shared-place owner's public seam/support replay. The existing `HELD_AT` is scoped to events; do not send a production to its music-event writer.
+
+The production page/programme must associate the run with a resolved physical venue. [IBDB theatre history](https://www.ibdb.com/theatre/bernard-b-jacobs-theatre-1346) and [the operator's page](https://shubert.nyc/theatres/bernard-b-jacobs) support venue identity; the mere appearance of a show title in a venue site's navigation is insufficient.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `association_id` / `support_claim_ref` | UUID string · required | Durable engagement-association identity and accepted current support claim |
+| `venue_name_as_billed` | string · required | Name for this sourced engagement; a later venue rename does not rewrite historical billing |
+| `engagement_sequence` | integer · optional | Explicit or reviewed ordering of venue engagements; not a guessed tour itinerary |
+| `valid_from` / `valid_to` | ISO date string · optional | Actual source-defined venue occupancy/performance interval; preview/booking dates not silently substituted |
+| `interval_scope` | enum · required | `performance_engagement` or `unknown`; distinguish from a legal lease |
+| `temporal_basis` | enum · required | `source_effective_interval` when actual dates are supported, otherwise `unknown` |
+
+**Synthetic property example** — a past, explicitly dated engagement:
+
+```json
+{
+  "edge_type": "STAGED_AT",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000003",
+    "row_id": "00000000-0000-4000-8000-000000000003",
+    "node_family": "Place"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000301",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:301:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010301",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 50,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "source_effective_interval",
+    "association_id": "00000000-0000-4000-8000-000000000303",
+    "support_claim_ref": "00000000-0000-4000-8000-000000000302",
+    "venue_name_as_billed": "Example Theatre",
+    "engagement_sequence": 1,
+    "valid_from": "2023-03-01",
+    "valid_to": "2023-06-30",
+    "interval_scope": "performance_engagement",
+    "description": "Example Musical played at Example Theatre during its documented 2023 engagement."
+  }
+}
+```
+
+If a source defines a transfer as a new production, create a separate canonical production through admission; do not attach it as a venue move on the old production merely because the titles match.
+
+<a id="stage-adapted-from" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>ADAPTED_FROM</span>
+
+**New, later optional slice. Pattern:** `Entity:Work:Theatrical_Work → ADAPTED_FROM → resolved source work`. **Proposed weight: 55; evidence layer, excluded from scoring.** Owner: facts-elected work-lineage claim and stage work replay.
+
+An explicit adaptation attribution, such as the [official Tony description's distinction between a source book and a film](https://www.tonyawards.com/shows/the-outsiders/), supports a candidate lineage claim. It does not make those objects identical.
+
+Initial target allowlist: an independently resolved `Entity:Film_TV` or `Entity:Work:Theatrical_Work`; additional creative-work types require their owning canonical type/identifier contract. A source novel stays SQL evidence until a supported book/publication identity is established. Do not invent a book entity, force it into an unrelated publication type, or use `SAME_AS` for adaptation.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `chosen_fact_id` | UUID string · required | Elected adapted-work → source-work relation; multiple distinct source works may each have their own edge |
+| `source_credit_text` | string · optional | Permitted short attribution; full source text stays in the immutable snapshot |
+| `adaptation_kind` | enum · required | `stage_from_film` or `stage_from_stage_work` initially; unsupported source kinds remain pending evidence |
+| `source_work_version_ref` | string · optional | Explicit version/edition being adapted |
+| `temporal_basis` | enum · required | `unknown`; don't use the Broadway opening date as the work's adaptation date |
+
+**Synthetic property example** — target is a separately resolved film entity:
+
+```json
+{
+  "edge_type": "ADAPTED_FROM",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000002",
+    "entity_id": "00000000-0000-4000-8000-000000000002",
+    "node_family": "Theatrical_Work"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000014",
+    "entity_id": "00000000-0000-4000-8000-000000000014",
+    "node_family": "Film_TV"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000401",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:401:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010401",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 55,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "unknown",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000402",
+    "adaptation_kind": "stage_from_film",
+    "description": "Example Musical is explicitly credited as a stage adaptation of the separate film Example Film."
+  }
+}
+```
+
+<a id="stage-wrote" />
+<a id="stage-composed" />
+<a id="stage-wrote-lyrics" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>WROTE / COMPOSED / WROTE_LYRICS</span> (theatrical work)
+
+**Existing names, new theatre endpoints; optional work slice.** Accepted creators use existing `Person` or `Music_Group` identities, targeting `Entity:Work:Theatrical_Work`. A producing company, publisher or rights holder is not automatically a creator. Unresolved groups stay literal source groups; do not fan them into guessed individuals.
+
+Source basis: [official creative credits](https://outsidersmusical.com/cast-creative/), corroborated by programme and IBDB evidence. Book, music and lyrics are different contributions; actor/director/production-team roles are not mapped into these work edges.
+
+| Edge | Required `role` | Proposed weight | Other properties |
+| --- | --- | --- | --- |
+| `WROTE` | `playwright`, `book_writer`, `adapter` or `translator`, as explicitly stated | **10** | `source_role`, `billed_name`, `chosen_fact_id`, `mention_ref`; optional `work_version_ref` |
+| `COMPOSED` | `composer` | **8** | Same evidence fields; not inferred from producing a score/recording |
+| `WROTE_LYRICS` | `lyricist` | **12** | Same evidence fields; never inferred from performing a song |
+
+Use `layer = credit`, `excluded_from_scoring = true` initially and `temporal_basis = unknown` unless actual authorship-effective dates are sourced. These weights follow direct-authorship music precedents; they do not turn every producer of a later revival into a collaborator of its original writers.
+
+**Complete synthetic examples** — every edge has its own full envelope, elected `chosen_fact_id`, `mention_ref` and description. Wrapper fields select the endpoints; they are not graph properties.
+
+```json
+[
+  {
+    "edge_type": "WROTE",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000501",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:501:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010501",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 10,
+      "layer": "credit",
+      "excluded_from_scoring": true,
+      "temporal_basis": "unknown",
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001501",
+      "mention_ref": "00000000-0000-4000-8000-000000002501",
+      "role": "book_writer",
+      "source_role": "Book",
+      "billed_name": "Example Writer",
+      "description": "Example Writer is credited with the book of Example Musical."
+    }
+  },
+  {
+    "edge_type": "COMPOSED",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000013",
+      "entity_id": "00000000-0000-4000-8000-000000000013",
+      "node_family": "Music_Group"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000502",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:502:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010502",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 8,
+      "layer": "credit",
+      "excluded_from_scoring": true,
+      "temporal_basis": "unknown",
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001502",
+      "mention_ref": "00000000-0000-4000-8000-000000002502",
+      "role": "composer",
+      "source_role": "Music",
+      "billed_name": "Example Ensemble",
+      "description": "Example Ensemble is explicitly credited with composing the music for Example Musical."
+    }
+  },
+  {
+    "edge_type": "WROTE_LYRICS",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000503",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:503:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010503",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 12,
+      "layer": "credit",
+      "excluded_from_scoring": true,
+      "temporal_basis": "unknown",
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001503",
+      "mention_ref": "00000000-0000-4000-8000-000000002503",
+      "role": "lyricist",
+      "source_role": "Lyrics",
+      "billed_name": "Example Writer",
+      "description": "Example Writer is credited with the lyrics of Example Musical."
+    }
+  }
+]
+```
+
+One person may hold all three families. Several `WROTE` roles remain one pair/family edge with the full role set in SQL; select a deterministic display role from the current accepted claim, never create duplicate edges merely for a second source or role.
+
+<a id="stage-has-award" />
+<a id="stage-won-award" />
+<a id="stage-nominated-for" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>HAS_AWARD / WON_AWARD / NOMINATED_FOR</span> (stage)
+
+**Existing names, new Stage_Award target; later awards slice.** Owner: accepted stage award/recipient support ledger and bounded replay. Source authority: [Tony official results](https://www.tonyawards.com/shows/the-outsiders/) and [Olivier official archive](https://officiallondontheatre.com/olivier-awards/year/olivier-awards-2025/).
+
+| Edge | Exact meaning | Proposed weight / required extra fields |
+| --- | --- | --- |
+| `Stage_Production → HAS_AWARD → Stage_Award` | The result is associated with this exact engagement, either for the production or a named participant | **40**; `award_ref`, `support_claim_ref`, `award_year`, `award_credit_scope = production_result or associated_recipient_result` |
+| `Person or Company → WON_AWARD → Stage_Award:Winner` | This explicitly named, independently resolved party is a recipient of the winning entry | **30**; fields above except scope, plus `recipient_ref` and `recipient_basis = explicitly_named` |
+| `Person or Company → NOMINATED_FOR → Stage_Award:Nominee` | This explicitly named, independently resolved party belongs to the nominated entry and no later accepted win supersedes it | **35**; same recipient evidence fields |
+
+All use `layer = recognition`, `excluded_from_scoring = true`, `temporal_basis = award_edition`. `award_ref`, `recipient_ref` and `support_claim_ref` are durable UUID references. `award_year` is an integer, not a date padded to January 1. Optional `ceremony_date` requires its own source.
+
+A production-only result gets `HAS_AWARD` with its outcome on the award node; it does not get an extra duplicate production-to-result `WON_AWARD`. A person-winning result may also have a `HAS_AWARD` context link from its associated production, but that link's scope must not imply the production itself won that category. No automatic propagation from a best-production result to every co-producer, or from a company recipient to its principals.
+
+**Complete synthetic examples** — these target the three distinct hypothetical result nodes in Node Types. Every edge includes the full envelope and its own accepted support claim; named-party edges additionally carry the resolved recipient-ledger reference.
+
+```json
+[
+  {
+    "edge_type": "HAS_AWARD",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000001",
+      "entity_id": "00000000-0000-4000-8000-000000000001",
+      "node_family": "Stage_Production"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000004",
+      "row_id": "00000000-0000-4000-8000-000000000004",
+      "node_family": "Stage_Award"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000601",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-1"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:601:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010601",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 40,
+      "layer": "recognition",
+      "excluded_from_scoring": true,
+      "temporal_basis": "award_edition",
+      "award_ref": "00000000-0000-4000-8000-000000000004",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002601",
+      "award_year": 2023,
+      "description": "Example Musical is the production named in this synthetic 2023 award result.",
+      "award_credit_scope": "production_result"
+    }
+  },
+  {
+    "edge_type": "WON_AWARD",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000005",
+      "row_id": "00000000-0000-4000-8000-000000000005",
+      "node_family": "Stage_Award"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000602",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-2"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:602:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010602",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 30,
+      "layer": "recognition",
+      "excluded_from_scoring": true,
+      "temporal_basis": "award_edition",
+      "award_ref": "00000000-0000-4000-8000-000000000005",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002602",
+      "award_year": 2023,
+      "description": "Example Writer is explicitly named as a winner in this synthetic 2023 directing award result.",
+      "recipient_ref": "00000000-0000-4000-8000-000000003602",
+      "recipient_basis": "explicitly_named"
+    }
+  },
+  {
+    "edge_type": "NOMINATED_FOR",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000006",
+      "row_id": "00000000-0000-4000-8000-000000000006",
+      "node_family": "Stage_Award"
+    },
+    "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000603",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-3"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:603:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010603",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 35,
+      "layer": "recognition",
+      "excluded_from_scoring": true,
+      "temporal_basis": "award_edition",
+      "award_ref": "00000000-0000-4000-8000-000000000006",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002603",
+      "award_year": 2023,
+      "description": "Example Writer is explicitly named as a nominee in this synthetic 2023 design award result.",
+      "recipient_ref": "00000000-0000-4000-8000-000000003603",
+      "recipient_basis": "explicitly_named"
+    }
+  }
+]
+```
+
+**Outcome correction is a deliberate theatre contract.** Current movie award identity includes outcome, so its unchanged writer would make nomination and win separate award nodes. Theatre instead keeps one durable entry: an accepted win revises the result, replaces its current `Nominee` modifier with `Winner`, retracts the superseded `NOMINATED_FOR` edge and writes `WON_AWARD` for each explicit recipient. `HAS_AWARD` stays stable. Execute the result/edge transition in one fenced graph mutation, or keep the consumer revision pending until the entire state converges. A correction back to a nomination, or removal of an erroneous recipient, must reconcile the reverse transition without reviving stale edges. Special `honoree` results remain evidence until their recipient-edge mapping is specified.
+
+#### Scope exclusions and acceptance examples
+
+Owner/operator/lease claims stay in the shared-place ledger for now; this waterfall does not require new venue ownership edges. Cast, direction, touring lineage, individual performances, rights/licensing and investment edges need separate endpoint/evidence contracts before expansion. Read existing [OFFICER_OF](#officer_of), [BOARD_MEMBER_OF](#board_member_of), and other affiliations only through their owning feature. This stage build emits no new principal-affiliation edges. The documented 990 officer variant is not a general Companies House officer/PSC contract; UK roles remain SQL evidence until their owner defines the source-specific mapping. No affiliation supplies a substitute stage-producing credit.
+
+Before enabling any theatre graph slice, verify:
+
+| Fixture | Required result |
+| --- | --- |
+| Two accepted producers on one production | Two stable `PRODUCED` edges; one derived co-credit path; no pair edge |
+| Same title, different Broadway/West End engagements | Separate production nodes/rosters; shared work only after its own identity gate |
+| Two shows in one venue or based on one work | Context visible when enabled; no extra closeness/co-producing path |
+| Explicit “Producer”/“Produced by”, generic Tony list, or corrected billing | Explicit production producing maps to 16; generic nominee-list heading alone stays unclassified/no tiered edge. A supported tier correction updates the same edge with retained history. |
+| Joint source group with one unresolved member | Project only the accepted member; no spouse or principal-copy inference |
+| Two disjoint venue engagements | Separate stable association edges, with corrected dates preserving association identity |
+| Work links or adaptation links corrected | Targeted fact retraction/re-election; no changes to other productions or music/film relationships |
+| Nomination later becomes a win | One award node, stable context edge, one current outcome edge per named recipient, retained nomination history |
+| Production award with no named recipient | Context result only; no award edges copied to the producer roster |
+| Redelivery, merge, late revision and partial source | Idempotent output; merged IDs converge; stale revisions cannot restore retracted links; partial absence is not deletion |
+| Context flag unsupported by any reader | That context writer stays disabled; a high weight alone is not an exclusion mechanism |
+
 ---
+
+## Media edges
+
+<a id="media-edges" />
+
+**Go proposal revised 2026-09-06; no writer is implemented by this documentation pass.** [Media build plan](/guides/open-work/roadmap/media-co-occurrence) · [Node contracts](/guides/ontology/nodes#media-appearances). Keep the 15/20/45 appearance and 55 news bands; propose `SESSION_OF` at 30 to resolve the old media `PART_OF` collision with the settled project reservation. All source/graph/scoring flags start disabled.
+
+### Shared media edge envelope
+
+All three contracts below require this envelope. Examples show edge-specific properties **in addition** to it. Use deterministic descriptions, bounded scalar arrays and permitted evidence; full JSON claims, source text and per-group role history remain SQL-side.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `uuid` | UUID string · required | Stable relationship identity. Never keyed by title, current role, weight, URL or retry. |
+| `created_at`, `updated_at` | RFC3339 UTC strings · required | Preserve creation time; update when accepted material inputs change. |
+| `description`, `description_generated_at` | string/timestamp · required | Explain the supported relationship without asserting contact, friendship or endorsement. Timestamp changes when the description is regenerated. |
+| `weight` | integer · required | Locked 1–100 convention; weights alone do not authorize scoring. |
+| `source`, `source_names`, `source_urls` | string / bounded string arrays · required | `source=media` or `media_news`; actual permitted supporting sources and URLs retained separately. |
+| `evidence_refs`, `provenance_ref` | bounded string array / string · required | Accepted mention/article evidence and a revisioned manifest for complete permitted detail. |
+| `chosen_fact_id`, `projection_revision`, `policy_version` | UUID string / integer / string · required | Elected entity-to-entity claim, desired data revision and applied policy. |
+| `source_observed_at` | timestamp · required | Observation time, not inferred appearance time. |
+| `layer`, `excluded_from_scoring` | enum / boolean · required | `appearance` for verified participation or `evidence` for context. Every media edge initially excluded; only approved interaction memberships may later change eligibility. |
+| `temporal_basis`, `valid_from`, `valid_to` | enum / date or timestamp · basis required; dates optional | `source_occurrence|source_publication|unknown`. Actual precision carried in `date_precision`; never turn an upload/capture time or year-only evidence into attendance dates. |
+| `date_precision` | enum · required when temporal dates are present | `timestamp|day|month|year`; partial date strings retain their source precision. Omit dates when unknown. |
+
+**Synthetic shared envelope:**
+
+```json
+{
+  "uuid": "00000000-0000-4000-8000-000000000201",
+  "created_at": "2026-09-06T12:00:00Z",
+  "updated_at": "2026-09-06T12:05:00Z",
+  "description": "Example Guest appeared in Example publisher interview as guest.",
+  "description_generated_at": "2026-09-06T12:05:00Z",
+  "weight": 15,
+  "source": "media",
+  "source_names": ["example_publisher"],
+  "source_urls": ["https://publisher.example/episodes/42"],
+  "evidence_refs": ["media-mention:example-guest"],
+  "provenance_ref": "media:membership:201:revision:7",
+  "chosen_fact_id": "00000000-0000-4000-8000-000000000301",
+  "projection_revision": 7,
+  "policy_version": "media-v1-proposed",
+  "source_observed_at": "2026-09-06T12:00:00Z",
+  "layer": "appearance",
+  "excluded_from_scoring": true,
+  "temporal_basis": "source_publication",
+  "valid_from": "2026-08-12",
+  "date_precision": "day"
+}
+```
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span>
 
-A person's appearance in a podcast episode, YouTube video, or conference session — the `MediaAppearance` node introduced by the media lane and shared with the podcast lane. Weight is set by the relationship class the appearance implies: an interview binds host and guest tightly (`COLLABORATORS`-class), a panel loosely, a conference hardly at all (a hub).
+<a id="appeared_in" />
 
 | | |
 |---|---|
 | **Pattern** | `(Person)-[APPEARED_IN]->(MediaAppearance)` |
 | **Weight** | **15** interview host / guest · **20** panelist · **45** conference speaker (**15** when the event is below the speaker-count hub threshold, default 50) |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+| **Writer** | orbiter-universe Deep Bio appearance replay (`person_appearance_replay.go`, 2026-09-07) for `works[].type = podcast` rows → `media_appearance_participants` → this edge, `MediaAppearance` MERGEd on `media_key = podcast::<episode url>`; the [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) will share the node |
 
-| Relationship class | Derivation | Weight per edge | Pair |
-|---|---|---|---|
-| Interview host ↔ guest | Two `APPEARED_IN` on one interview appearance | **15** (`COLLABORATORS`-grade per edge) | 30 — two 15s through a degree-3 episode node, no hub risk |
-| Co-panelists, same session | Two `APPEARED_IN {role: panelist}` on one session | **20** | 40 (`CO_NOMINATED_WITH`-grade) |
-| Co-speakers, same conference | Shared `Event` via `PART_OF` | **45** at hub-scale events (speaker count ≥ threshold, default 50); **15** below it | evidence only (the `PERFORMED_AT` analogue). Same rule as [`SPOKE_AT`](#spoke_at), reconciled 2026-09-05 |
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `membership_id`, `mention_ref` | UUID/string · required | Durable membership and chosen supporting mention. Other corroborating mentions remain in `evidence_refs`/manifest. |
+| `role`, `roles` | enum / enum array · required | `host|guest|panelist|moderator|speaker`. Moderator is a proposed explicit addition. Preserve raw source roles relationally. Primary role chosen deterministically from current accepted role claims; group-specific roles govern pair scoring. |
+| `appearance_kind`, `occurrence_status` | enum / `confirmed` · required | Kind from Node Types; scheduled/unknown/cancelled billing does not emit this edge. |
+| `interaction_group_refs` | bounded string array · required, may be empty | Verified shared interaction groups. Empty means no eligible pair. Never infer a group from being in one compilation or on one conference roster. |
+| `identity_confidence`, `identity_basis` | float / enum · required | Separate identity result: `verified_identifier|adjudicated|reviewed`. Name-only or model confidence alone cannot pass. |
+| `speaker_count`, `speaker_count_complete`, `speaker_hub_threshold` | integer/boolean/integer · required for speaker band selection when applicable | Event-level deduplicated count; threshold 50. Unknown or partial count uses 45; verified complete count below 50 uses 15. |
+| `pair_policy_version` | string · required | Pair-aware reader policy, independent of raw edge weight. |
 
-**Description template:** `{Person} appeared in {title} as {role}.` — `"…on {show}"` appended for podcast episodes.
+| Role/context | Weight | Eligible pair only after reader/source release gates |
+| --- | --- | --- |
+| Interview host or guest | 15 | Host ↔ guest in the same confirmed interaction group; two hops total 30. No guest clique or cohost inference. |
+| Panelist or panel moderator | 20 | Panelist ↔ panelist or moderator ↔ panelist in the same confirmed group; two hops total 40. |
+| Speaker / solo talk | 15 below a complete verified 50-speaker event threshold; otherwise 45 | No inferred close pair with other speakers. Conference-wide adjacency stays evidence. |
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `role` | enum `host` \| `guest` \| `panelist` \| `speaker` | ✓ | Drives pair derivation and the weight |
-| `mention_ref` | id | ✓ | Audit link to `media_appearance_mention` |
-| `source_urls`, `confidence` | | ✓ | Provenance \+ resolution outcome |
+For multiple accepted roles, use the lowest applicable band from supported role claims as the primary edge weight, with deterministic role-name ordering for ties. **This is display/traversal metadata only:** pair eligibility and per-role pair weights come from the two accepted group memberships, so an interview role cannot cheapen a separate panel or create a cross-segment tie.
 
-**Deep Bio mapping (decided 2026-09-05).** The Deep Bio ledger's `works[].type = podcast` rows (3 in the first batch: two guests, one host) are written as this edge: `role` from the row, weight **15** (an episode is an interview-class appearance), target `MediaAppearance {source: "podcast"}` keyed on the episode URL (`episode_ref`), title and year from the row, and the ledger's `source_urls`, `evidence` and `mention_ref` as provenance. The interim ledger name `APPEARED_ON` is retired; the gate vocabulary in orbiter-universe `deepbio/edges.go` follows in a code change.
+Proposed scoring group cap: 12 confirmed participants; unknown completeness/oversized groups remain evidence pending a scoped rule. All flags start excluded. Generic paths must exclude raw media paths unless they implement these rules; only the pair-aware adapter may expose eligible encounters. `SESSION_OF` is always excluded from scoring, so neither small nor large conference hubs produce cross-session shortcuts.
 
-**Example** — real Deep Bio ledger row, 2026-09-05 batch, shown as an `APPEARED_IN` edge:
+**Deep Bio mapping:** `works[].type=podcast` remains an `APPEARED_IN` candidate, with its original ledger reference preserved. Verify a specific episode anchor, participant role and occurrence first. The former Will Misselbrook example used show-level Apple/iHeart URLs: those are discovery references, not sufficient episode IDs. A year-only ledger date stays year-only. Talk rows remain the Live Events owner's `SPOKE_AT` candidates. No code vocabulary changes are made here.
+
+**Synthetic edge-specific example**, combined with the shared envelope above:
 
 ```json
 {
-  "description": "Will Misselbrook appeared in \"How Great Brands Earn Your Attention\" as guest, on FocusMatters.",
+  "membership_id": "00000000-0000-4000-8000-000000000201",
+  "mention_ref": "media-mention:example-guest",
   "role": "guest",
+  "roles": ["guest"],
+  "appearance_kind": "interview",
+  "occurrence_status": "confirmed",
+  "interaction_group_refs": ["appearance:41:interview:1"],
+  "identity_confidence": 0.97,
+  "identity_basis": "adjudicated",
+  "pair_policy_version": "media-pairs-v1-proposed",
   "weight": 15,
-  "confidence": "confirmed",
-  "source_urls": ["https://podcasts.apple.com/us/podcast/focusmatters/id1844946598", "https://www.iheart.com/podcast/1333-focusmatters-299422657/"],
-  "evidence": [
-    "Noah and Will explore the dynamics of attention in the marketing and sports industries.",
-    "How Great Brands Earn Your Attention with Will Misselbrook. January 6, 2026 • 66 mins."
-  ],
-  "source_published": ["2026-01-06", "2026-01-06"],
-  "mention_ref": "deep_bio:01a070ef-9842-7495-b6a8-5d070869925c:works[0]",
-  "_target": { "label": "MediaAppearance", "source": "podcast", "title": "How Great Brands Earn Your Attention", "valid_from": "2026-01-06", "episode_ref": "https://podcasts.apple.com/us/podcast/focusmatters/id1844946598" }
+  "layer": "appearance",
+  "excluded_from_scoring": true,
+  "description": "Example Guest appeared in Example publisher interview as guest."
 }
 ```
 
----
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>SESSION_OF</span>
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>PART_OF</span>
+<a id="session_of" />
+<a id="part_of" />
 
-Structural containment: a conference session belongs to its conference. Exists so session-level and conference-level co-occurrence stay distinguishable at query time. Traversal weight **30**, the `RECORDING_OF` analogue; no band. The media lane sketched a minimal `Event` node for the target — that folds into the shipped `Event:Live_*` family ([node model](/guides/ontology/nodes#live_event)), which already carries `event_type`, dates, venue and city. Pattern-distinct from the reserved user-graph project `PART_OF`.
+**New proposed name replacing the unbuilt media `PART_OF` proposal.** The old anchor is retained for existing documentation links. User-graph project `PART_OF` remains unchanged; `SUB_EVENT_OF` still connects one live event to another.
 
-| | |
-|---|---|
-| **Pattern** | `(MediaAppearance)-[PART_OF]->(Event:Live_*)` |
-| **Weight** | **30** |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+**Pattern:** `Entity:MediaAppearance → SESSION_OF → Entity:Event:Live_*`. **Weight: 30; evidence only, always excluded from scoring.** A source must identify the exact session and edition; a video recorded at a conference does not automatically identify a session. The media event-association ledger and event owner resolve the target, then chosen-fact replay writes the edge.
 
-**Description template:** `{Session title} was a session at {Event name} ({year}).`
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `association_id` | UUID string · required | Durable session/edition relationship identity and revision fence. |
+| `session_ref`, `event_source_ref` | strings · required | Exact source-scoped session and edition anchors; names/year alone insufficient. |
+| `association_basis` | enum · required | `organizer_session_id|verified_session_page|reviewed_association`. |
+| `source_capture_at` | timestamp · optional | Archive capture time when applicable; not event date. |
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `session_ref` | string |  | Conference agenda anchor, when the appearance carries one |
-| `source_urls` | string\[\] | ✓ | Provenance |
+**Synthetic properties**, plus the shared envelope with this edge's source and fact references:
 
----
+```json
+{
+  "association_id": "00000000-0000-4000-8000-000000000401",
+  "session_ref": "example-organizer::london-2026::session-12",
+  "event_source_ref": "example-organizer::london-2026",
+  "association_basis": "organizer_session_id",
+  "weight": 30,
+  "layer": "evidence",
+  "excluded_from_scoring": true,
+  "temporal_basis": "unknown",
+  "description": "Example panel was a session at Example Summit — London 2026."
+}
+```
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>CO_MENTIONED_WITH</span>
 
-Two people who co-appear in news coverage over a rolling window. **Evidence layer, excluded from scoring** — co-mention is corroboration, not closeness. Written once per pair in canonical uuid order, updated by the daily batch, retired when the window drops the pair below floor.
+<a id="co_mentioned_with" />
 
-| | |
-|---|---|
-| **Pattern** | `(Person)-[CO_MENTIONED_WITH]->(Person)` — symmetric, once per pair |
-| **Weight** | **55** *(traversal only; `excluded_from_scoring: true`)* |
-| **Writer** | TBD — [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) |
+**Pattern:** `Person → CO_MENTIONED_WITH → Person`, symmetric evidence stored once in canonical UUID order, no self-pair. **Weight: 55; `layer=evidence`, `excluded_from_scoring=true` always in v1.** Writer is facts-elected media news replay over accepted article contributions. Both canonical people must predate the frozen batch index; no person creation or entity-enrichment queue admission.
 
-**Description template:** `{A} and {B} co-appear in news coverage ({article_count} articles, {first_seen}–{last_seen}).`
+[GDELT is a candidate index](/guides/open-work/roadmap/media-co-occurrence#closed-world-news-verification-and-aggregation), not identity evidence on its own. Both article-person matches require independent verification; names plus an employer anywhere in the document are insufficient. Canonical URLs/articles, syndicated story clusters and verified publisher groups prevent duplicated reporting from satisfying the floor.
 
-| Property | Type | Req | Description |
-|---|---|---|---|
-| `article_count` | integer | ✓ | Distinct articles in the window |
-| `window` | string | ✓ | `24mo` rolling |
-| `window_counts` | json | ✓ | Per-quarter breakdown for decay visibility |
-| `first_seen` / `last_seen` | date | ✓ | |
-| `top_source_domains` | string\[\] | ✓ | Floor requires ≥ 2 |
-| `evidence_refs` | id\[\] | ✓ | Rows in `news_comention_rollup`; article detail stays relational |
-| `layer` | `evidence` | ✓ | |
-| `excluded_from_scoring` | boolean `true` | ✓ | Hard flag scoring respects |
+| Property | Type / requirement | Meaning |
+| --- | --- | --- |
+| `rollup_id`, `index_version` | UUID/string · required | Durable pair rollup and frozen tracked-person index lineage. |
+| `article_count`, `source_domain_count` | integers · required | At least 3 accepted distinct canonical articles and 2 registrable domains. Repeated GKG records/offsets do not increase them. |
+| `independent_story_count`, `publisher_group_count` | integers · required | Proposed additional floors 3 and 2; hold ambiguous independence in review. |
+| `window`, `window_start`, `window_end` | string / timestamps · required | `24mo`; exact UTC half-open interval using 24 calendar months. |
+| `window_counts_json` | serialized JSON string · required | Bounded quarter counts; arbitrary JSON objects are not graph-native property maps. Relational/API contract exposes typed `window_counts`. |
+| `first_seen`, `last_seen`, `date_basis` | dates / enum · required | Accepted article publication bounds; `publisher_verified|gdelt_reported|mixed`. Observation time is separate; unknown dates do not enter rollups. |
+| `top_source_domains` | bounded string array · required | Evidence display, not the full domain-count authority; complete manifest in SQL. |
+| `coverage` | enum · required | `complete|partial|unknown` for the admitted discovery window; incomplete discovery is not absence. |
+
+**Synthetic properties**, plus the shared envelope (source `media_news`, rollup evidence refs and chosen fact):
+
+```json
+{
+  "rollup_id": "00000000-0000-4000-8000-000000000501",
+  "index_version": "news-index-fixture-4",
+  "article_count": 4,
+  "source_domain_count": 2,
+  "independent_story_count": 3,
+  "publisher_group_count": 2,
+  "window": "24mo",
+  "window_start": "2024-09-06T00:00:00Z",
+  "window_end": "2026-09-06T00:00:00Z",
+  "window_counts_json": "{\"2026-Q2\":1,\"2026-Q3\":3}",
+  "first_seen": "2026-06-10",
+  "last_seen": "2026-08-28",
+  "date_basis": "publisher_verified",
+  "top_source_domains": ["publisher-a.example", "publisher-b.example"],
+  "coverage": "partial",
+  "weight": 55,
+  "layer": "evidence",
+  "excluded_from_scoring": true,
+  "temporal_basis": "source_publication",
+  "description": "Example A and Example B were both mentioned in four verified articles from two publisher groups between June and August 2026."
+}
+```
+
+Window expiry, identity corrections, publisher clustering changes and source removals recompute desired counts; they do not add/subtract untracked counters. A pair below any gate is retracted with a surviving revision fence. Daily expiry continues when ingestion is paused. The 60-day/100-pair/90%-precision audit is a prerequisite for a separate future scoring decision; it never flips the flag automatically. Narratives must describe coverage, not infer a personal tie or endorsement.
+
+**Replay acceptance for every media edge:** creation time/UUID stable on retry; target-scoped claim correction preserves unrelated evidence; both endpoints canonicalized on merge; missing endpoints defer; expired workers cannot write old revisions; deleted edges cannot be resurrected by stale replay; consumer packages carry the current revision/tombstone and source policy. No source text or per-edge LLM is needed to build deterministic descriptions.
 
 ---
 
@@ -3373,7 +4195,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `PERFORMED` | **10** |
 | `RELEASED` | **10** |
 | `ADVISOR_TO` | **12** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> (stage; Person\|Company → `Film_TV {stage}`) | **12 / 16 / 22 / 28 / 35** by billing tier |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> (stage; Person\|Company → `Stage_Production`) | **12 / 16 / 22 / 28 / 35** by billing tier |
 | `WROTE_LYRICS` | **12** |
 | `EMCEED` (Person → `Event:Live_*`) | **12** |
 | `MEMBER_OF` (music past) | **12** |
@@ -3394,7 +4216,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>REPORTED_TO</span> (Person report → Person manager) | **15** current · **25** past |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLABORATORS</span> (Person ↔ Person) | **15** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>RELATED_PERSON_OF</span> (Person → issuer Company) | **15** officer / director · **20** promoter |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (Person → `MediaAppearance`) | **15** interview · **20** panelist · **45** conference speaker (15 below the hub threshold) |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (Person → `MediaAppearance`) | **15** interview · **20** panelist/moderator · **45** speaker (15 below a verified complete hub threshold; pair-aware policy required) |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLEAGUES_AT</span> (Person ↔ Person) | **16 / 24** board peers · **20 / 28** colleagues (current / past) |
 | `SUPPORTING_MUSICIAN_FOR` | **18** |
 | `JUDGED_AT` (Person → `Event:Live_*`) | **18** |
@@ -3426,7 +4248,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `EXHIBITED_AT` (Company → `Event:Live_*`) | **30** |
 | `HELD_AT` | **30** |
 | `HELD_IN` (`Event:Live_*` → City) | **30** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>PART_OF</span> (`MediaAppearance` → `Event:Live_*`) | **30** |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>SESSION_OF</span> (`MediaAppearance` → `Event:Live_*`) | **30** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>SUCCEEDED_BY</span> (Person predecessor → Person successor) | **30** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>DONOR_TO</span> (Person\|Company → institution) | **30 / 33 / 36** person by amount · **30–40** foundation · **35** corporate · **38 / 48** derived · **50** reserved |
 | `HEADLINED` | **35** |
@@ -3449,6 +4271,16 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `FROM_AREA` | **70** |
 | `LOCATED_IN` | **70** to City / Region / State; **80** direct-to-Country *(§3.6)* |
 | `HAS_SUBDOMAIN` | **100** *(§3.6 hub damping)* |
+
+**Proposed theatre additions (2026-09-06):** endpoint-specific contracts; no live theatre writer. Only `PRODUCED` participates in the first-release co-credit scoring policy. These rows are also tracked in [Edge Weights → Theatre](/guides/ontology/edge-weights#theatre-weights).
+
+| Theatre family / target | Proposed weight | Initial scoring |
+| --- | --- | --- |
+| `PRODUCTION_OF` → `Theatrical_Work` | **50** | Excluded; evidence context |
+| `STAGED_AT` → `Place:Venue:Theatre` | **50** | Excluded; evidence context |
+| `ADAPTED_FROM` → resolved source work | **55** | Excluded; evidence context |
+| `WROTE` / `COMPOSED` / `WROTE_LYRICS` → `Theatrical_Work` | **10 / 8 / 12** | Excluded initially; authorship context |
+| `HAS_AWARD` / `WON_AWARD` / `NOMINATED_FOR` → `Stage_Award` | **40 / 30 / 35** | Excluded initially; recognition context |
 
 
 ## User Graph Edges

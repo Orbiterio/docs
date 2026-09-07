@@ -1,0 +1,80 @@
+---
+title: "Phase 3: Conferences & Archives"
+sidebarTitle: "Phase 3: Conferences & Archives"
+description: "PR contract for organizer-defined editions and sessions, scheduled versus confirmed participation, and recoverable archived agendas."
+---
+
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
+**Status: planned adapter PR.** Suggested PR title: **Add organizer session and archived agenda adapters**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations), including a usable event-owner identity seam. Podcast or YouTube enablement is not a prerequisite. Uses [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) for facts/graph integration and [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) for reads.
+
+## PR boundary
+
+Build organizer edition/session discovery, bounded approved-page retrieval, one reusable archive capture client and source-specific parsing strategies behind the same adapter interface. Preserve source evidence for billed speakers and distinguish confirmed session participants. Do not build a universal arbitrary-site crawler, attendee social graph or competing event ontology.
+
+The [TED2026 program](https://conferences.ted.com/ted2026/program) and [speaker pages](https://conferences.ted.com/ted2026/speakers) are inspected candidate sources. Add a second organizer/platform and one recoverable historical edition to the fixture manifest before parser selection. A discovered programme is not a labeled fixture, a complete speaker count, or proof of attendance. Exact second-organizer and archived-edition selection remain open; recommend a public organizer agenda with stable session URLs and a recoverable prior edition.
+
+## Primary source-to-property map
+
+| Source evidence | SQL/claim destination | Required interpretation |
+| --- | --- | --- |
+| Organizer identity, exact edition ID/URL, series name | Canonical event alias; `live_event` claims for `event_key`, `organizer_source_ref`, `source_edition_id`, `series_name`, `event_url` | Same series/year does not prove same edition |
+| Edition dates, timezone, venue, format, cancellation notice | Event claims for date/precision, timezone, venue/location strings, format/status | Preserve missing precision; no invented January 1 or UTC conversion without timezone |
+| Complete dated organizer speaker inventory | `speaker_count`, `speaker_count_complete`, `speaker_count_observed_at`, coverage | Count unique verified speakers for the exact edition; a partial page is not a complete total |
+| Session ID, title, track/room/time, named participants and roles | `media_appearance_sources.session_ref`; appearance claims; mentions; `media_interaction_groups` | Scheduled billing until stronger occurrence evidence exists |
+| Organizer recap, corrected programme, item-level recording record | Independent observations and supporting claims; occurrence update | Confirm only people and session scope actually supported by this record |
+| Speaker bio/profile URL, literal title/employer | Mention `identity_points`, locators and resolution evidence | No automatic employment write or default participation in every session |
+| Original page and archive capture metadata | Observation requested/final URL, `captured_at`; snapshot policy/hash; capture manifest | Capture time is separate from event/session date |
+| Exact session-to-edition statement | `media_event_associations` with durable association scope and evidence refs | `SESSION_OF` at replay; no generic `PART_OF` or cross-session relationship |
+
+Store room/track and other evidence qualifiers in the versioned source/support payload when no typed cache column exists. Do not silently add columns or reuse an unrelated field. Facts-owned typed caches receive only registered claims; full raw agendas remain private permitted snapshots.
+
+## Edition and session algorithm
+
+```text
+claim exact approved edition work; resolve event through shared owner
+fetch and persist edition inventory; classify completeness
+persist bounded child work for session and speaker pages before checkpoint
+session worker: extract stable session key, source time precision and billed roles
+resolve each person against canonical Universe; keep ambiguity in review
+record scheduled evidence; attach exact edition association
+independent recap/recording evidence may confirm the supported participants/groups
+send shared facts/replay intent for accepted current claims
+```
+
+A cancelled session retracts current confirmed participation only when supported by a correction to that occurrence; a deleted webpage by itself establishes unavailable evidence. A moved session retains its stable organizer ID while time/location claims revise. Reused agenda IDs must be scoped to the edition. A talk recording with several speakers in separate talks is not one shared panel.
+
+Maintain separate extraction, identity and occurrence states. Event date passing does not convert scheduled to confirmed. Roster-only records remain SQL candidate evidence, with no accepted session membership. If a source lacks session structure, report `roster_only` coverage rather than inventing session nodes.
+
+## Archive recovery contract
+
+Use the [Internet Archive CDX API](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md) to enumerate captures with a bounded original-URL scope and time interval, response field list, status/MIME filters and resumable pagination. Persist the capture manifest before fetching bodies. Adjacent digest collapsing is not global deduplication.
+
+The proposed manifest lives in versioned `media_work.checkpoint` or a private manifest object referenced there: original URL, capture timestamp, archive URL, status, MIME, digest, selection reason and continuation state. Fetch and verify the selected archived body; a successful CDX hit alone does not mean recovery. Preserve original and replay URLs independently. A live-site fallback is a separate live observation, never represented as archived evidence.
+
+Select the capture relevant to the claim: pre-event billing and post-event recap can disagree legitimately. Retain those temporal roles. Bound archive pages, captures per original URL, redirects and body size. A blocked replay, missing resource or robots/access restriction becomes explicit unavailable coverage; it does not imply session cancellation. Respect the original source and archive-use policy for retained bodies and derivatives.
+
+## Synthetic end-to-end fixture
+
+An edition has two panels. Panel A lists Alex, Blair and moderator Casey; Panel B lists Drew and Ellis. The programme bills all five, but only Panel A has an organizer recap confirming its participants. Expected staged state: **one event, two session appearances, two edition associations, three confirmed Panel A memberships, and two scheduled Panel B candidates**. Graph release writes only confirmed eligible memberships. No person pair can connect across the panels through the event.
+
+The source has only a partial speaker roster, so `speaker_count_complete=false`. Unknown event size uses the existing conservative speaker band. Panel role weights remain 20 independently of that solo-speaker threshold. Moderator is preserved as a literal role, not silently converted to panelist. Its proposed pair treatment remains in the decision register.
+
+## Evaluation and acceptance
+
+<BakeOffRules />
+
+Evaluate organizer/session discovery separately from participant extraction and identity adjudication. A general HTML extractor's prior performance does not validate this organizer or archived markup. Prefer deterministic structured records; any model output must resolve back to the exact retained source locator.
+
+| Fixture | Required assertion |
+| --- | --- |
+| Two editions in one year; same title across years; source ID reused by edition | Correct distinct event/session identities |
+| Date-only session, timezone/DST boundary, moved or cancelled session | Precision retained, no guessed instant, revisioned correction |
+| Roster only, scheduled session, recap, replacement speaker | Correct occurrence states; no attendance inferred from dates |
+| Two panels; sequential solo talks; unknown or oversized group | No cross-session or disjoint-segment pairs |
+| Verified 49 versus 50 speakers; partial/unknown count | Exact threshold behavior; unknown uses conservative band |
+| Repeated CDX digest, incomplete pagination, missing body, live fallback | Deduped manifest, resumable retrieval and truthful archive coverage |
+| Publisher video of organizer session | Verified scoped source aliases, one appearance and no duplicated encounter |
+| Expired sole source versus surviving independent recap | Targeted re-election and purge; only independently supported claims survive |
+
+Exit with two organizer contracts, one demonstrated recoverable archive fixture, identity/time/occurrence labels, accepted parsing/model evaluation and bounded coverage reports. No fixed number of recoverable years or speakers is promised before those checks.

@@ -377,23 +377,40 @@ Designed in the [Donors](/guides/open-work/roadmap/donors) build plan (Enrichmen
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>[:DONOR_TO]</span> (Company, corporate donor) | 35 | Diffuse, PR-driven giving — weaker than a personal gift. |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>[:DONOR_TO]</span> (honor-roll-only) | 50 *(reserved)* | No edges written in v1; band reserved ≈ `VOLUNTEERED_AT` ended. |
 
+<a id="theatre-weights" />
+
 ### Person / Company → Stage production (Broadway lane)
 
-Set at the 2026-08-21 cross-lane §3.6 sitting; folded from the [Broadway co-producers](/guides/open-work/roadmap/broadway-co-producers) plan. Co-production pairs are never written — they derive through the production node from two credit edges.
+The direct `PRODUCED` billing bands were set at the 2026-08-21 cross-lane §3.6 sitting. **2026-09-07 contract synchronization:** the target is `Stage_Production`, and the [Go theatre edge specification](/guides/ontology/edges#theatre-edges) adds proposed structural, authorship and award contracts. No theatre writer is implemented. Co-producing pairs derive from credits on the same production; there is no `CO_PRODUCED_WITH` edge.
 
-| Edge | Weight | Description |
+| Edge / theatre endpoints | Weight | Status / scoring rationale |
 | --- | --- | --- |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:PRODUCED]</span> (stage) | 12 / 16 / 22 / 28 / 35 | Producer credit on a Broadway / West End production, by billing tier: lead producer / producer / co-producer / associate or executive producer / in association. Pattern-dependent with the music `PRODUCED` (18) — [spec](/guides/ontology/edges#produced-stage) |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> · Person or Company → Stage_Production | **12 / 16 / 22 / 28 / 35** | Agreed bands: explicit lead / producer / co-producer / associate or executive / association. Explicit production “Producer”/“Produced by” is **16**, not automatically lead. A generic Tony nominee-list “Producers” heading remains unclassified until billing-tier evidence is supplied. First-release co-credit backbone. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCTION_OF</span> · Stage_Production → Theatrical_Work | Proposed **50** | New name; evidence context, excluded from scoring. Shared work is not a shared production. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>STAGED_AT</span> · Stage_Production → Place:Venue:Theatre | Proposed **50** | New name; evidence context, excluded. Shared physical venue does not establish a professional relationship. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>ADAPTED_FROM</span> · Theatrical_Work → resolved source work | Proposed **55** | New name; evidence context, excluded. Adaptation does not establish identical work or creator identity. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>WROTE</span> · Person or Music_Group → Theatrical_Work | Proposed **10** | New endpoint contract using direct-authorship music precedent; excluded initially. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>COMPOSED</span> · Person or Music_Group → Theatrical_Work | Proposed **8** | New endpoint contract using music composition precedent; excluded initially. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>WROTE_LYRICS</span> · Person or Music_Group → Theatrical_Work | Proposed **12** | New endpoint contract using music lyrics precedent; excluded initially. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>HAS_AWARD</span> · Stage_Production → Stage_Award | Proposed **40** | Existing award-context precedent; distinguish production result from associated recipient result; excluded initially. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>WON_AWARD</span> · explicit Person or Company → Stage_Award:Winner | Proposed **30** | Existing winner precedent; only explicitly named recipients; excluded initially. |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>NOMINATED_FOR</span> · explicit Person or Company → Stage_Award:Nominee | Proposed **35** | Existing nomination precedent; current result superseded when a win is accepted; excluded initially. |
+
+All additional weights are **proposals**, even when they reuse an existing family's number. Evidence edges use `layer: "evidence"`; authorship uses `layer: "credit"`; awards use `layer: "recognition"`. Every theatre edge carries `active`; readers exclude inactive edges. Every context variant also carries `excluded_from_scoring: true`. Direct edges require matching `stage_credit_version` and `projection_revision`, as defined in Edge Types. Context writers remain disabled until every relevant reader enforces the exclusion; a high weight alone is insufficient. Reusing `WROTE`, `PRODUCED` or an award name must not change the movie/music endpoint registry or weights. No graph data is reweighted in this planning pass.
 
 ### Person → MediaAppearance / Event (media lane)
 
-Set 2026-08-21; folded from [Media co-occurrence](/guides/open-work/roadmap/media-co-occurrence). Interview pairs are `COLLABORATORS`-class; conferences are hubs.
+<a id="media-weights" />
 
-| Edge | Weight | Description |
+The 15/20/45 appearance and 55 news bands were set 2026-08-21. **2026-09-06 Go plan revision:** episode/session-specific evidence and a pair-aware reader are required before any scored use; no media writer is implemented. Proposed `SESSION_OF` replaces the unbuilt media `PART_OF` name, preserving the project reservation. Moderator handling and conservative news independence gates are proposed additions.
+
+| Edge | Weight | Contract |
 | --- | --- | --- |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:APPEARED_IN]</span> | 15 / 20 / 45 | Person appeared in a podcast episode, video or session — interview host / guest 15, co-panelist 20, conference speaker 45 — [spec](/guides/ontology/edges#appeared_in). Reconciled 2026-09-05: speaking is 15 below the speaker-count hub threshold (default 50) and 45 at or above it, for both `APPEARED_IN {role: speaker}` and the Live Events `SPOKE_AT` — the `LOCATED_IN` / `DONOR_TO` hub-damping idiom |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:PART_OF]</span> | 30 | `MediaAppearance` → `Event:Live_*` containment; the `RECORDING_OF` analogue — [spec](/guides/ontology/edges#part_of) |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:CO_MENTIONED_WITH]</span> | 55 *(evidence layer)* | Person A & B co-appear in news coverage; `excluded_from_scoring: true` — [spec](/guides/ontology/edges#co_mentioned_with) |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:APPEARED_IN]</span> | 15 / 20 / 45 | Interview host/guest 15; panelist/moderator 20; speaker 15 only below a complete verified 50-speaker event threshold, otherwise 45. Unknown count uses 45. Only compatible confirmed memberships in the same interaction group can score; solo talks, guest cliques and conference-wide adjacency do not. [Full spec](/guides/ontology/edges#appeared_in). |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:SESSION_OF]</span> | 30 | Exact `MediaAppearance` session → exact `Event:Live_*` edition. Always evidence/excluded; no cross-session scoring shortcut. [Proposed spec](/guides/ontology/edges#session_of). |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>[:CO_MENTIONED_WITH]</span> | 55 | Closed-world, independently verified article-person matches; at least three canonical articles/two domains in 24 calendar months, plus proposed independent-story/publisher gates. Always evidence/excluded in v1. [Full spec](/guides/ontology/edges#co_mentioned_with). |
+
+All media edges require the metadata envelope, including `description` and `description_generated_at`. Graph/scoring flags default off. The current Go generic readers do not enforce media exclusions or group/role compatibility; reader acceptance tests are a release prerequisite, and a weight or flag alone is insufficient. Repeated source assets count as one verified encounter. No co-appearance pair edges or `KNOWS` are materialized. [Go plan](/guides/open-work/roadmap/media-co-occurrence).
 
 ### Person → Company (federal filings lane)
 
