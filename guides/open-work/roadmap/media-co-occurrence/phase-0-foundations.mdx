@@ -1,0 +1,113 @@
+---
+title: "Phase 0: Shared Go Foundations"
+sidebarTitle: "Phase 0: Shared Go Foundations"
+description: "PR contract for canonical identities, media work, evidence intake, provider budgets and durable delivery shared by all speaking and news adapters."
+---
+
+**Status: planned PR; storage is already created in development AlloyDB.** This page specifies future Go development. The [overview](/guides/open-work/roadmap/media-co-occurrence) owns the shared policy and the [build audit](/guides/open-work/roadmap/media-co-occurrence#build-audit-and-decision-register) distinguishes verified work from open gates.
+
+## PR boundary and dependencies
+
+Suggested PR title: **Add shared media identity, work and evidence foundations**. Build one usable vertical foundation with fake providers and graph/publication disabled. It is the prerequisite for [Phase 1: YouTube](/guides/open-work/roadmap/media-co-occurrence/phase-1-youtube) and every later adapter.
+
+The 23-table DDL is **not a new task**: reuse migrations `20260907090213_media_co_occurrence_storage.sql` and `20260907090253_provider_quota_storage.sql`. Their repository changes still need normal delivery; development database application does not establish that they are merged or deployed elsewhere. Review the overview's older pending migration warning before any full migration run.
+
+| Include in this PR | Owned by a later PR |
+| --- | --- |
+| Go type/identifier registration, public appearance/event identity seam, source policy and bounded intake | Actual source enumeration and source-specific parsers: Phases 1–4 |
+| SQL repositories, worker claim/checkpoint fencing, private snapshots, typed mentions, common resolution/review seam | Facts election, typed-cache writers, graph mutations and merge repair: Phase 5 |
+| Shared provider budget implementation, transactional outbox dispatcher, expiry/invalidation intake | Consumer projections and transport: Phase 6 |
+| Deterministic validation, fake provider/clock, disabled configuration and narrow owner interfaces | Production scheduler, runtime configuration, measured canary: Phase 7 |
+
+Keep orchestration under `internal/features/enrichment/media`; parent enrichment adapts SQL and public owners. Implement shared quota accounting under a platform owner, with interfaces declared by its consumers. Wire implementations in `internal/app`. Existing `media.rehost_requested` is an image-rehosting event; it does not process appearances. Use a distinct proposed event namespace, `enrichment.media.*`.
+
+## Identity contract
+
+**Recommended, awaiting the open identity decision:** graph lookup uses canonical Universe `entity_id`; new media/event graph nodes use that UUID on creation. Preserve any existing `GraphNodeUUID` mapping when importing an already registered entity. Source strings, mutable names, roles and dates never become graph identity. The existing `SetGraphNodeUUID` is write-once; this plan does not overwrite it during deduplication.
+
+| Identifier | Exact normalization and authority |
+| --- | --- |
+| YouTube video | Validated case-sensitive video ID. A whole video can be a strong appearance alias only when it denotes exactly one verified appearance. |
+| RSS episode | Stable approved show/feed identity + exact opaque GUID; case preserved. Missing GUID requires a verified episode-level publisher key or review. |
+| Publisher episode | Item-level canonical URL, verified on the approved publisher. Strip only known tracking parameters; preserve meaningful path/query distinctions. |
+| Event edition | Organizer namespace + organizer-defined edition ID, or reviewed exact edition URL. Series/year alone is insufficient. |
+| Conference session | Organizer + edition identity + session ID. A title change retains identity only when the source key remains valid. |
+| Clip or compilation | Source ledger key + explicit `segment_key`; never attach a multi-session asset as a globally unique alias to one appearance. |
+
+Use `entitiespub.CreateWithIdentifiers` and `AttachIdentifier`; a strong collision returns the canonical owner or a typed review conflict. No fallback to creating a second identity. Aliases and source-ledger keys have different cardinalities. Version and length-prefix components before hashing compound keys so delimiter-containing GUIDs cannot collide. Hashes are indexes: compare the full original key on a match. Use caller-created UUIDv7 IDs for new SQL rows.
+
+## Intake and internal contracts
+
+The overview defines `RequestMediaWork` wire fields and bounds. Add strict server-side DTO validation and return durable `job_id`, `state`, `action`, and canonical/requested IDs when known. An identical request is idempotent; reuse of its key with changed normalized inputs is a conflict. This is an internal/operator seam, not a new public consumer API.
+
+| Proposed operation | Inputs | Output / side effects |
+| --- | --- | --- |
+| `RequestMediaWork` | Auth-derived actor, typed source reference, intent, limits, request key | One work generation and wakeup intent; no inline provider calls |
+| `ResolveAppearance` / event owner `ResolveEdition` | Verified scoped source keys, source policy, canonical candidates | Canonical ID or `needs_review`; ledger retains the evidence behind alias attachment |
+| `RecordObservation` | Work lease, attempt key, status, URLs, policy and optional snapshot | Idempotent observation; classified partial/unchanged/unavailable result |
+| `AcceptExtraction` | Observation, locators, typed roles/groups, extraction version | Mentions and resolution work; invalid locator cannot become accepted evidence |
+| `ResolveMention` | Mention/input revision, bounded candidates and evidence | Append-only decision plus current resolution; new-person admission defaults off |
+| `RecordMembershipEvidence` | Resolved participant, appearance/group, occurrence and provenance | Versioned supporting claims, aggregate marked `pending_facts`, later Phase 5 reconciliation work |
+| `InvalidateEvidence` | Source/mention scope, cause, policy and revision | Immediate read suppression and durable re-election/retraction work; idempotent purge intent |
+
+Source adapters return the same versioned extraction envelope. An illustrative fragment, not a production result:
+
+```json
+{
+  "schema_version": "media.extraction.v1",
+  "appearance_kind": "interview",
+  "occurrence_status": "confirmed",
+  "groups": [{"group_key": "whole", "kind": "interview", "completeness": "complete"}],
+  "participants": [{
+    "raw_name": "Example Guest",
+    "raw_role": "guest",
+    "group_key": "whole",
+    "source_locator": {"kind": "json_field", "path": "snippet.description", "start": 0, "end": 35},
+    "evidence_text": "Example Guest joins this interview."
+  }]
+}
+```
+
+Locators use a specified coordinate system: Unicode code-point offsets over the pinned decoded field/text, end-exclusive. HTML locators additionally carry the selector and normalized-text version; XML locators carry namespace-aware element paths. The example assumes the decoded field is exactly the 35-character evidence text shown. Validate every extracted span against its snapshot. Provider offsets such as GDELT's approximate offsets are separate candidate metadata.
+
+## Durable transitions and transaction boundaries
+
+```text
+intake transaction: validate normalized request hash; insert work + outbox wakeup
+claim transaction: lock due work; set fresh lease token and bounded deadline
+provider attempt: reserve all budgets; fence issuance; fetch outside SQL transaction
+persist: object first; then observation/snapshot pointer under current work lease
+parse/resolve: bounded operations; append decisions; validate current evidence policy
+checkpoint transaction: insert durable children/support rows + outbox; advance cursor
+close transaction: compare lease token + generation; mark source work outcome
+```
+
+Use `media_work` states `pending`, `running`, `deferred`, `blocked`, `complete`, `failed`, `cancelled` as a Go-validated enum. Quota, lease contention and unresolved human decisions do not exhaust data-failure retries. A source work completion does not mark an appearance graph-ready or published. Unknown work kinds fail explicitly; they never reach the person/company dispatcher.
+
+Object upload and SQL cannot share a transaction. Use deterministic attempt object keys with storage generations, reconcile orphaned objects and incomplete pointers, and never parse an uncommitted reference as accepted evidence. Record 304 observations against a still-valid prior snapshot. A purged prior body requires a fresh permitted fetch. Policy changes invalidate derivatives even if content bytes are unchanged.
+
+`media_outbox` commits with each desired SQL change. Its compact payload contains schema version, event ID, aggregate ID/type and revision, not a provider body. Pub/Sub acknowledgement only stamps `dispatched_at`. Recovery consumers read current SQL state; duplicate, old or reordered messages do not restore old state. Reconciliation work remains durable until Phase 5 exists; no absent handler may acknowledge it as applied.
+
+## Provider quota and retry implementation
+
+Use the [accepted quota contract](/guides/open-work/roadmap/media-co-occurrence#provider-quotas-accepted-decision-3). Reserve all applicable account/project buckets atomically for each actual attempt, including retries. Request counts, quota units, billable bytes and monetary spend are distinct. Missing configuration fails closed; local `.env.local` credentials are not worker identity or runtime budget configuration.
+
+Reuse `platform/httpx` for retries. Its inspected `BeforeAttempt` hook can gate every attempt, but `OnAttempt` reports status/error metadata without response bodies or usage. Add a narrow attempt-completion/usage seam, or provider-owned settlement after decoding, with contract tests for every billable attempt. Do not claim the existing callback can settle model token usage or BigQuery billed bytes by itself. Avoid multiplying independent client and worker retry loops; share one bounded attempt allowance and deadline.
+
+Reserve variable costs conservatively; persist issuance before transport. Unknown issued outcomes stay held for reconciliation, including after lease expiry. Known unsent attempts may release. A retry gets a new attempt key; credential rotation does not reset account usage. Actual overruns must remain visible rather than clamped to the reservation. No transaction spans HTTP or a model call.
+
+## Acceptance and handoff
+
+| Test | Required result |
+| --- | --- |
+| Concurrent identical intake and conflicting reuse | One logical job; changed-input reuse rejected |
+| Duplicate cross-source import, case-distinct keys, compilation | Correct canonical identity or explicit review; no title/date merge |
+| Worker A expires; worker B advances; A returns late | A cannot checkpoint, overwrite evidence or mark complete |
+| Final page persisted but parent crashes | Replay finds existing children and finishes without losing or duplicating work |
+| Two workers contend for last quota slot; retry; unknown timeout | Atomic reservation, no unreserved call, correct issued hold and retry accounting |
+| SQL rollback, orphan object, lost Pub/Sub acknowledgement | Repairable evidence and eventual single logical effect |
+| Source prompt injection, malformed XML, redirect to private host, oversized body | No tools/SSRF/accepted malformed evidence; bounded classified failure |
+| Evidence expiry with fetching disabled | Required purge and invalidation still run; stale replay cannot read the purged body |
+| Media intake and old image-rehosting event | Separate handlers; no generic company/person enrichment admission |
+
+Run repository-required lint, dependency, sqlc and targeted Go integration checks during implementation. Existing schema tests are a starting point, not proof of these runtime behaviors. Handoff includes fake-provider fixtures, owner interfaces, validated configuration schema and a durable work inspection path. **Source/model bake-offs, graph mutation proof and live rollout remain separate gates.**
