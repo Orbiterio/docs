@@ -1949,7 +1949,7 @@ Person appeared on stage as a speaker — keynote, panel, fireside, or interview
 |---|---|
 | **Pattern** | `(Person)-[SPOKE_AT]->(Event:Live_*)` |
 | **Weight** | **15**; **45** hub-damped when the event's speaker count is at or above the hub threshold (default 50) |
-| **Writer** | TBD |
+| **Writer** | orbiter-universe Deep Bio appearance replay (`person_appearance_replay.go`, 2026-09-07): `works[].type = talk` → `live_event_participants` → this edge; the event node is MERGEd on `event_key` (shared with the Xano `live_events` #702 seed) |
 
 <Note>
 **Deep Bio talks map here (2026-09-05).** The Deep Bio ledger's `works[].type = talk` rows become `SPOKE_AT` to the event the talk was given at — `session_title` from the row title, `role` from the row (`"speaker"` unless the source bills a keynote, panel, fireside or lightning talk), `session_date` from the row year, the event resolved from `venue` / `url` (a webinar is `Event:Live_Webinar`). Provenance travels as `source_urls` and `evidence_refs` per the [ledger contract](#shared-contract-for-ledger-written-edges). Reconciled with the media lane on 2026-09-05: speaking is **15** at events below the speaker-count hub threshold (webinars, panels, meetups — every Deep Bio talk so far) and **45** at or above it (large conferences), the bigger-hub-weaker-tie rule `LOCATED_IN` (70/80) and `DONOR_TO` (30/40) already follow. [`APPEARED_IN {role: speaker}`](#appeared_in) uses the same two values, so the two pages no longer disagree.
@@ -2855,7 +2855,7 @@ Two people who both invested in the same company. Keeps the planned two-tier val
 |---|---|
 | **Pattern** | `(Person)-[CO_INVESTORS]->(Person)` — symmetric, written once per pair per company |
 | **Weight** | **20** same round attested · **25** round unknown or different *(planned values, unchanged)* |
-| **Writer** | TBD — Deep Bio ledger `people[].relationship = co_investor` |
+| **Writer** | orbiter-universe structural derivation (`person/co_investors.go`, 2026-09-07) from the Fundable mirror — see below; Deep Bio `people[].relationship = co_investor` rows are a supplement for the subject's own angel ties |
 
 <Warning>
 **Gate rule the first batch exposed.** All four `co_investor` rows in the 2026-09-05 batch (three from Alessandro Chesser, one from Marc Klingen) paired a *founder* with an investor in his own company — a founder is not a co-investor. The writer must require that the subject also carries an `INVESTED_IN` edge (or an `investor` ledger row) to `via_entity_uuid`; otherwise the row is the counterpart's `INVESTED_IN` → company (a live edge), not a pair edge. The ledger gate (orbiter-universe `deepbio/ledger.go`) strips the pair edge from such a row and audits it as `co_investor_unbacked`; the row stays as evidence for the derived-pairs rule below.
@@ -2867,9 +2867,11 @@ Two people who both invested in the same company. Keeps the planned two-tier val
 |---|---|---|
 | `via_organization`, `via_entity_uuid`, `via_domain` | | Required — the company both invested in |
 | `round` | string | Funding round name when attested (`"Seed"`, `"Series A"`); drives the 20 tier |
-| `funding_round_uuid` | uuid | When the round resolves to a `Funding_Round` node |
+| `funding_round_uuid` | uuid | Set by the structural writer when the two investments are the SAME deal: the mirror deal id is looked up in `funding_rounds.external_deal_id` and the row's `graph_node_uuid` is stamped, so a consumer jumps from the pair to the `Funding_Round` node. Null when the pair shares the company through different rounds, or the round node is not written yet |
 | `valid_from` | integer | Year of the (latest) shared investment |
 | *shared contract* | | `description`, `weight`, `confidence`, `source_urls`, `source_names`, `evidence`, `source_published`, `provider`, `evidence_refs`, envelope |
+
+**Structural derivation (confirmed 2026-09-07).** The source of truth is the Fundable mirror, not a narrative: two people who each hold an angel investment (`angel_investments`) or a partner seat on an institutional investment (`institutional_investments_person`) into the same organization are co-investors. The pair is written once per pair per company on the subject's `person_relations` ledger with `provider = fundable`, `round` = the deal's financing type and weight **20** when the two investments are the same deal, **25** otherwise, `valid_from` = the year of the latest shared deal, `evidence_refs = fundable:deal:<id>`, and `funding_round_uuid` = the shared deal's `Funding_Round` node when the investments are the same deal. It runs at the end of a person's angel step and from the admin sweep `POST /v1/admin/enrichment/persons/co-investors/derive`. Both people must already be entities; a counterpart not yet in the estate is skipped, not minted.
 
 **Derived pairs from a founder's rows.** Rows that fail the founder gate still attest that each counterpart invested in `via_organization`. The writer may write `CO_INVESTORS` between two such counterparts when one source names both as investors in the same company — the pair is then attested, not structural — with `evidence_refs` pointing at both rows.
 
@@ -3477,7 +3479,11 @@ All three contracts below require this envelope. Examples show edge-specific pro
 
 <a id="appeared_in" />
 
-**Pattern:** `Person → APPEARED_IN → Entity:MediaAppearance`. **Identity:** one canonical person/appearance membership. **Writer:** proposed media facts-elected replay. Multiple supporting sources or roles enrich this membership; they do not create duplicate edges.
+| | |
+|---|---|
+| **Pattern** | `(Person)-[APPEARED_IN]->(MediaAppearance)` |
+| **Weight** | **15** interview host / guest · **20** panelist · **45** conference speaker (**15** when the event is below the speaker-count hub threshold, default 50) |
+| **Writer** | orbiter-universe Deep Bio appearance replay (`person_appearance_replay.go`, 2026-09-07) for `works[].type = podcast` rows → `media_appearance_participants` → this edge, `MediaAppearance` MERGEd on `media_key = podcast::<episode url>`; the [Media co-occurrence lane](/guides/open-work/roadmap/media-co-occurrence) will share the node |
 
 | Property | Type / requirement | Meaning |
 | --- | --- | --- |
