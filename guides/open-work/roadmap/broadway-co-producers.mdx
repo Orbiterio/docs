@@ -130,7 +130,7 @@ Review baseline: local `/Users/markpederson/dev_work/orbiter-universe`, clean at
 
 Basic Memory used: [ORBIT-1862 build record and September 6 follow-up](https://app.basicmemory.com/notes?id=cloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110%7C5aed36ef-2ddd-41a8-a76f-9d4c80ecfd85&explorer=project%3Acloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110). Its later correction on relationship replacement takes precedence over its earlier whole-source description; current code is the final check.
 
-Companion docs: [Go migration architecture](/guides/open-work/orbiter-univers-standalone/enrichment-gcp-migration), [Movie rebuild contract](/guides/enrichment/waterfall/imdb-go-rebuild-spec), [Music rebuild contract](/guides/enrichment/waterfall/music-go-rebuild-spec), [Projection Pattern](/guides/open-work/orbiter-univers-standalone/projection-pattern), [Universe Lookup Tables](/guides/open-work/orbiter-univers-standalone/universe-lookup-tables), [stage ontology](/guides/ontology/edges#produced-stage), [Edge Weights](/guides/ontology/edge-weights), [Donors](/guides/open-work/roadmap/donors). Older design sketches explain intent; do not copy obsolete table names or queue mechanics over current code.
+Companion docs: [Go migration architecture](/guides/open-work/orbiter-univers-standalone/enrichment-gcp-migration), [Movie rebuild contract](/guides/enrichment/waterfall/imdb-go-rebuild-spec), [Music rebuild contract](/guides/enrichment/waterfall/music-go-rebuild-spec), [Projection Pattern](/guides/open-work/orbiter-univers-standalone/projection-pattern), [Universe Lookup Tables](/guides/open-work/orbiter-univers-standalone/universe-lookup-tables), [stage ontology](/guides/ontology/edges#stage-produced), [Edge Weights](/guides/ontology/edge-weights), [Donors](/guides/open-work/roadmap/donors). Older design sketches explain intent; do not copy obsolete table names or queue mechanics over current code.
 
 ## Decisions and invariants
 
@@ -202,11 +202,43 @@ The detailed field types, required/optional rules, primary-source mappings and g
 
 The graphical `Entity` label and a row in `universe.entities` must not be conflated. Canonical production/work nodes merge by proposed canonical `entity_id`; support venue/award nodes by their durable owner row IDs. All source identifiers are aliases. Those uniqueness rules, admission semantics and migration/reconciliation behavior are reviewed together before any writer is implemented.
 
+<a id="theatre-graph-output-manifest" />
+
+### Closed graph output manifest — September 7 sync
+
+**Node Types and Edge Types are the canonical property references for this build.** The following checklist exhausts theatre-owned output families in this plan. Read each linked definition and its complete synthetic JSON example before implementing a DTO/writer. Examples are contract fixtures, not permission to ingest a source or claims about live graph data. Canonical SQL/API type names and graph-family `entity_type` values are explicitly mapped in Node Types.
+
+| Node family | Scope / creation rule | Definition and complete example |
+| --- | --- | --- |
+| `Entity:Stage_Production` with optional `Play`/`Musical` | Required v1 hub; canonical `stage_production` admission | [Properties](/guides/ontology/nodes#stage-production) · [Example](/guides/ontology/nodes#stage-production-example) |
+| `Entity:Work:Theatrical_Work` with optional `Play`/`Musical` | Optional resolved-work slice; canonical `theatrical_work` admission | [Properties](/guides/ontology/nodes#theatrical-work) · [Example](/guides/ontology/nodes#theatrical-work-example) |
+| `Place:Venue:Theatre` | Optional support-place extension; preserve existing owner/UUID | [Properties](/guides/ontology/nodes#theatre-venue) · [Example](/guides/ontology/nodes#theatre-venue-example) |
+| `Stage_Award` with current `Winner`/`Nominee` modifier | Later support-result slice; one durable scoped entry | [Properties](/guides/ontology/nodes#stage-award) · [Winner/nominee examples](/guides/ontology/nodes#stage-award-example) |
+| Existing `Person` / `Company` | Reused in the initial pilot; later creation only through owner gates | [Existing endpoint examples and ownership](/guides/ontology/nodes#theatre-reused-endpoints) |
+| Existing `Music_Group` / `Film_TV` | Optional creator/source-work endpoints only; no theatre-driven creation or cascade | [Existing endpoint examples and ownership](/guides/ontology/nodes#theatre-reused-endpoints) |
+
+| Relationship / exact endpoints | Scope | Canonical properties and complete example |
+| --- | --- | --- |
+| `Person/Company → PRODUCED → Stage_Production` | Required v1, 12/16/22/28/35 by evidenced tier | [PRODUCED](/guides/ontology/edges#stage-produced) · [Private company submission](/guides/ontology/edges#stage-produced-private-example) |
+| `Stage_Production → PRODUCTION_OF → Theatrical_Work` | Optional work context; 50, excluded | [PRODUCTION_OF](/guides/ontology/edges#stage-production-of) |
+| `Stage_Production → STAGED_AT → Place:Venue:Theatre` | Optional venue context; 50, excluded | [STAGED_AT](/guides/ontology/edges#stage-staged-at) |
+| `Theatrical_Work → ADAPTED_FROM → Film_TV/Theatrical_Work` | Later explicit work lineage; 55, excluded | [ADAPTED_FROM](/guides/ontology/edges#stage-adapted-from) |
+| `Person/Music_Group → WROTE → Theatrical_Work` | Optional work authorship; 10, excluded | [WROTE](/guides/ontology/edges#stage-wrote) |
+| `Person/Music_Group → COMPOSED → Theatrical_Work` | Optional work authorship; 8, excluded | [COMPOSED](/guides/ontology/edges#stage-composed) |
+| `Person/Music_Group → WROTE_LYRICS → Theatrical_Work` | Optional work authorship; 12, excluded | [WROTE_LYRICS](/guides/ontology/edges#stage-wrote-lyrics) |
+| `Stage_Production → HAS_AWARD → Stage_Award` | Later scoped result context; 40, excluded | [HAS_AWARD](/guides/ontology/edges#stage-has-award) |
+| `Person/Company → WON_AWARD → Stage_Award:Winner` | Later explicitly named recipient; 30, excluded | [WON_AWARD](/guides/ontology/edges#stage-won-award) |
+| `Person/Company → NOMINATED_FOR → Stage_Award:Nominee` | Later explicitly named recipient; 35, excluded | [NOMINATED_FOR](/guides/ontology/edges#stage-nominated-for) |
+
+Every edge has `description`, `description_generated_at`, `active`, source/evidence references, revision and the appropriate election/support-claim reference. Direct credits also have the explicit `stage_credit_version` fence; no generic Tony-list heading earns a tier by default. Node/edge public URLs are conditional on actual public evidence; private submission references must not be turned into fake public URLs. Existing person/company/music/film metadata and shared-place ownership remain authoritative for reused endpoints.
+
+Read-only dependencies are not extra stage outputs: expertise taxonomy drives intake, and company/filing affiliations can support review or an existing traversal. The stage owner does not emit `HAS_EXPERTISE`, `OFFICER_OF`, `BOARD_MEMBER_OF`, PSC/ownership edges, movie/music credits, or any new principal-credit shortcut. In particular, the 990 officer edge contract cannot be repurposed for Companies House roles without an owner-defined extension. Cast/directing/performance/venue-ownership/tour links, book nodes and `CO_PRODUCED_WITH` remain outside this build. Source jobs, snapshots, billed groups, mentions, resolution decisions and credit/checkpoint ledgers stay in SQL/GCS; they are not additional graph nodes. Any added output family must first extend these Graphs definitions, examples, endpoint allowlists and acceptance fixtures.
+
 ### Go registration checklist for the new types
 
 Before queue admission, add explicit canonical type constants/validation, source identifier strength and type scoping, schema constraints, typed profile caches, facts mapping/distill switches, node-sync dispatch, graph writer whitelists/indexes, merge inventory and generic repair/purge guards. Add type-aware population caps and fanout policy, queue dispatch/manual-drive handling, event/OpenAPI DTOs, publish package dispatch, search/subgraph/path mapping and consumer contract tests.
 
-The theatrical-work type does not inherit a music or IMDb runner; its initial enrichment uses the approved local source payload and its own facts/sync path. Venues and award support records consume separate bounded support replay, not the person/company/production queue. Migrate shared-place identity only in its owner-reviewed slice. **This pass updates this plan and the theatre proposals in Node Types, Edge Types and Edge Weights. Runtime schema, Go registration, graph writers and API changes remain future implementation work.**
+The theatrical-work type does not inherit a music or IMDb runner; its initial enrichment uses the approved local source payload and its own facts/sync path. Venues and award support records consume separate bounded support replay, not the person/company/production queue. Migrate shared-place identity only in its owner-reviewed slice. **This pass updates this plan and the theatre proposals in Node Types, Edge Types and Edge Weights. The eleven-table direct-credit migration already exists; remaining runtime type/config/SQL-query registration, graph writers and API changes are build work.**
 
 ## Go architecture and ownership
 
@@ -233,7 +265,7 @@ flowchart TD
 | `enrichment/stage/{gate,orchestrator,types,parse,resolve}.go` | Pure extraction, typed contracts, resolution ladder and orchestrator decisions |
 | `enrichment/stage_gate.go`, `stage_repo.go`, `queries/stage.sql` | Adapt parent repo and public dependencies into narrow stage interfaces; sqlc owns generated code |
 | `enrichment/stage_credit_replay.go`, `stage_reconcile.go` | Durable desired credit state, replay and revision recovery |
-| `clients/ibdb`, `clients/playbill`, UK adapters | Fetch and decode sources; retries through `platform/httpx`; no entity or graph writes |
+| Source-specific clients/adapters: BroadwayWorld evaluation, reviewed programme/submission, Wikidata/Tony, separately enabled IBDB/Playbill/UK sources | Fetch/decode only enabled sources; retries through `platform/httpx`; no entity or graph writes |
 | `facts/mapping_stage.go`, `distill_stage_production.go`, stage view | New canonical type, source/field vocabulary, current claims and typed-cache winners |
 | `graph/stage_sync.go`, `platform/graph/stage_edges.go` | Stage-aware node synchronization and the sole stage `PRODUCED` writer |
 | `publish/stage_production_projection.go` + `enrichment/stage_production_projection_reads.go` | Stage production/credit package and public read seam; no App table access |
@@ -683,7 +715,7 @@ A run completes extraction when required source/parse commits succeeded; it may 
 
 Proposed provider/field vocabulary must be registered and tested in `facts` before use:
 
-- Raw source provider names are distinct (`ibdb`, `playbill`, and validated UK sources). A derived extraction/resolution envelope identifies its actual provider, snapshot, parser and policy; it never masquerades as IMDb or MusicBrainz.
+- Raw source provider names are distinct (`broadwayworld`, `wikidata`, `wikipedia`, `tony`, `pilot_submission`, reviewed programme publishers, and separately enabled `ibdb`/`playbill`/UK sources). A derived extraction/resolution envelope identifies its actual provider, snapshot, parser and policy; it never masquerades as IMDb or MusicBrainz.
 - Production scalar claims belong to `entity_type = stage_production`: title, controlled `form`, market, optional `work_entity_id`, source-qualified season, distinct run dates/status, `production_kind` and `credit_coverage`, using the Node Types property names. Venue evidence remains a dated support association. Unknown kind is absent, not a false revival assertion. Add stage-specific mapping, distill, chosen view and node-sync dispatch rather than extending the Film/TV typed cache.
 - Direct relationship field **`stage_produced`** lives on the producer entity and targets the production. Extend both person and company relationship election; one unsupported entity type must not silently drop all company credits.
 - Keep billing order/roles, evidence and identity confidence per credit in the stage ledger. Do not flatten them into one scalar on a person or company.
@@ -705,12 +737,12 @@ Use **`Entity:Stage_Production`**, optionally `:Play` or `:Musical` from a close
 
 | Property | Rule |
 | --- | --- |
-| `entity_type`, `form` | `stage_production` with graph label `Stage_Production`; form `play/musical/other`, unknown absent. No `Film_TV` label or `stage` discriminator. |
+| `entity_type`, `form` | SQL/API canonical type `stage_production`; graph `entity_type = Stage_Production` and label `Stage_Production`, following the current Go family-name convention. `Theatrical_Work` similarly maps to SQL/API `theatrical_work`. Form `play/musical/other`, unknown absent. No `Film_TV` label or second `display_label` graph discriminator. |
 | `title`, `market`, `season_label`, `season_scheme` | Chosen values; required market; season source/derivation retained |
 | `work_entity_id` and venue associations | Optional resolved work cache; venue names/IDs/periods remain in support records and proposed `STAGED_AT`, not a destructive single-venue property |
 | Run dates and status | Exact fields from [Node Types](/guides/ontology/nodes#stage-production): separate preview/opening/press night, announced/actual close, booking horizon, `run_status`/`run_status_as_of` |
 | `production_kind`, `credit_coverage` | Explicit original/revival/return-engagement context and scoped coverage; unknown remains unknown. Award results use separate support records. |
-| `ibdb_production_id`, `source_url`, `source_names` | Verified alias projection and selected evidence summary; not graph identity; other typed source aliases remain in their registry |
+| `ibdb_production_id`, `broadwayworld_show_id`, `wikidata_id`, `source_url`, `source_names` | Verified engagement-scoped aliases and evidence summary from Node Types. A work-level QID/IBDB show ID belongs on the work; public URLs are conditional for submission-only evidence. The typed registry remains authoritative. |
 | Metadata envelope | Stable UUID, entity ID, timestamps, chosen provenance/manifest, projection revision and display policy from Node Types; never invent a node weight from edge tiers |
 | Embeddings, if used | Shared embedder and `embedding_model`/`embedding_dimensions`; stable description input, no per-retry embedding calls |
 
@@ -728,7 +760,7 @@ Pattern: **Person or Company → `PRODUCED` → Stage_Production**. Implement a 
 | `associate_producer`, `executive_producer` | 28 |
 | `in_association` | 35 |
 
-Require stable credit/edge UUID, producer/production canonical IDs, chosen fact ID, `mention_ref`, billing tier, original source role, 1-based billed-group order, market, source URLs, numeric `identity_confidence`, provenance/version, description and timestamps. Group/member identity stays available through `credit_group_id` and `member_order`; multiple supporting mention IDs remain in SQL. Description: `{Producer} is credited as {source role} on {Title} ({market}, {season}).`
+Require stable credit/edge UUID, producer/production canonical IDs, chosen fact ID, `mention_ref`, billing tier, original source role, 1-based billed-group order, market, actual source names and immutable evidence references, permitted public source URLs when available, numeric `identity_confidence`, provenance/version, description and timestamps. Submission-only pilot evidence may omit public URLs. Require `active` and `stage_credit_version = projection_revision` for the current desired credit version. Group/member identity stays available through `credit_group_id` and `member_order`; multiple supporting mention IDs remain in SQL. Description: `{Producer} is credited as {source role} on {Title} ({market}, {season}).`
 
 For one producer credited in multiple accepted roles in the selected source, retain all roles and select the lowest-weight **explicitly supported** tier, then the earliest order within that tier. A changed selected tier recomputes the stage edge weight under the pinned policy version; do not copy music's create-only weight behavior for mutable billing metadata. A policy-wide weight change is a separate migration decision.
 

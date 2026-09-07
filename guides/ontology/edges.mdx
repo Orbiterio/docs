@@ -3044,15 +3044,17 @@ Three design rules the lanes share, restated once here because every entry below
 - **Hub targets sit in the Moderate band or below — never stronger than 30.** Institutions, committees and conferences connect thousands of people, so their edges never compete with the structural bonds (`FOUNDED` 5, family 1–10) — the 2026-05-31 audit rule; `WON_AWARD` (30) is the ceiling and most hub edges land in Weak. Same wording as [Edge Weights → Principles](/guides/ontology/edge-weights) (aligned 2026-09-06). A **hub threshold** is a per-edge, measured count that flips the edge to its damped weight: `SPOKE_AT` / `APPEARED_IN {role: speaker}` use speaker count ≥ 50 (15 → 45); foundation `DONOR_TO` uses **> 200 grants in the 4-year filing window** (30 → 40, derived trustee edges 38 → 48; Donors lane default, Phase 0 may tune it).
 - **Evidence-layer edges carry `layer: "evidence"` and `excluded_from_scoring: true`** and a traversal weight in the Weak band. They exist for corroboration and research, not for closeness.
 
-Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — both are required and they are not interchangeable. QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
+Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — public-source variants require both and they are not interchangeable. The theatre submission-only pilot variant may omit public URLs, while retaining mandatory source names and immutable evidence/provenance references under its [specific contract](#theatre-edges). QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
 
 <a id="theatre-edges" />
 
 ### Theatre relationships — proposed Go contract
 
 <Info>
-  **Specification only — 2026-09-06; no theatre writer is built.** This replaces the earlier stage-as-`Film_TV` proposal. Endpoints follow [Node Types → Theatre](/guides/ontology/nodes#theatre-nodes); delivery follows the [Go build plan](/guides/open-work/roadmap/broadway-co-producers). The property examples below are synthetic contract examples, not records written to any graph.
+  **Graph build contract — synchronized 2026-09-07; no theatre writer is built.** This replaces the earlier stage-as-`Film_TV` proposal. Endpoints follow [Node Types → Theatre](/guides/ontology/nodes#theatre-nodes); delivery follows the [Go build plan](/guides/open-work/roadmap/broadway-co-producers). The property examples below are synthetic contract examples, not records written to any graph.
 </Info>
+
+The [closed build output manifest](/guides/open-work/roadmap/broadway-co-producers#theatre-graph-output-manifest) is the developer checklist; every relationship below has complete property data, with reused endpoint ownership documented in Node Types.
 
 **Three new relationship names are proposed:** `PRODUCTION_OF`, `STAGED_AT` and `ADAPTED_FROM`. Existing names cover producing, creative authorship and awards. Reusing a name does not make its current movie/music writer valid for new endpoint types.
 
@@ -3097,10 +3099,12 @@ All visible theatre edges carry the existing graph envelope plus the following p
 | `weight` | integer · required | 1–100; selected by the endpoint-specific policy below |
 | `description`, `description_generated_at` | string, epoch-ms integer · required | Deterministic evidence-based sentence and its generation time; no per-edge LLM call |
 | `source` | string · required | Writing lane `stage`; exact source of evidence is recorded separately |
-| `source_urls`, `source_names` | string[] · required, nonempty | Public supporting records and provider names for the selected claim |
+| `source_names` | string[] · required, nonempty | Actual providers/submission sources supporting the selected claim |
+| `source_urls` | string[] · conditional, nonempty when present | Permitted public evidence URLs when available. Omit for a submission-only pilot credit; `evidence_refs` and `provenance_ref` still identify its reviewed immutable evidence. Never invent a URL or expose a private attachment path. |
 | `evidence_refs` | string[] · required, nonempty | Durable references to immutable snapshot/claim locations; raw text remains in SQL/GCS |
 | `provenance_ref` | UUID string · required | Durable owner checkpoint/evidence manifest, including the selected claim and projection inputs |
 | `projection_revision` / `policy_version` | integer, string · required | Monotonic owner revision and pinned mapping/weight policy |
+| `active` | boolean · required | True for current accepted support; false for a retained tombstone. All theatre readers exclude inactive edges. Durable SQL deletion state also prevents stale resurrection if an owner physically removes an edge. |
 | `chosen_fact_id` | UUID string · conditional | Required for canonical-to-canonical credit/work edges whose relationship fact is elected |
 | `support_claim_ref` | UUID string · conditional | Required instead for venue/award support edges; their targets are not canonical entities and cannot use an entity-target fact |
 | `layer` | enum · required | `credit`, `evidence` or `recognition`, as assigned above |
@@ -3112,26 +3116,7 @@ All visible theatre edges carry the existing graph envelope plus the following p
 
 An empty/missing optional field does not erase another source's accepted value. Explicit correction/retraction does remove a stale graph property when the elected current claim no longer supports it. Persist revision/tombstone state in SQL; a late event cannot resurrect an old edge.
 
-**Example shared envelope** — synthetic UUIDs and timestamps; per-family fragments below supply/override `weight`, `description`, `layer`, `temporal_basis`, election reference and any extra properties. Example omissions are not a license to omit required envelope fields in implementation.
-
-```json
-{
-  "uuid": "00000000-0000-4000-8000-000000000101",
-  "created_at": 1704067200000,
-  "updated_at": 1704067200000,
-  "description_generated_at": 1704067200000,
-  "source": "stage",
-  "source_names": ["fixture_programme"],
-  "source_urls": ["https://example.org/programmes/example-musical"],
-  "evidence_refs": ["fixture:snapshot-1:credit-block-1"],
-  "provenance_ref": "00000000-0000-4000-8000-000000000102",
-  "projection_revision": 1,
-  "policy_version": "stage-edges-proposal-v1",
-  "observed_at": 1704067200000,
-  "source_finality": "complete",
-  "excluded_from_scoring": true
-}
-```
+**Copyable examples:** every per-family JSON example below contains its full required property envelope. `edge_type`, `from` and `to` are writer/fixture metadata; only the nested `properties` object is stored on the relationship. Endpoint UUIDs refer to the [synthetic node and reused-endpoint examples](/guides/ontology/nodes#theatre-nodes). Canonical endpoint IDs remain DTO fields, not duplicate scalar properties on the edge. Source IDs/URLs are never the endpoint identity.
 
 #### Identity, correction and scoring gates
 
@@ -3142,23 +3127,26 @@ An empty/missing optional field does not erase another source's accepted value. 
 - **Scoring:** the flag alone is not enforcement. Every candidate/path/scoring reader must apply the source/family/endpoint allowlist and exclude flagged edges. Until verified, keep context graph writes disabled. No path through a shared venue, underlying work, adaptation, or award can be reported as a direct co-producing connection.
 - **Pair derivation:** accepted producing credits on the same production permit a co-credit explanation. Counts of sources, credit roles and joint-group mentions do not multiply the pair's evidence. A two-edge raw cost is the sum of the selected billing weights, before existing score normalization/hub policy; it is not a claim that the people know each other.
 
+<a id="stage-produced" />
+
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCED</span> (stage)
 
-**Pattern:** `Person or Company → PRODUCED → Entity:Stage_Production`. **Go owner:** proposed stage credit replay and stage graph writer; not the IMDb or music writer. A literal credited producing role is required. Source basis: [IBDB producing sections](https://www.ibdb.com/broadway-production/the-outsiders-537824), corroborated by the engagement's official programme.
+**Pattern:** `Person or Company → PRODUCED → Entity:Stage_Production`. **Go owner:** proposed stage credit replay and stage graph writer; not the IMDb or music writer. A literal credited producing role is required. Source basis: explicit production-role rows in the preferred [BroadwayWorld directory evaluation](https://www.broadwayworld.com/shows/creative.php?showid=334560), reviewed official programmes/pilot submissions, and other source adapters only when enabled. [Tony nominee lists](https://www.tonyawards.com/press/2024-tony-award-nominations/) add coverage candidates; IBDB collection remains separately gated in the plan.
 
 | `billing_tier` | Weight | Admission |
 | --- | --- | --- |
 | `lead_producer` | **12** | Explicit lead designation or separately accepted evidence of that role; not first position alone |
-| `producer` | **16** | Generic producing credit; a source heading saying “Produced by” maps here |
+| `producer` | **16** | Explicit untiered production credit, such as a production staff row “Producer” or source block “Produced by”. A generic Tony nominee-list heading “Producers” does not by itself establish this tier. |
 | `co_producer` | **22** | Explicit co-producing role |
 | `associate_producer` / `executive_producer` | **28** | Preserve which role the source actually states |
 | `in_association` | **35** | Explicit association credit; not inferred from a slash in a name |
 
-This corrects the old worked example: the inspected IBDB generic producing block does not by itself establish a lead-producer credit. Billing is not evidence of an investment amount, ownership stake or individual service interval.
+Role context is part of the mapping: explicit “Produced by” is `producer`, not `lead_producer`; generic award-list membership stays `unclassified_producing` in SQL until tier evidence or review supports a mapped role. It creates no tiered `PRODUCED` edge by itself. Billing is not evidence of an investment amount, ownership stake or individual service interval.
 
 | Property | Type / requirement | Additional contract |
 | --- | --- | --- |
 | `credit_id` / `chosen_fact_id` | UUID string · required | Canonical producer/production ledger pair and the current elected relationship fact |
+| `stage_credit_version` | integer · required, positive | Current `stage_credit.desired_version`; equals this direct edge's `projection_revision`. These are the same revision, not separately advanced counters. Fence replay and retained tombstones with this value. |
 | `mention_ref` / `credit_group_id` | UUID string · required | Selected literal member mention and billed group; all supporting references remain in SQL |
 | `billing_tier` / `source_role` | enum, string · required | Normalized explicit role and source wording; no promotion from prominence |
 | `billing_order` / `member_order` | integer · required | 1-based billed-group position within the selected role block; separate member ordinal within that group |
@@ -3176,25 +3164,118 @@ No `via_entity_uuid` copy to a company's principals. No spouse flag derived from
 
 ```json
 {
-  "credit_id": "00000000-0000-4000-8000-000000000103",
-  "chosen_fact_id": "00000000-0000-4000-8000-000000000104",
-  "mention_ref": "00000000-0000-4000-8000-000000000105",
-  "credit_group_id": "00000000-0000-4000-8000-000000000106",
-  "billing_tier": "co_producer",
-  "source_role": "Co-Produced by",
-  "billing_order": 7,
-  "member_order": 2,
-  "group_credit": true,
-  "market": "broadway",
-  "identity_confidence": 0.96,
-  "resolution_method": "corroborated_auto_link",
-  "weight": 22,
-  "layer": "credit",
-  "excluded_from_scoring": false,
-  "temporal_basis": "production_context",
-  "description": "Example Producer is credited as a co-producer of Example Musical (Broadway)."
+  "edge_type": "PRODUCED",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000011",
+    "entity_id": "00000000-0000-4000-8000-000000000011",
+    "node_family": "Person"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:101:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010101",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 22,
+    "layer": "credit",
+    "excluded_from_scoring": false,
+    "temporal_basis": "production_context",
+    "credit_id": "00000000-0000-4000-8000-000000000103",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000104",
+    "mention_ref": "00000000-0000-4000-8000-000000000105",
+    "credit_group_id": "00000000-0000-4000-8000-000000000106",
+    "stage_credit_version": 1,
+    "billing_tier": "co_producer",
+    "source_role": "Co-Produced by",
+    "billing_order": 7,
+    "member_order": 2,
+    "group_credit": true,
+    "market": "broadway",
+    "identity_confidence": 0.96,
+    "resolution_method": "corroborated_auto_link",
+    "description": "Example Writer is explicitly credited as a co-producer of Example Musical (Broadway)."
+  }
 }
 ```
+
+<a id="stage-produced-private-example" />
+
+**Complete private-pilot company-credit example:** a reviewed submission has no public URL, so `source_urls` is omitted. Evidence/identity/election requirements still apply; private pilot routing and publication isolation are enforced outside this property envelope.
+
+```json
+{
+  "edge_type": "PRODUCED",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000012",
+    "entity_id": "00000000-0000-4000-8000-000000000012",
+    "node_family": "Company"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000111",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "pilot_submission"
+    ],
+    "evidence_refs": [
+      "fixture:submission:pilot-1:revision:2:group:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010111",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 16,
+    "layer": "credit",
+    "excluded_from_scoring": false,
+    "temporal_basis": "production_context",
+    "credit_id": "00000000-0000-4000-8000-000000000113",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000114",
+    "mention_ref": "00000000-0000-4000-8000-000000000115",
+    "credit_group_id": "00000000-0000-4000-8000-000000000116",
+    "stage_credit_version": 1,
+    "billing_tier": "producer",
+    "source_role": "Produced by",
+    "billing_order": 1,
+    "member_order": 1,
+    "group_credit": false,
+    "market": "broadway",
+    "identity_confidence": 1.0,
+    "resolution_method": "reviewed_link",
+    "description": "Example Producing Company is explicitly credited as a producer of Example Musical in the reviewed pilot submission."
+  }
+}
+```
+
+<a id="stage-production-of" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>PRODUCTION_OF</span>
 
@@ -3213,15 +3294,51 @@ The source must identify which dramatic work/version the production stages. Expl
 
 ```json
 {
-  "chosen_fact_id": "00000000-0000-4000-8000-000000000201",
-  "identity_basis": "reviewed_work_link",
-  "work_version_ref": "Example licensed stage edition",
-  "weight": 50,
-  "layer": "evidence",
-  "temporal_basis": "unknown",
-  "description": "Example Musical's Broadway production stages the independently identified dramatic work Example Musical."
+  "edge_type": "PRODUCTION_OF",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000002",
+    "entity_id": "00000000-0000-4000-8000-000000000002",
+    "node_family": "Theatrical_Work"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000201",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:201:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010201",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 50,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "unknown",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000202",
+    "identity_basis": "reviewed_work_link",
+    "work_version_ref": "Example licensed stage edition",
+    "description": "The example Broadway production stages the independently identified dramatic work Example Musical."
+  }
 }
 ```
+
+<a id="stage-staged-at" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>STAGED_AT</span>
 
@@ -3242,21 +3359,57 @@ The production page/programme must associate the run with a resolved physical ve
 
 ```json
 {
-  "association_id": "00000000-0000-4000-8000-000000000301",
-  "support_claim_ref": "00000000-0000-4000-8000-000000000302",
-  "venue_name_as_billed": "Example Theatre",
-  "engagement_sequence": 1,
-  "valid_from": "2023-03-01",
-  "valid_to": "2023-06-30",
-  "interval_scope": "performance_engagement",
-  "temporal_basis": "source_effective_interval",
-  "weight": 50,
-  "layer": "evidence",
-  "description": "Example Musical played at Example Theatre during its documented 2023 engagement."
+  "edge_type": "STAGED_AT",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000001",
+    "entity_id": "00000000-0000-4000-8000-000000000001",
+    "node_family": "Stage_Production"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000003",
+    "row_id": "00000000-0000-4000-8000-000000000003",
+    "node_family": "Place"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000301",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:301:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010301",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 50,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "source_effective_interval",
+    "association_id": "00000000-0000-4000-8000-000000000303",
+    "support_claim_ref": "00000000-0000-4000-8000-000000000302",
+    "venue_name_as_billed": "Example Theatre",
+    "engagement_sequence": 1,
+    "valid_from": "2023-03-01",
+    "valid_to": "2023-06-30",
+    "interval_scope": "performance_engagement",
+    "description": "Example Musical played at Example Theatre during its documented 2023 engagement."
+  }
 }
 ```
 
 If a source defines a transfer as a new production, create a separate canonical production through admission; do not attach it as a venue move on the old production merely because the titles match.
+
+<a id="stage-adapted-from" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>ADAPTED_FROM</span>
 
@@ -3278,14 +3431,52 @@ Initial target allowlist: an independently resolved `Entity:Film_TV` or `Entity:
 
 ```json
 {
-  "chosen_fact_id": "00000000-0000-4000-8000-000000000401",
-  "adaptation_kind": "stage_from_film",
-  "weight": 55,
-  "layer": "evidence",
-  "temporal_basis": "unknown",
-  "description": "Example Musical is explicitly credited as a stage adaptation of the separate film Example Film."
+  "edge_type": "ADAPTED_FROM",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000002",
+    "entity_id": "00000000-0000-4000-8000-000000000002",
+    "node_family": "Theatrical_Work"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000014",
+    "entity_id": "00000000-0000-4000-8000-000000000014",
+    "node_family": "Film_TV"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000401",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "stage",
+    "source_names": [
+      "fixture_programme"
+    ],
+    "source_urls": [
+      "https://example.org/programmes/example-musical"
+    ],
+    "evidence_refs": [
+      "fixture:snapshot:401:claim:1"
+    ],
+    "provenance_ref": "00000000-0000-4000-8000-000000010401",
+    "projection_revision": 1,
+    "policy_version": "stage-edges-proposal-v1",
+    "active": true,
+    "observed_at": 1704067200000,
+    "source_finality": "partial",
+    "weight": 55,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "temporal_basis": "unknown",
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000402",
+    "adaptation_kind": "stage_from_film",
+    "description": "Example Musical is explicitly credited as a stage adaptation of the separate film Example Film."
+  }
 }
 ```
+
+<a id="stage-wrote" />
+<a id="stage-composed" />
+<a id="stage-wrote-lyrics" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>WROTE / COMPOSED / WROTE_LYRICS</span> (theatrical work)
 
@@ -3301,50 +3492,153 @@ Source basis: [official creative credits](https://outsidersmusical.com/cast-crea
 
 Use `layer = credit`, `excluded_from_scoring = true` initially and `temporal_basis = unknown` unless actual authorship-effective dates are sourced. These weights follow direct-authorship music precedents; they do not turn every producer of a later revival into a collaborator of its original writers.
 
-**Synthetic property fragments** — each also includes the shared envelope and its own elected `chosen_fact_id` / `mention_ref`. The `edge_type` wrapper names the relationship; it is not an additional graph property.
+**Complete synthetic examples** — every edge has its own full envelope, elected `chosen_fact_id`, `mention_ref` and description. Wrapper fields select the endpoints; they are not graph properties.
 
 ```json
 [
   {
     "edge_type": "WROTE",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
     "properties": {
+      "uuid": "00000000-0000-4000-8000-000000000501",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:501:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010501",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
+      "weight": 10,
+      "layer": "credit",
+      "excluded_from_scoring": true,
+      "temporal_basis": "unknown",
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001501",
+      "mention_ref": "00000000-0000-4000-8000-000000002501",
       "role": "book_writer",
       "source_role": "Book",
       "billed_name": "Example Writer",
-      "weight": 10,
-      "layer": "credit",
-      "temporal_basis": "unknown",
       "description": "Example Writer is credited with the book of Example Musical."
     }
   },
   {
     "edge_type": "COMPOSED",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000013",
+      "entity_id": "00000000-0000-4000-8000-000000000013",
+      "node_family": "Music_Group"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
     "properties": {
-      "role": "composer",
-      "source_role": "Music",
-      "billed_name": "Example Composer",
+      "uuid": "00000000-0000-4000-8000-000000000502",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:502:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010502",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
       "weight": 8,
       "layer": "credit",
+      "excluded_from_scoring": true,
       "temporal_basis": "unknown",
-      "description": "Example Composer is credited with composing the music for Example Musical."
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001502",
+      "mention_ref": "00000000-0000-4000-8000-000000002502",
+      "role": "composer",
+      "source_role": "Music",
+      "billed_name": "Example Ensemble",
+      "description": "Example Ensemble is explicitly credited with composing the music for Example Musical."
     }
   },
   {
     "edge_type": "WROTE_LYRICS",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000002",
+      "entity_id": "00000000-0000-4000-8000-000000000002",
+      "node_family": "Theatrical_Work"
+    },
     "properties": {
-      "role": "lyricist",
-      "source_role": "Lyrics",
-      "billed_name": "Example Lyricist",
+      "uuid": "00000000-0000-4000-8000-000000000503",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_programme"
+      ],
+      "source_urls": [
+        "https://example.org/programmes/example-musical"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:503:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010503",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
       "weight": 12,
       "layer": "credit",
+      "excluded_from_scoring": true,
       "temporal_basis": "unknown",
-      "description": "Example Lyricist is credited with the lyrics of Example Musical."
+      "chosen_fact_id": "00000000-0000-4000-8000-000000001503",
+      "mention_ref": "00000000-0000-4000-8000-000000002503",
+      "role": "lyricist",
+      "source_role": "Lyrics",
+      "billed_name": "Example Writer",
+      "description": "Example Writer is credited with the lyrics of Example Musical."
     }
   }
 ]
 ```
 
 One person may hold all three families. Several `WROTE` roles remain one pair/family edge with the full role set in SQL; select a deterministic display role from the current accepted claim, never create duplicate edges merely for a second source or role.
+
+<a id="stage-has-award" />
+<a id="stage-won-award" />
+<a id="stage-nominated-for" />
 
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>HAS_AWARD / WON_AWARD / NOMINATED_FOR</span> (stage)
 
@@ -3360,41 +3654,142 @@ All use `layer = recognition`, `excluded_from_scoring = true`, `temporal_basis =
 
 A production-only result gets `HAS_AWARD` with its outcome on the award node; it does not get an extra duplicate production-to-result `WON_AWARD`. A person-winning result may also have a `HAS_AWARD` context link from its associated production, but that link's scope must not imply the production itself won that category. No automatic propagation from a best-production result to every co-producer, or from a company recipient to its principals.
 
-**Synthetic property fragments** — distinct hypothetical results, not three claims about the same award. Each also has the shared envelope and its own `award_ref` / `support_claim_ref`; named-party edges additionally have a resolved `recipient_ref`.
+**Complete synthetic examples** — these target the three distinct hypothetical result nodes in Node Types. Every edge includes the full envelope and its own accepted support claim; named-party edges additionally carry the resolved recipient-ledger reference.
 
 ```json
 [
   {
     "edge_type": "HAS_AWARD",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000001",
+      "entity_id": "00000000-0000-4000-8000-000000000001",
+      "node_family": "Stage_Production"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000004",
+      "row_id": "00000000-0000-4000-8000-000000000004",
+      "node_family": "Stage_Award"
+    },
     "properties": {
-      "award_year": 2023,
-      "award_credit_scope": "production_result",
+      "uuid": "00000000-0000-4000-8000-000000000601",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-1"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:601:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010601",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
       "weight": 40,
       "layer": "recognition",
+      "excluded_from_scoring": true,
       "temporal_basis": "award_edition",
-      "description": "Example Musical is the production named in this 2023 award result."
+      "award_ref": "00000000-0000-4000-8000-000000000004",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002601",
+      "award_year": 2023,
+      "description": "Example Musical is the production named in this synthetic 2023 award result.",
+      "award_credit_scope": "production_result"
     }
   },
   {
     "edge_type": "WON_AWARD",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000005",
+      "row_id": "00000000-0000-4000-8000-000000000005",
+      "node_family": "Stage_Award"
+    },
     "properties": {
-      "award_year": 2023,
-      "recipient_basis": "explicitly_named",
+      "uuid": "00000000-0000-4000-8000-000000000602",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-2"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:602:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010602",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
       "weight": 30,
       "layer": "recognition",
+      "excluded_from_scoring": true,
       "temporal_basis": "award_edition",
-      "description": "Example Director is explicitly named as a winner in this 2023 directing award result."
+      "award_ref": "00000000-0000-4000-8000-000000000005",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002602",
+      "award_year": 2023,
+      "description": "Example Writer is explicitly named as a winner in this synthetic 2023 directing award result.",
+      "recipient_ref": "00000000-0000-4000-8000-000000003602",
+      "recipient_basis": "explicitly_named"
     }
   },
   {
     "edge_type": "NOMINATED_FOR",
+    "from": {
+      "node_uuid": "00000000-0000-4000-8000-000000000011",
+      "entity_id": "00000000-0000-4000-8000-000000000011",
+      "node_family": "Person"
+    },
+    "to": {
+      "node_uuid": "00000000-0000-4000-8000-000000000006",
+      "row_id": "00000000-0000-4000-8000-000000000006",
+      "node_family": "Stage_Award"
+    },
     "properties": {
-      "award_year": 2023,
-      "recipient_basis": "explicitly_named",
+      "uuid": "00000000-0000-4000-8000-000000000603",
+      "created_at": 1704067200000,
+      "updated_at": 1704067200000,
+      "description_generated_at": 1704067200000,
+      "source": "stage",
+      "source_names": [
+        "fixture_award_archive"
+      ],
+      "source_urls": [
+        "https://example.org/awards/2023/entry-3"
+      ],
+      "evidence_refs": [
+        "fixture:snapshot:603:claim:1"
+      ],
+      "provenance_ref": "00000000-0000-4000-8000-000000010603",
+      "projection_revision": 1,
+      "policy_version": "stage-edges-proposal-v1",
+      "active": true,
+      "observed_at": 1704067200000,
+      "source_finality": "partial",
       "weight": 35,
       "layer": "recognition",
+      "excluded_from_scoring": true,
       "temporal_basis": "award_edition",
-      "description": "Example Designer is explicitly named as a nominee in this 2023 design award result."
+      "award_ref": "00000000-0000-4000-8000-000000000006",
+      "support_claim_ref": "00000000-0000-4000-8000-000000002603",
+      "award_year": 2023,
+      "description": "Example Writer is explicitly named as a nominee in this synthetic 2023 design award result.",
+      "recipient_ref": "00000000-0000-4000-8000-000000003603",
+      "recipient_basis": "explicitly_named"
     }
   }
 ]
@@ -3404,7 +3799,7 @@ A production-only result gets `HAS_AWARD` with its outcome on the award node; it
 
 #### Scope exclusions and acceptance examples
 
-Owner/operator/lease claims stay in the shared-place ledger for now; this waterfall does not require new venue ownership edges. Cast, direction, touring lineage, individual performances, rights/licensing and investment edges need separate endpoint/evidence contracts before expansion. Reuse existing company `OFFICER_OF` / `BOARD_MEMBER_OF` only through the owning filings feature; none supplies a substitute stage-producing credit.
+Owner/operator/lease claims stay in the shared-place ledger for now; this waterfall does not require new venue ownership edges. Cast, direction, touring lineage, individual performances, rights/licensing and investment edges need separate endpoint/evidence contracts before expansion. Read existing [OFFICER_OF](#officer_of), [BOARD_MEMBER_OF](#board_member_of), and other affiliations only through their owning feature. This stage build emits no new principal-affiliation edges. The documented 990 officer variant is not a general Companies House officer/PSC contract; UK roles remain SQL evidence until their owner defines the source-specific mapping. No affiliation supplies a substitute stage-producing credit.
 
 Before enabling any theatre graph slice, verify:
 
@@ -3413,7 +3808,7 @@ Before enabling any theatre graph slice, verify:
 | Two accepted producers on one production | Two stable `PRODUCED` edges; one derived co-credit path; no pair edge |
 | Same title, different Broadway/West End engagements | Separate production nodes/rosters; shared work only after its own identity gate |
 | Two shows in one venue or based on one work | Context visible when enabled; no extra closeness/co-producing path |
-| Generic producing heading or corrected billing | Tier 16 for generic producing; changed tier updates the same edge, with old evidence retained |
+| Explicit “Producer”/“Produced by”, generic Tony list, or corrected billing | Explicit production producing maps to 16; generic nominee-list heading alone stays unclassified/no tiered edge. A supported tier correction updates the same edge with retained history. |
 | Joint source group with one unresolved member | Project only the accepted member; no spouse or principal-copy inference |
 | Two disjoint venue engagements | Separate stable association edges, with corrected dates preserving association identity |
 | Work links or adaptation links corrected | Targeted fact retraction/re-election; no changes to other productions or music/film relationships |
