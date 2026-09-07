@@ -1,0 +1,91 @@
+---
+title: "Phase 2: Podcasts & Publisher Pages"
+sidebarTitle: "Phase 2: Podcasts & Publishers"
+description: "PR contract for RSS and publisher episode discovery, historical coverage, participant evidence and verified cross-source identity."
+---
+
+import BakeOffRules from '/snippets/bake-off-rules.mdx';
+
+**Status: planned adapter PR; no podcast ingestion is implemented by this documentation pass.** Suggested PR title: **Add RSS and publisher episode adapters to shared media work**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations). [Phase 1](/guides/open-work/roadmap/media-co-occurrence/phase-1-youtube) provides cross-source fixtures when available; a disabled YouTube source does not block independent publisher evidence.
+
+## Scope and retained product intent
+
+Implement approved-show discovery, conditional RSS/episode-page fetches, historical inventory, source-located host/guest extraction and canonical appearance resolution. Use the shared worker and evidence contracts. [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) owns facts/graph integration and [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) owns public reads. This PR never downloads enclosure audio or assumes a transcript license.
+
+The [prior podcast scope](/guides/open-work/roadmap/media-co-occurrence#reference-record) requested **all listed shows**, initial historical ingestion and then incremental updates. Preserve that roster: **The Town; Pivot; Channels (Peter Kafka); The Grill Room; Hard Fork; Decoder; Sharp Tech; Latent Space or No Priors; 20VC; Invest Like the Best; Acquired; All-In; BG2; The Logan Bartlett Show.** The “Latent Space or No Priors” alternative remains unresolved; recommend both as separately verified entries if their source contracts permit. Show renames and feed migrations require verification before becoming aliases.
+
+A representative pilot is a validation subset, not a reduction of the requested roster. Recommend an interview show, a multi-host show and a publisher with episode pages. Each production entry needs verified current feed/archive URLs, source permission, stable namespace and history coverage. The [20VC publisher](https://www.thetwentyminutevc.com/) is a verified discovery starting point; its site was inspected, but no frozen episode/participant ground truth or full-archive claim has been produced. Do not copy old memory's assumed feed depth, guest profile availability, model choice or cost estimates.
+
+## Source-to-property contract
+
+The [RSS specification](https://www.rssboard.org/rss-specification) defines optional item fields and opaque GUID behavior; [Apple's podcast requirements](https://podcasters.apple.com/support/823-podcast-requirements) require stable episode GUIDs and enclosure metadata for its feed ingestion. Orbiter applies the stricter identity and evidence rules below.
+
+| Primary input | Persist / normalize | Does not establish |
+| --- | --- | --- |
+| Approved publisher feed URL; redirect; channel title/link | `media_source_roster.source_key`, `source_url`, versioned `config`; verified feed aliases; `show_name` scalar claim | Episode identity or that a known host appears in every item |
+| Item GUID and `isPermaLink` | Exact `episode_guid` + stable show namespace in `media_appearance_sources`; only resolve as URL when its contract permits | Global uniqueness across shows or equivalence to an enclosure |
+| Item link; publisher canonical URL; explicit distribution cross-link | `source_url`, requested/final URLs and observation; verified episode/video alias only with compatible scope | Similar title/date is the same episode |
+| Title; description; namespace-qualified encoded content | Title scalar claim; permitted snapshot; locatable participant evidence | A named topic subject, sponsor, producer or RSS author is an appearance |
+| `pubDate` and publisher date | `published_at` when a supported instant exists; otherwise date/precision fields, with provenance | Recording time or session attendance time |
+| Enclosure URL/type/length; optional duration/language | Source metadata in snapshot/configured normalized claim; duration only after format validation | A stable episode identity or authority to download the media |
+| Episode-level guest/host list, bio and profile links | Mentions: `raw_name`, `raw_role`, `identity_points`, source locator; independent resolution attempts | Employment facts, invented LinkedIn URLs or confirmed profile ownership from a search snippet |
+
+Map accepted scalar claims through the facts owner; source parsers do not write `media_appearance` directly. Feed and episode-page observations retain separate policy/provenance even when they describe the same appearance. If their rights differ, consumer fields use only current permitted support.
+
+## Worker and archive contract
+
+Proposed work kinds are `rss_inventory`, `publisher_episode`, `podcast_history_reconcile` and shared `media_resolve`. Their values must be registered in Phase 0 validation before admission. Proposed show configuration:
+
+```json
+{
+  "schema_version": "podcast.roster.v1",
+  "feed_url": "https://publisher.example/podcast/feed.xml",
+  "archive_url": "https://publisher.example/episodes",
+  "history_mode": "all_available",
+  "max_items_per_job": 500,
+  "allow_audio_download": false,
+  "known_hosts_are_identity_hints_only": true
+}
+```
+
+This is a synthetic configuration, not an approved live roster. `all_available` means the documented accessible archive under bounded jobs and budgets, never unbounded crawling. Configure the language allowlist and polling cadence in the dated source policy after fixture evaluation; unsupported languages remain visible as unsupported coverage.
+
+```text
+claim approved show inventory work
+conditionally fetch feed; record observation and policy-bounded snapshot
+parse bounded namespace-aware XML; classify coverage and malformed items
+for each stable item key, persist child episode work and observed revision
+commit children before inventory checkpoint; finish inventory outcome
+episode worker: fetch approved item page when needed, extract literal evidence
+resolve item identity and people; persist independent membership support
+emit shared reconciliation intent; source work completes separately from publication
+history reconcile: visit admitted archive pages/ranges; record gaps and outcomes
+```
+
+A 304 advances observation time but does not extend storage rights automatically. A feed omitting old episodes does not delete them. Revisiting an unchanged GUID with changed content starts a new source revision. Do not stop a history crawl at the first known item; ordered navigation and page tokens can change. Detect cursor cycles and cap redirects/pages. Unsupported archive pagination is a coverage gap, not a fabricated completed backfill.
+
+An existing podcast store or Deep Bio can supply candidates through an owner-owned import DTO: original namespace/ID, exact episode source reference, observed time and evidence refs. A show-level URL remains discovery work. Import through the same identity/evidence gate; no second Episode/Podcast graph writer, Xano lookup or automatic `HOSTS`/employment edge.
+
+## Identity and interaction worked example
+
+Synthetic fixture: one feed item and its publisher page explicitly link the same full interview video. The publisher names host Alex and guest Blair in that episode; a footer also names the sponsor and the absent regular cohost Casey. Expected result: **one appearance, independently retained source anchors, two accepted memberships and one verified interview group**. Casey and the sponsor produce no accepted membership. Repeated import does not change those counts.
+
+A trailer containing only Alex cannot inherit Blair's episode appearance. A page listing two separately recorded interviews requires separate verified groups; no cross-segment pair. Removing the video evidence leaves the independently supported publisher memberships; withdrawing the sole guest claim re-elects only that membership.
+
+## Extraction evaluation and acceptance
+
+<BakeOffRules />
+
+Evaluate only actual call sites: discovery/corroboration, unstructured participant extraction and ambiguous identity adjudication. Structured RSS parsing and source-locator validation remain deterministic. The [shared extraction instruction](/guides/open-work/roadmap/media-co-occurrence#extraction-and-identity-resolution) applies; host registries never fill missing participants. Retain held-out labels and precision/recall/review-volume results for each source shape.
+
+| Fixture / failure | Required outcome |
+| --- | --- |
+| Feed redirect; opaque/case-distinct GUIDs; missing GUID; duplicate enclosure | Verified aliases or explicit review, no accidental item collapse |
+| Feed/page disagreement; corrected guest; renamed episode | Independent claims, corrected revision and targeted withdrawal |
+| Co-host absent; guest host; several guests; sponsor footer; subject-only article | Source-specific roles and appropriate abstention; no roster-default membership |
+| Feed truncation; 304; malformed item; archive gap; repeated cursor | Honest coverage; no mass retraction or endless fetch loop |
+| Explicit simulcast; excerpt; compilation; unrelated same-title episode | Shared canonical identity only when verified scope matches |
+| Imported legacy candidate and newly fetched episode race | One canonical appearance; no duplicate membership or provider recursion |
+| Budget stop; partial page checkpoint; source expiry | Resume from durable work, bounded calls, required purge and downstream invalidation |
+
+Exit with tested adapter DTOs, roster manifest, real permitted episode fixtures, source-specific coverage and measured call-site selections. Live use stays gated on source policy and budgets; full historical coverage is reported per show. The requested roster is not declared complete because a three-show pilot passed.

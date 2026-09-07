@@ -7,7 +7,13 @@ sidebarTitle: "Overview"
 
 import BakeOffRules from '/snippets/bake-off-rules.mdx';
 
-**Status: Go development plan, revised 2026-09-06. No implementation or source evaluation was run for this revision.** Build inside Orbiter Universe on Go/GCP/AlloyDB/FalkorDB. No Xano functions, tables, IDs, crons, credentials or App database access are dependencies. Start with Phase 0 and the shared identity/replay contracts; source enablement follows measured gates.
+**Status: full-program Go planning audit, revised 2026-09-07. Eight PR plans now cover shared foundations, YouTube, later adapters, graph replay, publication and rollout. All three storage decisions are accepted; the 23 tables are created in development Universe AlloyDB. The media pipeline is not implemented or enabled.** Build inside Orbiter Universe on Go/GCP/AlloyDB/FalkorDB. No Xano functions, tables, IDs, crons, credentials or App database access are dependencies. YouTube is Phase 1 after shared foundations, as approved by Mark; source enablement follows measured gates.
+
+**Implementation timing:** Deferred until the week of September 14, 2026, per Mark. The current delivery covers the planning documentation.
+
+<Note>
+  **Storage decisions 1, 2 and 3 accepted by Mark on 2026-09-07; table creation subsequently authorized and completed.** The design uses canonical appearance/event entities, facts-owned typed caches and verified cross-source aliases. Source processing will use `media_work`; chosen relationship facts will authorize graph edges. `media_outbox` stores delivery intent, `media_graph_receipts` stores graph application state, and the two shared quota tables support the future Go budget owner. The [YouTube adapter](/guides/open-work/roadmap/media-co-occurrence/phase-1-youtube) follows this model; its earlier seven-table DDL is superseded. Exact identity keys, source gates and configured budget amounts still need Phase 0 review. Existing tables do not establish that these Go behaviors are implemented.
+</Note>
 
 This is two related products: **verified public appearances** from publisher episode pages/feeds and conference sources, and **news co-mention evidence** between people Universe already knows. A shared interview or panel can support a contextual relationship. Being on one conference roster, being discussed in one video, or appearing in the same article does not establish contact, friendship, endorsement or investment.
 
@@ -30,7 +36,7 @@ This is two related products: **verified public appearances** from publisher epi
 
 ## Verified Go reference and ownership
 
-Inspected `orbiter-universe` at **`ef167b0fd79b4a4bb9d6a1956594ec9e3d17636e`** on 2026-09-06. The checkout also contained unrelated donor work; this plan does not rely on or modify those uncommitted changes. Recheck these contracts at implementation start.
+Rechecked `orbiter-universe` at **`d21b72a4ef8287be151c52dfcfa0924c9ab13dc8`** on 2026-09-07, including the local media storage/merge-inventory changes from the separately authorized table task. The working tree is not a clean release artifact; recheck these contracts and migration delivery at implementation start. This documentation pass changes no application code.
 
 | Actual reference | Reuse / required change |
 | --- | --- |
@@ -39,10 +45,11 @@ Inspected `orbiter-universe` at **`ef167b0fd79b4a4bb9d6a1956594ec9e3d17636e`** o
 | `enrichment/music/identity.go`, `music/pacer.go`, `music/orchestrator.go` | Preserve requested aliases across redirects; distributed provider reservations; release quota-blocked work without consuming attempts. Do not lowercase case-sensitive YouTube IDs or RSS GUIDs. |
 | `enrichment/queue_drain.go`, `queries/pipeline.sql` | Current shared picker admits tiers 0/1; unknown non-person/non-film dispatch can fall into the company runner. Explicit media routing or a separate source-work queue must precede admission. |
 | `enrichment/film_tv_credit_replay.go`, `music_credit_replay.go`, `music_support_replay.go` | Facts-elected relationship replay; support records have separate ownership. Reuse the pattern through interfaces, not private music/film tables. Add bounded media revision and removal handling. |
-| `facts/queries/facts.sql` | Relationship replacement is scoped to entity/source/field/targets. One media correction must not erase unrelated episodes, film credits, employers or donor facts. |
+| `facts/queries/facts.sql`, `facts/types.go`, core `entity_facts` DDL | A fact has exactly one value: relation target uses `value_entity_id`, qualifiers stay in media support ledgers. Relationship replacement is target-scoped; scalar replacement deletes all scalar claims for an entity/source, so partial refreshes need a complete source snapshot or an explicitly scoped owner method. |
 | `agents/deepbio/edges.go` | Podcast → `APPEARED_IN`, talk → `SPOKE_AT` are planned labels. A planned ledger row still needs source verification and canonical target resolution. |
 | `platform/graph/paths.go`, `neighborhood.go` | Current readers exclude named geography/expertise types; they do not implement the new media flags or interaction-group semantics. Media graph writes stay off until reader enforcement is tested. |
-| `features/publish`, `internal/app`, `platform/httpx` | Consumer APIs remain publish-owned, attributed, scope-checked and versioned. Reuse API/worker composition and HTTP retry infrastructure. |
+| `features/publish`, `internal/app`, `platform/httpx` | Consumer APIs remain publish-owned, attributed, scope-checked and versioned. HTTP `BeforeAttempt` supports admission; existing attempt metadata lacks billed response usage, so provider settlement requires an additive tested seam. |
+| `enrichment/module.go` | Existing `media.rehost_requested` only rehosts images. It is not the speaking/media source pipeline; use distinct proposed `enrichment.media.*` events and handlers. |
 
 Implement the orchestration under proposed **`internal/features/enrichment/media`**, as a sibling to film and music. Parent enrichment repositories adapt pgx/sqlc and existing public feature dependencies. Proposed files are `media/{gate,orchestrator,extract,resolve,identity,news}.go`, parent `media_repo.go`, `media_replay.go`, `queries/media.sql`, source clients, facts mappings/distillers, graph sync and publish projection/read seams. These are handoff locations, not files created by this documentation pass.
 
@@ -132,7 +139,7 @@ Proposed strong alias kinds: `youtube_video_id` (case-sensitive asset key, eligi
 
 **Simulcast gate:** automatic alias attachment requires a publisher's explicit episode cross-link/shared item identifier and compatible content scope. Similar title/date/host sets route to `dedup_review`. Trailers, compilations, reuploads, excerpts, split interviews and conference recordings containing multiple sessions must not fuse unrelated interactions. Store `asset_kind`, optional segment range and a verified anchor-to-appearance association. A compilation may reference several appearances through scoped segments in the source ledger; its video ID alone is not a globally unique appearance alias. Clip-only evidence cannot import the full episode's participant list.
 
-Concurrent imports acquire identity through the owner transaction/unique constraints; conflicts resolve existing canonical IDs. A reviewed merge repoints aliases, mentions, contributions, chosen facts, graph receipts and publish references, retains the loser tombstone, deduplicates memberships and removes self-pairs. A wrongly merged appearance also needs an operator split/reassignment path with revisioned retractions; do not promise a merge is safely reversible through name edits.
+Concurrent imports acquire identity through the owner transaction/unique constraints; conflicts resolve existing canonical IDs. A reviewed merge repairs current aliases, mentions, memberships, groups and publish references; re-elects facts; retracts old graph tuples; and retains the loser tombstone. Historical resolution decisions and frozen news matches/contributions are invalidated and rebuilt under a new index rather than silently repointed. Deduplicate memberships and remove self-pairs. A wrongly merged appearance also needs an operator split/reassignment path with revisioned retractions; do not promise a merge is safely reversible through name edits. [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) specifies the required repair beyond the existing FK inventory.
 
 For both new Go types, register constants, validation, identifier strength/scope, schema constraints, facts mappings/distill, typed caches, graph dispatch/labels, indexes, merge inventory, caps, queue routing, repairs and publish package/type mapping together. Initial source processing uses the media work queue; generic requests for unregistered types fail explicitly and never fall through to company enrichment.
 
@@ -194,7 +201,7 @@ RunMediaWork:
 
 Use `FOR UPDATE SKIP LOCKED` claims with `locked_by`, `lease_token`, `lease_expires_at`, `attempts`, `next_attempt_at` and bounded heartbeat. No DB transaction spans a provider call. Pub/Sub is a wakeup; SQL is the work ledger. Redelivery is harmless. An expired worker cannot checkpoint, mark success or overwrite a successor's result. A newer refresh generation cannot be deleted by completion of an older one.
 
-Distributed reservations cover YouTube buckets, per-host pacing, search/model calls, bytes billed and new-person caps across every worker. Stop before the call when exhausted or unavailable; do not refund uncertain dispatched calls as if free. Quota/lease contention defers without consuming a data-failure attempt. Bound source items, pages, mentions, candidate identities, resolver calls and pair expansion separately.
+The [accepted shared quota owner](#provider-quotas-accepted-decision-3) reserves provider request counts, quota units, billable bytes and monetary budgets across participating workers. Per-host pacing and atomic new-person population/fanout admission remain separate controls. Stop before the call when capacity is exhausted or unavailable; do not refund uncertain dispatched calls as if free. Quota/lease contention defers without consuming a data-failure attempt. Bound source items, pages, mentions, candidate identities, resolver calls and pair expansion separately.
 
 New people are **optional**: reuse existing canonical identities first; admit a new person only from an allowed verified strong key after atomic population/fanout reservation. Unresolved names remain mentions. Record source root, parent, depth and admission reason. Queue admitted leaves at the existing low-priority policy (normally tier 4), with no inline waterfall, employer expansion or recursive public-engagement trigger. The shared drain currently picks only 0/1: do not broaden it or mass-promote leaves to make the demo look complete. Later high-priority promotion is a separate bounded decision. Existing matches cost no new-person slot.
 
@@ -240,7 +247,7 @@ For each bounded GKG candidate document:
 
 The graph floor remains **`article_count ≥ 3` and `source_domain_count ≥ 2`** in the active window. Proposed additional precision gates require **three independent story clusters and two verified publisher groups**; otherwise hold the pair in SQL. These conservative defaults need Phase 0 measurement and are not claims about achieved precision. `article_count` means distinct accepted canonical articles, not GKG records; independent story count is reported separately.
 
-Define window bounds once per rollup: `[window_end minus 24 calendar months, window_end)`, UTC, evaluated from each article's best supported publication date. Persist `date_basis`; missing dates do not enter the count. Calendar-month arithmetic is tested at leap days and month ends. GDELT observation, original publication, article update, fetch and rollup times are distinct. Date or identity corrections rebuild affected contributions; retries never increment counters blindly.
+Define window bounds once per daily rollup: `[window_end minus 24 calendar months, window_end)`, with a UTC-midnight end, evaluated from each article's best supported publication date. Subtract months with last-valid-day clamping; date-only evidence stays date-only. [Phase 4](/guides/open-work/roadmap/media-co-occurrence/phase-4-news) specifies the leap-day case and bounded batch contract. Persist `date_basis`; missing dates do not enter the count. GDELT observation, original publication, article update, fetch and rollup times are distinct. Date or identity corrections rebuild affected contributions; retries never increment counters blindly.
 
 Daily work rechecks recent partitions with a configured overlap (initial proposal seven days), expires old local contributions and rebuilds affected pairs. Initial history is at most 24 months, admitted one bounded partition range at a time. A monthly **local** full-window reconciliation checks local coverage, aliases, merges and deletions. It is not an automatic monthly full BigQuery rescan. When a newly tracked person was absent from the earlier index, old locally filtered data may be incomplete: schedule budgeted historical discovery for the uncovered ranges and expose coverage until it completes. Do not claim a local recount can recover articles never ingested.
 
@@ -248,7 +255,13 @@ Rollups publish atomically by completed generation; partial failed batches never
 
 ## AlloyDB ledgers and transaction boundaries
 
-All names below are **proposed `universe.*` tables**, with UUID primary keys unless a composite key is specified. Canonical typed profiles are facts-owned caches; staging/support ledgers never author those caches directly. Use `timestamptz` for observations/leases, `date` plus precision for date-only source facts, `jsonb` for structured evidence and versioned policy payloads, and bounded text for source keys.
+The inventory contains **23 `universe.*` tables, created in development AlloyDB on 2026-09-07**: 20 media/event/news tables, one delivery outbox and two shared provider-quota tables. Use UUID primary keys unless a canonical entity or composite key is specified. Canonical typed profiles are facts-owned caches; staging/support ledgers never author those caches directly. Use `timestamptz` for observations/leases, `date` plus precision for date-only source facts, `jsonb` for structured evidence and versioned policy payloads, and bounded text for source keys.
+
+**Applied storage:** `migrations/20260907090213_media_co_occurrence_storage.sql` and `migrations/20260907090253_provider_quota_storage.sql` in `orbiter-universe`. Verified all 23 tables empty, indexes valid, ownership under `orbiter_migrator`, and API/worker CRUD grants. Nine schema/merge-inventory tests passed against a disposable local database; both migrations passed rollback/reapply and SQLC compilation. The existing local application database was not migrated. No source rosters, quota allowances or production data were seeded.
+
+Only these two migrations were applied to development AlloyDB. The earlier filings and donors migrations (`20260906105510`, `20260906212956`) remained pending. A subsequent full migration run must review those versions and explicitly handle them with Goose's `-allow-missing` option; this pass does not change deployment tooling or approve unrelated migrations.
+
+The DDL adds bounded hash indexes over exact source keys, precise/partial date fields, retention and purge markers, composite frozen-index/match FKs, revision checks and lease completeness. Membership evidence keeps its mention anchor when a derived membership is deduped. The merge inventory preserves historical adjudication/news IDs; media-owned invalidation, group repair and re-election remain required before publication. Graph receipt endpoints are historical UUIDs without cascading entity FKs, preserving retraction fences after deletion.
 
 | Table / owner | Required columns beyond ID | Uniqueness / useful indexes |
 | --- | --- | --- |
@@ -268,9 +281,12 @@ All names below are **proposed `universe.*` tables**, with UUID primary keys unl
 | `news_person_matches` / media news | document/person IDs, index/policy version, evidence locators, accepted/review/rejected, revision | document/person/policy version; index/person for targeted invalidation. |
 | `news_pair_contributions` / media news | ordered Person IDs, canonical article ID, story/publisher group, date, membership refs, active revision | `(person_a, person_b, article_id)` with `a < b`; article/person/date indexes. |
 | `news_comention_rollup` / media news | ordered pair, window bounds, counts, quarter counts, evidence manifest, coverage, current generation, desired active state | pair/window-policy; generation-state index. Preserve the existing proposed spelling consistently. |
-| `media_graph_receipts`, transactional outbox / media | stable relationship key, desired/applied revision, action, lease/fence, error, timestamps, publish readiness | relationship key; pending-revision index. Outbox insertion commits with desired SQL state. |
+| `media_graph_receipts` / media | stable relationship key, desired/applied revision, action, lease/fence, error, timestamps, publish readiness | relationship key; pending-revision index. Applied state advances only after graph confirmation. |
+| `media_outbox` / media and news delivery | `dedupe_key`, `aggregate_type`, `aggregate_id`, `revision`, `event_type`, `destination`, `payload jsonb`, `status`, `attempts`, `available_at`, `lease_token`, `lease_expires_at`, `last_error`, `created_at`, `dispatched_at` | unique logical event key; due-undispatched and expired-lease partial indexes. Insertion commits with the desired SQL change; dispatch success is not graph completion. |
+| `provider_quota_buckets` / shared Go budget owner | provider, stable account/project reference, scope key, metric, window bounds/timezone, limit/reserved/consumed amounts, policy version, updated time | unique provider/account/scope/metric/window; current-window lookup. Counters survive worker restarts, key rotation and policy edits. |
+| `provider_quota_reservations` / shared Go budget owner | attempt key, bucket FK, request fingerprint/bucket-set hash, work owner/ID, reserved/actual amounts, state, issuance fence, provider request ID, created/issued/settled/released times | unique attempt/bucket; attempt lookup and outstanding-reconciliation index. One row per attempt and applicable bucket; no raw requests or credentials. |
 
-Required SQL constraints include nonnegative counters, confidence in `[0,1]`, valid source/status enums, ordered distinct news endpoints, foreign keys to canonical/support owners, and uniqueness independent of title/date/role. Partial active-work uniqueness must permit a later refresh generation while coalescing duplicate deliveries of the same work. Add merge-inventory coverage for **both** subject and target IDs, including frozen-index lineage, article memberships and rollups.
+Required SQL constraints include nonnegative counters, confidence in `[0,1]`, valid window bounds, ordered distinct news endpoints, foreign keys to canonical/support owners, and uniqueness independent of title/date/role. Source/status vocabulary and transitions are validated in Go; database checks enforce structural invariants. Partial active-work uniqueness must permit a later refresh generation while coalescing duplicate deliveries of the same work. Add merge-inventory coverage for **both** subject and target IDs, including frozen-index lineage, article memberships and rollups.
 
 Three transaction boundaries matter:
 
@@ -278,9 +294,59 @@ Three transaction boundaries matter:
 2. Persist mentions/decisions and write normalized claims/outbox events atomically per bounded source revision. The `enrichment_payloads` envelope identifies the retained snapshot and source policy; use the source-specific expiry path instead of an immortal second raw copy.
 3. After facts election, transactionally record the complete desired membership/rollup generation plus graph/publish outbox entries. Provider retries and graph retries are different work classes.
 
+### Transactional outbox: accepted decision 2
+
+Use one **`universe.media_outbox`** for media and news delivery through the existing Pub/Sub infrastructure. Its scope is durable delivery intent. `media_work` owns source-job execution; `media_graph_receipts` owns desired/applied graph revisions; publish owns its projection and delivery readiness. These responsibilities do not share a completion flag.
+
+| Field group | Build contract |
+| --- | --- |
+| `id`, `dedupe_key` | `id` is the stable event UUID, preserved on every retry. The unique logical key contains aggregate type/ID, revision, event type and destination. The same key with different immutable event content is an error. |
+| `aggregate_type`, `aggregate_id`, `revision` | Identify the durable source of desired state, such as a work item, membership or news rollup. Revision is owner-assigned and monotonic, not a delivery attempt count or wall-clock timestamp. |
+| `event_type`, `destination`, `payload` | Validated event schema and configured logical consumer. Payload contains IDs, required revisions, schema version and compact action metadata; raw bodies, quotes, credentials and expiring evidence stay in their owning stores. Callers cannot supply arbitrary topics or endpoints. |
+| `status`, `attempts`, `available_at`, `last_error` | Go-validated delivery lifecycle: pending, leased, dispatched or blocked. Retry with bounded backoff and jitter; permanent contract errors become visible blocked rows. Exhausted delivery attempts never erase desired work. |
+| `lease_token`, `lease_expires_at` | Claim bounded due rows in a short SQL transaction. Publish outside the transaction. Only the current, unexpired lease token can stamp dispatch, release or failure. Expired leases become reclaimable. |
+| `created_at`, `dispatched_at` | Creation time is stable. Set `dispatched_at` only after Pub/Sub accepts the message. It says nothing about consumer completion. |
+
+Commit the desired state and outbox row in **one AlloyDB transaction**: either both survive or neither does. A second best-effort insert after committing business state is not this contract. Public owner interfaces must preserve that transaction boundary without importing sibling private repositories; where ownership crosses transactions, the first owner commits a durable bridge event and the consumer performs its own idempotent transaction.
+
+Publish the stable event ID and pinned revision on every attempt. A crash after Pub/Sub acceptance but before the dispatch stamp can send the event again; consumers must handle duplicates. Graph consumers re-read permitted, chosen desired state, enforce the existing revision fence and tombstones, and advance `media_graph_receipts` only after confirmation. A late revision cannot undo a newer revision or resurrect a removed relationship. Publisher readiness still depends on the required SQL/graph revisions, not on `dispatched_at`.
+
+A delivery failure does not require a provider re-fetch or LLM rerun. Missing endpoint nodes or unmet projection dependencies defer consumer work. Blocked and overdue rows are observable and can be replayed with the same event identity; repair sweeps compare desired versus applied state to recover missed or dead-lettered consumer work.
+
+Retain pending/blocked intent until resolved. Completed-event cleanup requires the corresponding consumer receipt or completed-work proof and the configured retention floor; it must not remove the durable revision/tombstone fences. Use references in the envelope so source expiry does not leave a second raw-content archive in the outbox.
+
+Required fixtures cover: rollback of state plus event; crash after commit before dispatch; broker acceptance before dispatch stamp; duplicate and out-of-order messages; expired/stolen leases; retry exhaustion and operator replay; graph success before receipt failure; and a removal followed by a stale upsert. Every case asserts the desired state remains recoverable without repeating paid source work.
+
+The outbox is one of the **23 created tables**, including the two quota tables below. The transactional producer and dispatcher remain future Go work.
+
+### Provider quotas: accepted decision 3
+
+Use **`universe.provider_quota_buckets`** and **`universe.provider_quota_reservations`** through one shared Go budget owner, initially serving media and news. Workers use narrow public interfaces wired in `internal/app`; adapters do not maintain independent counters. `consumers.environment_variables` remains configuration storage, not a hot counter ledger. Reuse the music pacer's coordination pattern through an interface for request spacing; its `music_rate_limit` singleton is not this daily/spend budget store.
+
+| Table / field group | Build contract |
+| --- | --- |
+| Buckets: `id`, `provider`, `account_ref`, `scope_key`, `metric` | UUID plus stable provider account/project identity, shared across its credentials. Optional lane/job scopes add ceilings alongside the account ceiling. Never scope an account budget to a worker or API-key value; key rotation must not replenish allowance. |
+| Buckets: `window_start`, `window_end`, `reset_timezone`, `policy_version` | Explicit half-open provider window and policy reference. Unique provider/account/scope/metric/window identity excludes policy version: editing limits must preserve existing usage. Follow the actual provider reset timezone, including daylight-saving changes. |
+| Buckets: `limit_amount`, `reserved_amount`, `consumed_amount`, `updated_at` | Separate metrics for requests, provider units, billable bytes and money. Use nonnegative integer amounts (`BIGINT`; micro-USD for USD), never floating-point money or mixed units. Admission checks consumed plus held capacity plus the new bound against every limit. |
+| Reservations: `id`, `attempt_key`, `bucket_id`, `request_fingerprint`, `bucket_set_hash` | One UUID row per request attempt and applicable bucket, unique on attempt/bucket with a bucket FK. Fingerprint the nonsecret request contract and pin its complete bucket set. Serialize admission by attempt key, then lock buckets in stable order. Same-attempt redelivery reuses the same reservation; changed request, bounds or bucket set is a conflict. |
+| Reservations: `work_owner`, `work_id`, `reserved_amount`, `actual_amount`, `state` | Durable work correlation supports other waterfalls, rather than a media-only work FK. Actual usage is nullable until known, distinct from zero. Go validates `reserved`, `issued`, `settled` and `released` transitions. Every real retry gets a new attempt; queue redelivery alone does not. |
+| Reservations: `issuance_token`, `provider_request_id`, `created_at`, `issued_at`, `settled_at`, `released_at` | Fence issuance so only one worker can authorize the attempt. Persist a provider idempotency/query ID before submission where supported; retain returned request IDs for reconciliation. No API keys, source bodies or prompts belong here. |
+
+**Reserve every applicable bucket atomically before the request.** Insufficient capacity in any bucket rolls back the entire reservation. Missing policy or an unavailable budget owner defers work without a data-failure retry penalty. Persist the next eligible time from the relevant window reset, outstanding reservation or provider retry instruction; do not spin. No database transaction spans HTTP.
+
+Reserve a conservative upper bound for variable-cost operations: bounded model input/output and a pinned pricing version, bounded search requests, and a bounded BigQuery job. For BigQuery use a dry run plus an explicit `maximumBytesBilled`; the estimate alone is not an enforcement limit. Provider limits are additional protection, and a local budget is not proof that unrelated account users cannot spend. See [BigQuery cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
+
+Immediately before issuance, verify that reservations cover the current applicable provider windows. If a window has changed, release the still-unsent attempt and reserve the current bucket set under a new attempt key, or defer; do not mutate the old attempt's immutable contract. Atomically commit the one-time `reserved → issued` transition for every applicable reservation under the current work and issuance fences before sending HTTP. If the worker disappears after that transition, retain the reservation as potentially spent. Worker lease expiry, a timeout or a failed HTTP response does **not** prove that the provider did no billable work. Release only provably unsent attempts. Reconcile uncertain issued attempts through provider request/job IDs or an audited operator decision; never expire them into free capacity or blindly reissue the same attempt.
+
+Settle known usage idempotently in one transaction: release the corresponding held amount, add actual consumption, and stamp the reservation. Late results settle the original charged window, not whichever bucket is current on arrival. Requests that fail can still consume quota. If actual usage exceeds the reserved bound, record the full amount and stop further admission until capacity and the bound are corrected; a database check must not prevent recording an overrun. Keep unresolved reservations and retain settled/released attempt identities through the maximum retry/redelivery/reconciliation horizon so cleanup cannot make an old attempt charge or issue twice.
+
+YouTube search calls and other endpoint units use their actual separate project buckets, with midnight-Pacific resets under the [provider quota contract](https://developers.google.com/youtube/v3/determine_quota_cost). Per-host pacing still controls request spacing. New-person population and fanout limits stay in the entity admission path. Other waterfalls sharing credentials must adopt this owner before we claim account-wide enforcement; reconcile provider-reported usage and configure headroom for callers outside it. Actual budget amounts and exact runtime configuration names are Phase 0 choices.
+
+Required future fixtures cover concurrent workers competing for the last capacity, partial multi-bucket failure, duplicate attempts with conflicting bounds, real HTTP retries, stale issuance tokens, crashes before/after issue, unknown and late usage, duplicate settlement, actual usage above the bound, provider reset/DST boundaries, limit changes and credential rotation. Assert counter/reservation consistency and that denied work sends no provider request. These two tables complete the **23-table storage inventory**. Their DDL is applied; the budget service and live reservations remain unimplemented. Schema tests establish constraints, not distributed budget enforcement.
+
 ## Facts, graph contract and correction replay
 
-Proposed relation vocabulary: `media_appearance` on Person → MediaAppearance, `media_session_of` on MediaAppearance → live_event, and `media_news_comention` on the ordered first Person → second Person. The normalized `value_json` carries typed qualifiers and evidence refs; only chosen relationship facts authorize these entity-to-entity edges. News rollups are a versioned derived provider whose input is the accepted contribution ledger. They still require election and a durable receipt.
+Proposed relation vocabulary: `media_appearance` on Person → MediaAppearance, `media_session_of` on MediaAppearance → live_event, and `media_news_comention` on the ordered first Person → second Person. Each relationship stores its target in **`value_entity_id` only**: the existing `entity_facts.one_value` constraint prohibits also populating `value_json`. Typed qualifiers and evidence refs remain in the versioned membership, association and rollup support ledgers, joined to the current chosen fact and desired revision. Only chosen relationship facts authorize these entity-to-entity edges. News rollups are a versioned derived provider whose input is the accepted contribution ledger. They still require election and a durable receipt. See the full [Phase 5 facts/replay contract](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay).
 
 A correction targets the exact subject/source/field/target and claim generation. The existing target-scoped facts helper is a precedent, but multiple source items supporting one target require the new membership-evidence ledger: removing one episode anchor or article must not remove surviving support. A cancelled session, corrected name, expired-only evidence or below-floor news pair changes desired state and emits a retraction. A fetch error, incomplete agenda or truncated feed is not source evidence of absence.
 
@@ -310,7 +376,7 @@ Default every media writer/scoring flag off. Graph release requires fixture proo
 
 Only `publish` exposes media/event packages and paginated person media evidence. Proposed additions follow the existing authenticated `/v1` surface, client attribution and entitlement scopes. Return canonical `id`, `requested_id`, `projection_version`, data revision, source/coverage state and `graph_status` separately; no anonymous source or graph endpoint. Repair requested aliases through merge chains.
 
-`media_appearance_display` and the existing/planned `event_display` contract hold compact card data when a consumer needs it. Article bodies, full bios, raw model responses, resolver candidates and private review notes do not enter consumer packages. Evidence manifests expose bounded permitted references and summaries; totals, `truncated` and opaque revision-bound cursors distinguish pagination from complete coverage. A cursor into a superseded revision must restart explicitly. Consumers apply revisions/tombstones idempotently and preserve App-owned private data.
+`media_appearance_display` and the established `live_event_display` contract hold compact consumer card data when needed; this plan does not add App display tables to Universe. Article bodies, full bios, raw model responses, resolver candidates and private review notes do not enter consumer packages. Evidence manifests expose bounded permitted references and summaries; totals, `truncated` and opaque revision-bound cursors distinguish pagination from complete coverage. A cursor into a superseded revision must restart explicitly. Consumers apply revisions/tombstones idempotently and preserve App-owned private data. [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) defines the proposed routes, scopes and removal contract.
 
 Example synthetic package fragment:
 
@@ -376,20 +442,53 @@ Each fixture asserts expected SQL claims/memberships/contributions, graph nodes/
 
 <BakeOffRules />
 
-| Phase | Deliverable / exit gate |
-| --- | --- |
-| **0 — Source and contract proof** | Record approved publisher/organizer fixtures, YouTube permitted-use decision and actual quota buckets, GDELT schema/location/dry-run costs, archive coverage, candidate identity accuracy and the exact shared owner seams. Review new node keys, `SESSION_OF`, moderator handling and conservative news gates. No graph writes. |
-| **1 — Shared identities and ledgers** | Register media/event canonical types, aliases/merge inventory, migrations, owner seams, work queue, observations/retention, outbox and versioned DTOs. Duplicate/conflict/expiry/fencing SQL fixtures pass. |
-| **2 — Publisher appearances** | RSS/episode-page adapter, pure extraction, identity/review, interaction groups and bounded leaves. Import Deep Bio/podcast candidates through the same gate. No prerequisite that a legacy podcast system run first. |
-| **3 — Conference sessions** | Edition owner, live/archive adapter, scheduled/confirmed distinction, exact session associations and coverage. Roster-only evidence produces no panel pairs. |
-| **4 — Facts, graph and consumer rules** | Facts election, deterministic envelopes, revisioned replay/retraction, pair-aware scoring adapter, generic-reader exclusions and publish package. Keep graph flags off until the full reader matrix passes. |
-| **5 — YouTube extension, conditional** | Only after its source permissions are settled; quota-aware enumeration/hydration/refresh and verified cross-source dedup. If unavailable, publisher/conference releases are independent. |
-| **6 — Closed-world news** | Frozen index, bounded GDELT discovery, permitted article verification, contribution dedup, local rollups/recounts/expiry and evidence-only publication. Identity or coverage uncertainty remains visible. |
-| **7 — Canary and recurring work** | Start with at most 500 source videos/items and one conference; news begins with one bounded sample week. Run replay/retraction/failure fixtures, operator review and source budgets before expanding. Ramp one source at a time with separate switches. |
+Each numbered subpage is **one proposed PR**, with its own scope, dependencies, data contracts and acceptance criteria. The overview remains the shared contract. Numbering gives the default review sequence; adapter enablement is independent, and shared graph/publication work can be developed against the first adapter's fixtures without waiting for every source to go live.
 
-All phases above are future work. The historical YouTube-first order is superseded by independently sourced publisher/conference evidence first while the YouTube gate is resolved. Initial full-history backfill is coverage-bounded, not an infinite scrape; history and incremental work share one claim/lease owner per source. Backfill completion means all admitted ranges have explicit outcomes, including inaccessible or review-pending items, not that every historic appearance has been recovered.
+| PR page | Deliverable / exit gate |
+| --- | --- |
+| [**Phase 0: Shared Go Foundations**](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations) | Canonical type/alias registration, owner seams, durable work and evidence, quota service, outbox and disabled configuration. Existing 23-table storage is reused; runtime behavior remains to build. |
+| [**Phase 1: YouTube Adapter**](/guides/open-work/roadmap/media-co-occurrence/phase-1-youtube) | First adapter, approved by Mark. Bounded metadata enumeration/hydration, extraction and source aliases; live operations require the source-use gate. |
+| [**Phase 2: Podcasts & Publisher Pages**](/guides/open-work/roadmap/media-co-occurrence/phase-2-podcasts) | RSS/episode pages, the full prior curated roster, historical coverage, incremental revisions and imports through the common gate. |
+| [**Phase 3: Conferences & Archives**](/guides/open-work/roadmap/media-co-occurrence/phase-3-conferences) | Organizer-defined editions/sessions, source-specific parsing and archived captures; separate scheduled billing from confirmed participation. |
+| [**Phase 4: News Co-Occurrence**](/guides/open-work/roadmap/media-co-occurrence/phase-4-news) | Local frozen Universe index, bounded external GDELT reader, independent article/person verification, deduplicated contributions and evidence-only rollups. |
+| [**Phase 5: Facts & Graph Replay**](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) | Correct facts value contract, typed caches, revision/tombstone protection, merge/split repair, deterministic descriptions and reader/scoring exclusions. |
+| [**Phase 6: Consumer Publication**](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) | Publish-owned projections/evidence lists, scopes, type entitlements, revisioned pagination and removal semantics. |
+| [**Phase 7: Refresh, Recovery & Rollout**](/guides/open-work/roadmap/media-co-occurrence/phase-7-rollout) | Scheduled work, operator controls, measured budgets, failure drills and bounded source-by-source canaries before expansion. |
+
+**Dependency rule:** Phase 0 precedes each adapter; Phase 5 consumes the shared DTOs and can start with Phase 1 fixtures; Phase 6 depends on Phase 5; Phase 7 enables only adapters whose own gates pass. There is no prerequisite that all four sources be enabled before the first useful release. Source-specific tests and evaluations belong to each adapter PR, while facts/replay/publication are implemented once for all sources.
+
+Only storage and its schema/FK classification tests are complete. All runtime PRs remain future development. Source/contract proof starts in Phase 0 and is completed for each adapter before its live operations. Initial full-history backfill is coverage-bounded, not an infinite scrape; history and incremental work share one claim/lease owner per source. Backfill completion means all admitted ranges have explicit outcomes, including inaccessible or review-pending items, not that every historic appearance has been recovered.
 
 **Proposed initial knobs:** `MEDIA_ENABLED=false`, per-source `*_FETCH_ENABLED=false`, `MEDIA_GRAPH_ENABLED=false`, `MEDIA_PAIR_SCORING_ENABLED=false`, `MEDIA_ALLOW_NEW_PEOPLE=false`, `NEWS_GRAPH_ENABLED=false`, `NEWS_SCORING_ENABLED=false`. Caps/batch sizes, retry/lease limits, source permissions, model IDs, quota windows, retention, overlap and news policy are validated versioned configuration. An unknown/missing policy disables the affected operation. Pausing fetch does not pause expiry, retraction or receipt repair.
+
+### Build audit and decision register
+
+This pass covers the whole program's architecture and PR contracts. It does **not** claim implementation tests, real source/model evaluations or production-readiness checks have run. The distinction is explicit for every lane:
+
+| Area audited | Finding and required work | Owner |
+| --- | --- | --- |
+| Shared storage | 23 tables created and structurally tested; repository delivery and runtime repositories/services remain | Phase 0 |
+| Go intake and identity | Media/event constants and public owner seams absent; generic dispatcher is unsuitable; image rehosting is unrelated | Phase 0 |
+| YouTube | Provider contract documented; first-adapter order accepted; allowed extraction/publication and actual project quota policy still gate live use | Phase 1 |
+| Podcasts/publishers | Full earlier roster and history intent recovered; current feed manifests, real item fixtures and archive coverage still required | Phase 2 |
+| Conferences/archives | Source layers and field mapping reviewed; second organizer, recoverable capture and labeled occurrence fixtures still required | Phase 3 |
+| News | Local Universe ownership confirmed; index completion, query resumption, independent verification and frozen-index invalidation specified; no measured sample yet | Phase 4 |
+| Facts/replay | Corrected invalid dual-value fact design; graph fencing and media-specific merge/group repair require implementation and real concurrency proof | Phase 5 |
+| Consumer contract | Existing publish routes/scopes inspected; media type support, evidence pagination, reader exclusions and removals still to build | Phases 5–6 |
+| Recurring operations | Explicit jobs, failure drills and source release gates specified; runtime permissions, budgets and canary results remain unmeasured | Phase 7 |
+
+| Decision | Recommendation / current state |
+| --- | --- |
+| Source order and one subpage per PR | **Accepted:** YouTube Phase 1, then podcasts, conferences and news; shared foundations, replay and publication across all sources. |
+| Storage decisions 1–3 | **Accepted and DDL applied:** canonical typed entities, dedicated outbox and shared quota reservations. |
+| Graph identity/upsert keys | Recommend canonical `entity_id`, new graph UUID equal to that identity, preserve existing `GraphNodeUUID` mappings and verified scoped aliases. **Question awaiting Mark's answer.** |
+| Moderator and complete-group policy | Recommend retaining moderator as a distinct role, same-group moderator↔panelist eligibility at 20, and no scoring for incomplete or more-than-12-person groups. Proposed, not yet accepted. |
+| News independence | Recommend three independent story clusters and two verified publisher groups in addition to the accepted article/domain floor. Proposed, not yet accepted. |
+| Podcast alternative | Prior roster says “Latent Space or No Priors”; recommend both, each independently source-verified. Preserve every other requested show. |
+| Pilot sources and languages | Recommend a representative interview/multi-host/publisher pilot, two organizer formats and one archived edition; English-only initial extraction evaluation with other-language coverage retained as unsupported until separately evaluated. Not an English-only final product commitment. |
+| Spending and source enablement | Recommend measured evaluation allowances and source-specific daily ceilings. Exact amounts, permitted-use records, runtime identity and source manifests must be filled before live calls are enabled. |
+
+These are product/source decisions and measured implementation gates, not reasons to defer the documentation or silently build a different architecture. Resolve substantive questions one at a time; do not re-open the accepted storage design or introduce a BigQuery copy of Universe/Fundable tables.
 
 ### Phase 0 results register — intentionally unmeasured
 
@@ -420,7 +519,7 @@ Deferred from v1: transcripts/ASR, channel-audience analytics, summaries/embeddi
 
 ## Reference record
 
-- [Go reference commit](https://github.com/Orbiterio/orbiter-universe/tree/ef167b0fd79b4a4bb9d6a1956594ec9e3d17636e): code inspected, not modified or built by this pass.
+- [Go reference commit](https://github.com/Orbiterio/orbiter-universe/tree/d21b72a4ef8287be151c52dfcfa0924c9ab13dc8): code inspected, with separately created local media DDL identified in the audit; no application implementation in this pass.
 - [Podcast scope memory](https://app.basicmemory.com/notes?id=cloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110%7Ceb7ec3bb-a87e-4db9-aa26-bf169a4156d1&explorer=project%3Acloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110): curated roster, RSS-first and historical/incremental intent; old costs, providers and graph names are not current Go contracts.
 - [Live-event ontology decision memory](https://app.basicmemory.com/notes?id=cloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110%7C9ac043bb-5f85-4c3b-a3cd-e01fc1659eb7&explorer=project%3Acloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110): domain-specific edge names, `PART_OF` reservation, and speaking/presentation boundaries.
 - Primary provider contracts are linked where each field, quota or source constraint is specified. Access/schema/fixture validation remains a future Phase 0 activity; reading documentation is not a successful adapter run.

@@ -1,0 +1,95 @@
+---
+title: "Phase 5: Facts & Graph Replay"
+sidebarTitle: "Phase 5: Facts & Graph Replay"
+description: "PR contract for facts election, media graph revisions, retraction fences, merge repair and pair-aware reader enforcement."
+---
+
+**Status: planned shared Go PR.** Suggested PR title: **Project chosen media facts with fenced graph replay and reader policy**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations) and the common adapter DTOs plus fixtures. Implement and validate first against YouTube or any independently permitted source; Phases 2–4 do not all need live enablement. Graph code is shared across every adapter.
+
+## PR boundary
+
+Include facts mapping/distillation, typed-cache ownership, aggregate reconciliation, deterministic descriptions, node/edge synchronization, durable receipts, retraction/merge repair and all graph-reader exclusions. Public package contracts belong to [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication), but no graph writer may be enabled before the reader protections in this PR pass.
+
+Reference the existing film/music replay through narrow public interfaces; do not import their private repositories or take ownership of their edges. New source adapters must never invoke a raw graph client. The [Node Types](/guides/ontology/nodes#media-appearances) and [Edge Types](/guides/ontology/edges#media-edges) remain the master property contracts.
+
+## Facts contract: one value per claim
+
+**Audit correction:** `entity_facts.one_value` permits exactly one populated value column. A relationship fact stores its target in **`value_entity_id` only**; it cannot also populate `value_json`. Keep roles, interaction-group membership, occurrence evidence, policy and revisions in `media_memberships`, `media_membership_evidence`, `media_event_associations` and the news rollup/evidence ledgers. Replay joins the elected relation to the exact current supported aggregate revision. A normalized payload may carry qualifiers without placing both values in one fact row.
+
+| Proposed fact field | Subject → target / storage |
+| --- | --- |
+| `media_appearance` | Person → canonical media appearance, `value_entity_id` |
+| `media_session_of` | Appearance → exact event edition, `value_entity_id` |
+| `media_news_comention` | Ordered first Person → second Person, `value_entity_id` |
+| Registered appearance/event scalar fields | Exactly one text/number/bool/JSON value per fact; facts owner distills the typed caches |
+
+Register the media-derived providers and field taxonomy explicitly in facts. The aggregate owner combines independent accepted evidence before emitting its complete current claim. A video refresh must not replace all person facts. Existing target-scoped relationship withdrawal is the precedent; constrain replacement to the exact subject/source/field/target and version.
+
+The current scalar replacement helper deletes all scalar facts for an entity/source. Feed it a complete source snapshot or add an explicitly scoped, tested facts-owner method. Sending one changed scalar through full-source replacement would erase unrelated scalar claims. Do not silently change shared semantics for other waterfalls.
+
+Distillation updates `media_appearance`/`live_event`, including their projection revision. Source adapters never author those caches. Re-election updates the aggregate's `chosen_fact_id`, desired revision and delivery intent transactionally; absence or replacement of a fact moves the aggregate to pending/retraction state. A cached fact ID alone is not proof it is still chosen.
+
+## Stable graph identities and properties
+
+Canonical entity UUID is the recommended upsert key, subject to the open identity decision. New node creation follows the existing entity-ID pattern; imported registered graph UUIDs remain intact. Endpoint readiness uses the entities owner's mapping. Require an index/uniqueness plan verified against the actual FalkorDB version before implementation; title or source URL is never a merge key.
+
+| Graph relationship | Stable logical identity | Current properties |
+| --- | --- | --- |
+| `APPEARED_IN` | Canonical person + appearance; one edge carrying accepted role set | Current supported roles, occurrence, source/evidence refs, group metadata reference, weight and policy |
+| `SESSION_OF` | Durable canonical session/edition association | Session reference, association scope, evidence; weight 30; evidence layer, excluded |
+| `CO_MENTIONED_WITH` | Ordered canonical person pair, independent of window advancement | Current window/counts/coverage/evidence manifest; weight 55; evidence layer, always excluded |
+
+Allocate a stable `graph_edge_uuid` once in `media_graph_receipts`. Mutable role, title, source URL, policy revision, rolling window date and retry attempt cannot create a second edge identity. A merge produces a tombstone for the old endpoint tuple and reconciliation for the survivor tuple. Multiple policies cannot publish competing versions of the same news edge: one active configured policy owns the aggregate; policy changes trigger a new desired generation.
+
+All three edge types require **`description` and `description_generated_at`**, created/updated times, stable UUID, revision, provenance and exclusion/layer metadata. Descriptions are deterministic from accepted inputs, for example “Alex appeared as a guest in Example Interview” or “Alex and Blair were co-mentioned in 3 verified articles across 2 domains.” News wording must not imply meeting, friendship or agreement. Encode structured evidence as bounded references or explicitly serialized JSON where required by graph property types; never send unsupported nested property values.
+
+## Reconciliation and publication fence
+
+```text
+load aggregate, current accepted evidence and elected relation
+compute current desired active/inactive state + deterministic properties
+transaction: CAS aggregate revision; upsert graph receipt; insert outbox intent
+replay: claim receipt fence; re-read current desired state and endpoint mappings
+graph mutation: atomically reject older owner revision/fence; apply active or tombstone state
+receipt transaction: mark applied only if claimed desired revision and lease still current
+publication reconciler: expose only the version whose required graph effects converged
+```
+
+The graph-side compare and mutation must occur in **one atomic graph operation**, including node property updates. A SQL revision check before a network call does not prevent a delayed stale request from overwriting a newer graph state. Graph success followed by SQL failure must be safe to replay and independently verifiable.
+
+**Proposed fence design:** retain minimal inactive relationship records with stable edge UUID, owner revision/fence and tombstone state. Normal readers exclude them; retraction clears source content and replaces source-derived description text with a neutral “Retracted media relationship” description and updated generation timestamp. Maintain corresponding node ownership/tombstone protection so a stale node writer cannot revive a removed entity or overwrite a newer title. A physical endpoint purge also removes attached relationship fences, so it must participate in the graph-owner purge/fence protocol. No ad hoc physical delete may bypass this rule.
+
+Before choosing the exact mutation, verify atomic conditional behavior on the actual FalkorDB runtime with two racing workers, including delete/recreate and endpoint purge. If persistent tombstones cannot coexist with the existing purge contract, specify and test a separate persistent graph fence through the graph owner before enabling writes. **An unproven SQL-only fallback is not acceptable.** This is an implementation proof gate, not an assertion that the current graph client already exposes compare-and-swap.
+
+`media_graph_receipts` intentionally has no endpoint entity FKs, so canonical deletion cannot erase the SQL retraction history. Preserve `desired_revision`, `applied_revision`, `fence` and publish readiness separately. Missing endpoints defer a live edge; they do not make a stale tombstone complete without the graph-owner deletion proof. Broker dispatch is never graph completion.
+
+## Merge, split and source repair
+
+The applied merge inventory covers FK handling, not full media semantics. Add bounded media invalidation/re-election work to the entity merge lifecycle. During pending repair, consumer reads suppress affected aggregates instead of displaying a relationship under mixed identities.
+
+1. Resolve survivor identity; retain loser tombstone and old graph mapping for retraction.
+2. Reconcile source aliases with explicit scope conflicts; deduplicate memberships and reattach surviving evidence without losing its mention anchor.
+3. Repair interaction-group references after appearance merges; never unite unrelated groups by title.
+4. Re-elect affected facts, rebuild typed caches and old/new desired graph tuples; remove self-pairs.
+5. Invalidate frozen news matches/contributions and schedule a new-index rebuild; preserve original adjudication history.
+6. Converge graph receipts and versioned consumer tombstones before clearing pending repair.
+
+An operator split/reassignment explicitly moves selected source/mention scopes, withdraws their old claims and reconciles both appearances. It is not a title edit or a generic reversal of an entity merge. Expiry/revocation follows the same dependency path and purges only the policy-bound material; surviving independently permitted evidence remains authoritative.
+
+## Reader and scoring contract
+
+| Surface | Required enforcement before graph release |
+| --- | --- |
+| Generic shortest paths and candidate generation | Exclude media/news shortcuts unless routed through the explicit pair policy; containment never connects attendees |
+| Subgraph, graph search and neighborhood exports | Hide inactive/tombstoned state; return current policy/coverage; distinguish evidence from relationship strength |
+| Pair-aware appearance scoring | Both people confirmed in the same complete verified group and compatible segment; current evidence only |
+| Narratives, layers and consumer projections | Suppress pending/retracted/expired and mixed revisions; news remains contextual evidence |
+| Purge and merge readers | Resolve canonical IDs and suppress invalidated endpoints until repaired |
+
+Keep interview eligibility host↔guest, panel eligibility panelist↔panelist or proposed moderator↔panelist. Unknown roles, incomplete groups, disjoint sessions, solo talks and conference-wide adjacency create no close pair. The proposed group cap is 12 confirmed participants. Interview band is 15, panel 20, solo speaker 15 only below a verified complete 50-speaker count and otherwise 45. Return one stable encounter key; aliases and compatibility edges cannot double-count it. No new `KNOWS` or `CO_APPEARED_WITH` materialization.
+
+## Acceptance and rollback
+
+Test real FalkorDB behavior in a disposable environment, not just generated query strings. Required cases: stale add after retract; stale node properties after refresh; graph-success/SQL-failure; lost delivery acknowledgement; missing endpoint; physical purge race; duplicate source claim; removed sole versus surviving evidence; person/appearance merge and split; group repair; false cross-panel/interview pairs; and every consumer/reader exclusion above.
+
+Assert exact chosen facts, cache revisions, edge identities/descriptions, receipt progression, tombstones and public absence. Runtime rollback disables fetch/new graph/scoring admissions while leaving retraction/expiry/repair available. Do not erase ledgers or drop tables to roll back code. Handoff includes the proven graph mutation/fence contract and a reader coverage checklist with actual passing tests.

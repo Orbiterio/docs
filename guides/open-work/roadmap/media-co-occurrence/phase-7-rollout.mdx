@@ -1,0 +1,69 @@
+---
+title: "Phase 7: Refresh, Recovery & Rollout"
+sidebarTitle: "Phase 7: Refresh & Rollout"
+description: "PR contract for recurring source work, repair and expiry operations, measured canaries, budget configuration and staged release."
+---
+
+**Status: planned operational Go PR.** Suggested PR title: **Add media scheduling, recovery operations and staged canary controls**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations), [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay), [Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) and the adapter being enabled. Each source is released independently; a blocked source need not delay the others.
+
+## PR boundary and enabling order
+
+Implement scheduled admission, operator inspection/review/retry, reconciliation jobs, runtime configuration validation, metrics/alerts and a repeatable canary runner. Core lease, expiry and replay safety belong to the earlier owning PRs and must already work; this PR schedules and operates them. Do not postpone correctness fixes until rollout.
+
+Source priority remains **YouTube → podcasts/publishers → conferences/archives → news**. The user approved YouTube as Phase 1; live YouTube use still requires its source-use decision. A source can pass its fake/fixture tests and remain disabled while another permitted adapter releases.
+
+| Step | Gate and bounded action |
+| --- | --- |
+| Preflight | Confirm merged migrations, target schema/grants, runtime service identities, bucket/object policy, enabled handlers, configuration versions and source permission |
+| Deterministic replay | Run approved frozen fixtures without live provider calls; assert expected SQL/graph/publication and removals |
+| Source canary | At most 500 admitted items from an approved roster subset; conferences start with one edition, news with one sample week |
+| Graph/publication canary | Enable only after Phase 5 reader/fence tests and Phase 6 entitlement/removal tests pass; inspect actual projected evidence |
+| Expansion | Increase one source/range at a time within measured quotas/spend; keep unresolved and unavailable coverage visible |
+| Historical and recurring operation | Complete admitted historical ranges with explicit outcomes, then continue overlap/reconciliation and mandatory expiry/repair |
+
+## Runtime configuration
+
+Each enabled source requires a versioned policy with approved roster entries, language allowlist, history bounds, polling cadence, page/item/mention/pair caps, request deadlines, retention/publish permissions, selected provider/model IDs and budget bucket definitions. Missing positive caps or source permission disable the affected operation. Credentials are secret references delivered to runtime identities; a successful `.env.local` smoke test is not evidence of Cloud Run permissions.
+
+Retain separate fetch, graph, pair-scoring and new-person switches. Default all admissions off, including `MEDIA_ALLOW_NEW_PEOPLE=false`. **News has no scoring enablement path in v1**; `NEWS_SCORING_ENABLED` is fixed false/invalid if true. Pausing fetching or backfill must leave expiry, revocation, retraction and receipt repair operational.
+
+Money limits, exact provider window limits and source language scope require the decision/evaluation register to be completed before live use. Recommend a small dated evaluation allowance, followed by measured source-specific daily budgets; do not invent dollar amounts from old podcast estimates. Search/model bake-offs must satisfy the [shared rules](/guides/open-work/roadmap/media-co-occurrence#implementation-sequence-and-release-gates) at each relevant call site.
+
+## Recurring jobs and recovery
+
+| Job | Durable behavior |
+| --- | --- |
+| YouTube roster polling and inventory reconciliation | Revisit an overlap; enumerate/hydrate under distinct project buckets; schedule policy-required refresh before expiry |
+| RSS/publisher polling and archive progress | Conditional fetch, changed item revisions, explicit history ranges and gaps; truncated feed is not deletion |
+| Organizer updates and archive recovery | Revisit scheduled/changed sessions and admitted captures; event date alone never confirms attendance |
+| News incremental discovery | Bounded recent partitions with proposed seven-day overlap, per-job bytes, completed frozen index and honest coverage |
+| News expiry and monthly local reconciliation | Recount affected pairs, retract expired evidence; no automatic monthly full BigQuery scan |
+| Outbox and graph receipt repair | Find undelivered/stale desired revisions, retry idempotently and surface dead letters; no provider refetch for valid retained evidence |
+| Source purge and derivative invalidation | Idempotent object/body/quote purge plus facts/graph/publish repair, including while fetch is paused |
+| Provider settlement reconciliation | Recover request/job status and settle actual usage; uncertain issued attempts remain accounted |
+| Merge/split repair | Drain affected identity/evidence/graph/package work; suppress mixed revisions until complete |
+
+Use deterministic schedule request keys over source, work kind, policy and time window. A skipped scheduler tick can be recovered from due SQL work; no correctness depends on exactly-once scheduler delivery. Backfill and incremental jobs share one checkpoint/lease owner per scope and reserve capacity for correction work. Do not globally increase shared person/company queue tiers.
+
+Operator controls use authenticated administrative interfaces: inspect job/coverage/receipt state, approve or reject a scoped identity decision, retry pinned evidence, request a fresh fetch, pause a source and request a bounded repair. Preserve actor, reason, input revision and audit history. A retry is not a fresh fetch after evidence expiry. A rejected identity decision remains sticky for its reviewed scope until new contrary evidence opens review.
+
+## Metrics and stop conditions
+
+Measure source discovery/coverage, accepted appearances, extraction/identity/occurrence abstention, new-person admissions, eligible encounters and evidence-only news pairs separately. Track queue age, lease loss, dead letters, desired-minus-applied revisions, purge deadlines, quota holds/overruns, provider call counts, token usage, billed bytes and cost per accepted item. Counts of graph edges alone do not measure quality.
+
+Stop the affected admission path on a known wrong-person link, unreserved provider attempt, stale reactivation, source-use violation, missing expiry enforcement or an excluded scoring shortcut. Roll back scoring/publication scope as appropriate and enqueue repair; retain evidence and audit metadata only as permitted. Provider outages defer work with bounded attempts; they do not trigger mass deletion of valid independent claims.
+
+## Canary evidence and acceptance
+
+Record the repository commit, schema versions, source roster/policy, fixtures and labels, exact runtime settings, model/search selections, initial/final SQL and graph counts, latency/cost and unresolved cases. Real-source count expectations come from the frozen labeled manifest, not celebrity popularity or changing channel totals.
+
+| Drill | Required outcome |
+| --- | --- |
+| Worker killed between fetch/persist/checkpoint and during graph/receipt update | Recoverable, idempotent progress without stale overwrite |
+| Exhausted provider capacity or incorrect runtime secret/permission | Adapter paused/deferred with clear reason; no uncontrolled retry loop |
+| Stop new fetching while evidence expires | Purge/retraction finishes; stale consumer state disappears |
+| Source correction, merge, split, duplicate import and late old message | Current canonical revision converges, no duplicate/self/false pair |
+| News batch fails halfway and window advances | Prior valid generation preserved; known expired contributions still removed |
+| Consumer cache or delivery failure | Versioned retry/tombstone converges, private App fields remain intact |
+
+Exit only when applicable implementation checks, permitted-source measurements, runtime preflight and bounded canary pass. Report each adapter as disabled, fixture-ready, canary-enabled or expanded. Existing tables, provider login success and documentation validation do not constitute a completed live build.

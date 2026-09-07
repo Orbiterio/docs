@@ -1,0 +1,96 @@
+---
+title: "Phase 6: Consumer Publication"
+sidebarTitle: "Phase 6: Consumer Publication"
+description: "PR contract for entitled media and event projections, paginated person evidence and revision-safe removal through the existing publish owner."
+---
+
+**Status: planned Go PR.** Suggested PR title: **Publish versioned appearance, event and person-media evidence packages**. Depends on [Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations) and [Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay). Any one permitted adapter can provide the initial release fixtures. Adding subsequent adapters must not create another public API owner.
+
+## Existing boundary and proposed routes
+
+The inspected `publish.Handler` already owns authenticated `/v1/entities/{id}`, `/projection`, `/subgraph`, `/graph/search` and `/graph/paths` routes. `publishpub.Builder` provides the same projection bytes to internal consumers. Extend that owner, type entitlement map and version registry; do not expose source repositories, raw graph reads or review ledgers directly.
+
+| Surface | Proposed contract |
+| --- | --- |
+| `GET /v1/entities/{id}/projection` | Add `media_appearance` and `live_event` packages through the existing projection builder and verified `projections:pull` scope |
+| `GET /v1/entities/{id}` | Preserve current `read:entity` authorization and canonical/requested IDs; accept registered new types through type entitlements |
+| Proposed `GET /v1/entities/{id}/media` | Person-scoped accepted appearance evidence, bounded pagination, source and occurrence coverage; use `projections:pull` plus person entitlement |
+| Proposed `GET /v1/entities/{id}/news-co-mentions` | Person-scoped evidence-only pairs and permitted article references; distinct from appearances and relationship closeness |
+| Existing graph/subgraph/search/path APIs | Apply Phase 5 exclusions, source permission and tombstone behavior; never bypass entitlement through a new node type |
+
+Proposed evidence-list query parameters: `limit` default 25, range 1–100; opaque `cursor`; allowlisted `source_kind` and `occurrence_status`. Reject unknown filters and invalid limits. Bind the cursor to caller entitlement context, canonical subject, normalized filters, sort key and revision. A superseded cursor returns an explicit `409 cursor_stale`; start again rather than mix revisions. Document these additions in OpenAPI when implemented.
+
+Unauthenticated requests return 401, insufficient scope/type entitlement 403, malformed IDs/filters 400 and missing entities 404. Preserve current unavailable-projection behavior (404 for not distilled/in progress/not satisfied) unless a separately versioned API change is approved. A listing with no accepted items returns 200 with empty items and truthful coverage. Pending or expired data must not be represented as a completed empty historical record.
+
+## Package and read-model ownership
+
+Proposed schemas are `media_appearance.v1`, `live_event.v1`, `person_media.v1` and `person_news_evidence.v1`. Confirm naming against the repository's registry before implementation; the schema version is distinct from mutable data revision. Use existing envelope conventions and byte-identical public/internal builder results.
+
+| Package portion | Source / behavior |
+| --- | --- |
+| Canonical/requested identity and graph node mapping | Entities owner; follow merges, preserve requested IDs for consumer repair |
+| Title, type, time/precision, occurrence and compact card metadata | Facts-owned `media_appearance` or `live_event` cache |
+| Participants, roles, interaction scope and evidence | Current accepted membership/group ledgers joined to chosen facts and converged revisions |
+| Counts and coverage | Separately report accepted participants, unresolved mentions, returned items, totals and truncation |
+| News pair evidence | Current eligible rollup and bounded permitted article manifest; always evidence-only |
+| Source references and descriptions | Current permitted citations and deterministic text; no raw body, transcript, model prompt or review notes |
+
+Use `media_appearance_display` for a future consumer's compact appearance card and the established **`live_event_display`** event card contract. These names describe consumer read models, not new tables to add to Universe in this PR. Full person/company side panels retain their existing contracts. Consumers own App-private notes, collections and relationship context; Universe packages cannot overwrite those fields.
+
+Illustrative response fragment:
+
+```json
+{
+  "schema_version": "person_media.v1",
+  "id": "00000000-0000-4000-8000-000000000011",
+  "requested_id": "00000000-0000-4000-8000-000000000011",
+  "revision": 12,
+  "coverage": "partial",
+  "graph_status": "ready",
+  "items": [{
+    "appearance_id": "00000000-0000-4000-8000-000000000041",
+    "title": "Example Interview",
+    "roles": ["guest"],
+    "occurrence_status": "confirmed",
+    "description": "Example Guest appeared in Example Interview.",
+    "source_urls": ["https://publisher.example/episodes/42"],
+    "evidence_revision": 7
+  }],
+  "total": 3,
+  "truncated": true,
+  "next_cursor": "opaque-fixture-cursor"
+}
+```
+
+Synthetic UUIDs and counts are examples, not created data. The page can show partial source coverage even when all required graph effects for the published data revision are ready. Graph readiness does not imply full source history or resolved identities for every mention.
+
+## Readiness, delivery and removal
+
+```text
+authenticate and check scope; resolve canonical entity and type entitlement
+read current aggregate/cache policy and revision
+require current chosen support and required graph receipt convergence
+build bounded permitted package in publish owner
+return stable schema version, data revision, canonical/requested IDs and coverage
+```
+
+Never use `media_outbox.dispatched_at` as readiness. `publish_ready_revision` advances only after the publication owner verifies its required graph/cache state. On a changed source, expire or suppress affected fields immediately while correction converges; do not serve a previously cached package whose source permission has ended.
+
+Persist delivery intent and stable revision through the shared outbox when a consumer needs push delivery. Consumers apply newer revisions idempotently and process tombstones/removal deltas. Keep the existing transport/authentication owner; do not invent an additional broker or mandatory webhook. If the current projection surface is pull-only, implement and test the removal contract through versioned pulls before describing push as available.
+
+Merge/split, graph lag, revoked sources, retention expiry and invalidated news evidence must invalidate relevant package/cache keys. Responses cannot expose loser IDs as current canonical references or recover purged text from a stale outbox payload. UI card creation and App schema changes remain outside this Universe PR.
+
+## Acceptance and handoff
+
+| Case | Required assertion |
+| --- | --- |
+| Public and internal projection entry points | Identical package bytes for the same canonical entity/revision |
+| Missing auth/scope/type entitlement; entitled person with restricted source | Correct denial/redaction; no raw/private evidence leakage |
+| Alias or merged ID; unresolved/invalidated endpoint | Canonical/requested IDs preserved; pending repair suppressed |
+| Page boundaries; filters; stale cursor; empty list | Stable deterministic sort, no duplicates/skips, explicit restart on revision change |
+| Partial source history and unresolved mentions | Honest coverage and distinct counts, no claim of complete history |
+| Graph lag or stale chosen fact | Package not marked ready from SQL or broker dispatch alone |
+| Source expiry/removal; out-of-order consumer retry | Required deletion/tombstone wins; older package cannot restore it |
+| News and cross-session graph routes | Evidence-only semantics and no relationship-scoring shortcut |
+
+Run handler/entitlement integration tests, package golden fixtures, alias/pagination/removal tests and the full existing publish regression suite appropriate to touched contracts. Handoff includes OpenAPI additions, versioned examples, consumer removal semantics and a precise availability/readiness matrix.
