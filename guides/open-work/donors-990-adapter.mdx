@@ -35,6 +35,29 @@ Every edge carries `title_as_filed` / `gift_count`, `total_usd_known`, `valid_fr
 
 **Not written, on purpose:** people from bare names; `DONOR_TO` from a plain 990 or 990-EZ (only 990-PF filers are classified as foundations today); trustee-derived person → School `DONOR_TO` (the routes are stored relationally, projection is off); anything while a gate is closed.
 
+### Setup: add the three schools first
+
+Donors only mints a gift to a School it can recognise and that is on its allowlist, so the recipients have to exist before the foundation. On a fresh dev, add these as companies:
+
+<Card icon="globe">
+
+```
+stanford.edu
+nyu.edu
+harvard.edu
+```
+
+Each becomes a School entity keyed by domain, and because step 16 fires for schools, each also pulls its own 990 — board members land as `BOARD_MEMBER_OF` and the EIN is attached.
+
+</Card>
+
+Then, once:
+
+1. `make seed ONLY=donor-recipient-aliases` — resolves the three recipients by EIN or domain and seeds the reviewed alias rows. A school it cannot find is skipped, not an error, so it is safe to re-run.
+2. Put the three School entity ids in `DONORS_RECIPIENT_ALLOWLIST` and restart the worker.
+
+Until the Cloud Scheduler jobs exist, the 990 drain, the Donors drain and the edge sweep are triggered by an admin through `/v1/admin/filings/990/drain`, `/v1/admin/donors/drain` and `/v1/admin/donors/edge-sweep` (admin role required). Adding a domain queues the work; those three calls run it.
+
 ### Smoke test 1: add Ford Foundation by domain
 
 <Card icon="globe">
@@ -49,7 +72,7 @@ fordfoundation.org
 
 **What happens.** Preflight classifies it `nonprofit` → step 16 hands `{entity, "Ford Foundation", fordfoundation.org}` to the adapter → ProPublica returns one exact-name hit with filings → EIN `131684331` is attached to the entity → the org is queued → the next 990 drain tick pulls four 990-PF filings (TY2020, 2022–2024; the IRS has no TY2021 XML for Ford) and parses 14,939 grant lines and 24–26 roster rows per filing → the next Donors tick's `feed_scan` turns the four filings into `filing_replay` jobs → gifts to the allowlisted Schools → the next edge sweep writes the graph.
 
-**What to see** (once the gates are open and `DONORS_RECIPIENT_ALLOWLIST` holds the Stanford, NYU and Harvard entity ids):
+**What to see** (gates open, setup above done, drains and edge sweep run):
 
 ```cypher
 MATCH (f:Company {ein: '131684331'})-[r:DONOR_TO]->(s:School)
