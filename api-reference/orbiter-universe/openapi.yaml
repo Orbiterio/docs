@@ -69,9 +69,9 @@ paths:
       operationId: getEntityProjection
       tags:
         - Projections
-      summary: Get the versioned projection for a company or person
+      summary: Get the versioned projection for a company, person or stage production
       description: |
-        Returns `company_projection.v1` or `person_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. Requires scope `projections:pull`.
+        Returns `company_projection.v1`, `person_projection.v1` or `stage_production_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. Requires scope `projections:pull`.
       security:
         - bearerAuth: []
       parameters:
@@ -90,6 +90,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/CompanyProjectionEnvelope'
                   - $ref: '#/components/schemas/PersonProjectionEnvelope'
+                  - $ref: '#/components/schemas/StageProductionProjectionEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -679,6 +680,7 @@ paths:
                     - person
                     - film_tv
                     - music
+                    - stage_production
                   description: |
                     Optional scope; omit to wipe every non-reference node. `music` is the one umbrella — it covers all five music entity types (music_group, music_release_group, music_recording, music_work, music_event) plus the music_release / music_place support rows and the artist / label satellite profiles, because they are one pipeline.
                 target:
@@ -823,6 +825,130 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/entities/reviews/{id}/merge:
+    post:
+      operationId: mergeReviewItem
+      tags:
+        - Admin
+      summary: Merge the pair a review filing names (management plane)
+      description: |
+        A human's half of the merge project: confirms a pending filing and runs the same merge transaction a strong-key clash runs — repoint every reference through the merge inventory, tombstone the loser with `merged_into`, ledger the manifest for undo, delete the loser's graph node — then announces `entity.merged` so sibling features re-derive what moved (a stage production re-lands its profile and redraws its credits under the survivor). The survivor defaults to the filing's proposed survivor; a `survivor_id` must be one of the two parties. A filing already decided answers 409. **Management plane, staff only** — an authenticated admin USER, never a consumer key.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                survivor_id:
+                  type:
+                    - string
+                    - 'null'
+                  format: uuid
+                  description: Overrides the proposed survivor; must be a party to the filing.
+                note:
+                  type:
+                    - string
+                    - 'null'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: The merge as ledgered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewMergeEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/entities/reviews/{id}/reject:
+    post:
+      operationId: rejectReviewItem
+      tags:
+        - Admin
+      summary: Close a review filing as rejected (management plane)
+      description: |
+        The pair stays two entities and the filing is closed with the reviewer's note. **Management plane, staff only.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type:
+                    - string
+                    - 'null'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: The filing as closed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      review_item_id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        enum:
+                          - rejected
+                    required:
+                      - review_item_id
+                      - status
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/Internal'
   /v1/admin/clients:
@@ -2819,6 +2945,508 @@ components:
         - data
         - error
         - meta
+    ProjectionStageProduction:
+      type: object
+      description: The distilled profile; dates are ISO days.
+      properties:
+        title:
+          type:
+            - string
+            - 'null'
+        market:
+          type:
+            - string
+            - 'null'
+          description: '`broadway` or `west_end`.'
+        form:
+          type:
+            - string
+            - 'null'
+        production_kind:
+          type:
+            - string
+            - 'null'
+        season_label:
+          type:
+            - string
+            - 'null'
+        season_scheme:
+          type:
+            - string
+            - 'null'
+        first_preview_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        opening_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        press_night_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        announced_closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        booking_until_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        run_status:
+          type:
+            - string
+            - 'null'
+        run_status_as_of:
+          type:
+            - string
+            - 'null'
+          format: date
+        official_website_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+        poster_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: The re-hosted poster when one exists, else the source's.
+        description:
+          type:
+            - string
+            - 'null'
+        source_names:
+          type: array
+          items:
+            type: string
+        source_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        visibility:
+          type: boolean
+          description: |
+            Derived, never authored: true when the lane extracted the production, a strong source key names it, and a title and market are known. False is an un-enriched shell to hide from search.
+        tombstone:
+          type: boolean
+      required:
+        - title
+        - market
+        - form
+        - production_kind
+        - season_label
+        - season_scheme
+        - first_preview_date
+        - opening_date
+        - press_night_date
+        - announced_closing_date
+        - closing_date
+        - booking_until_date
+        - run_status
+        - run_status_as_of
+        - official_website_url
+        - poster_url
+        - description
+        - source_names
+        - source_urls
+        - visibility
+        - tombstone
+    ProjectionStageEvidence:
+      type: object
+      description: One accepted roster mention behind a credit.
+      properties:
+        mention_id:
+          type: string
+          format: uuid
+        literal_name:
+          type: string
+        literal_role:
+          type: string
+        source:
+          type: string
+          description: '`pilot_submission`, `playbill`, `ibdb`…'
+        quote:
+          type: string
+        identity_revision:
+          type: integer
+        accepted_at:
+          type: string
+          format: date-time
+      required:
+        - mention_id
+        - literal_name
+        - literal_role
+        - source
+        - quote
+        - identity_revision
+        - accepted_at
+    ProjectionStageCredit:
+      type: object
+      description: One producer/production pair as the credit ledger holds it.
+      properties:
+        credit_id:
+          type: string
+          format: uuid
+        universe_producer_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the producing person or company.
+        producer_type:
+          type: string
+          enum:
+            - person
+            - company
+        producer_name:
+          type:
+            - string
+            - 'null'
+        billing_tier:
+          type: string
+          enum:
+            - lead_producer
+            - producer
+            - co_producer
+            - associate_producer
+            - executive_producer
+            - in_association
+            - unclassified
+        source_role:
+          type: string
+          description: The billing heading as the source printed it.
+        description:
+          type: string
+        identity_confidence:
+          type: number
+        active:
+          type: boolean
+          description: False is a withdrawn credit; retire what you hold.
+        version:
+          type: integer
+          description: The ledger's desired version; matches the edge's `stage_credit_version` once written.
+        graph_status:
+          type: string
+          enum:
+            - written
+            - pending
+            - retracted
+        updated_at:
+          type: string
+          format: date-time
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectionStageEvidence'
+      required:
+        - credit_id
+        - universe_producer_uuid
+        - producer_type
+        - producer_name
+        - billing_tier
+        - source_role
+        - description
+        - identity_confidence
+        - active
+        - version
+        - graph_status
+        - updated_at
+        - evidence
+    ProjectionStageCoverage:
+      type: object
+      description: What a consumer must show as incomplete.
+      properties:
+        credit_coverage:
+          type: string
+          description: '`full`, `partial` or `unknown`.'
+        credit_finality:
+          type: string
+          description: '`provisional` until the roster is final.'
+        input_revision:
+          type:
+            - string
+            - 'null'
+        extraction_revision:
+          type:
+            - string
+            - 'null'
+        accepted_mentions:
+          type: integer
+        needs_review_mentions:
+          type: integer
+        unresolved_mentions:
+          type: integer
+        rejected_mentions:
+          type: integer
+        graph_ready:
+          type: boolean
+          description: True only when every active credit's edge is written at its desired version.
+        pending_credits:
+          type: integer
+      required:
+        - credit_coverage
+        - credit_finality
+        - input_revision
+        - extraction_revision
+        - accepted_mentions
+        - needs_review_mentions
+        - unresolved_mentions
+        - rejected_mentions
+        - graph_ready
+        - pending_credits
+    ProjectionStageDerivativeWork:
+      type: object
+      description: One work based on the production, per Wikidata P144 / P4969.
+      properties:
+        adaptation_id:
+          type: string
+          format: uuid
+        universe_derivative_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the derivative (a film today).
+        derivative_type:
+          type: string
+          enum:
+            - film_tv
+            - stage_production
+        derivative_name:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        derivation_type:
+          type: string
+          enum:
+            - adaptation
+            - remake
+            - sequel
+            - retelling
+            - translation
+        fidelity:
+          type:
+            - string
+            - 'null'
+          enum:
+            - faithful
+            - loose
+            - substantially_reworked
+            - null
+        description:
+          type: string
+          description: The edge sentence; empty until the edge is drawn.
+        source_property:
+          type: string
+          description: The authority the fact was read from, `wikidata:P144` today.
+        derivative_qid:
+          type: string
+        work_qid:
+          type: string
+          description: The Wikidata work item the production was matched to.
+        source_year:
+          type:
+            - integer
+            - 'null'
+        derivative_year:
+          type:
+            - integer
+            - 'null'
+        graph_status:
+          type: string
+          enum:
+            - pending
+            - written
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - adaptation_id
+        - universe_derivative_uuid
+        - derivative_type
+        - derivative_name
+        - imdb_id
+        - derivation_type
+        - fidelity
+        - description
+        - source_property
+        - derivative_qid
+        - work_qid
+        - source_year
+        - derivative_year
+        - graph_status
+        - updated_at
+    ProjectionStageSourceWork:
+      type: object
+      description: One work the production is based on.
+      properties:
+        adaptation_id:
+          type: string
+          format: uuid
+        universe_source_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the source work (a film today).
+        source_type:
+          type: string
+          enum:
+            - film_tv
+            - stage_production
+        source_name:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        derivation_type:
+          type: string
+          enum:
+            - adaptation
+            - remake
+            - sequel
+            - retelling
+            - translation
+        fidelity:
+          type:
+            - string
+            - 'null'
+          enum:
+            - faithful
+            - loose
+            - substantially_reworked
+            - null
+        description:
+          type: string
+        source_property:
+          type: string
+        derivative_qid:
+          type: string
+          description: The production's Wikidata work item.
+        work_qid:
+          type: string
+          description: The source's Wikidata item.
+        source_year:
+          type:
+            - integer
+            - 'null'
+        derivative_year:
+          type:
+            - integer
+            - 'null'
+        graph_status:
+          type: string
+          enum:
+            - pending
+            - written
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - adaptation_id
+        - universe_source_uuid
+        - source_type
+        - source_name
+        - imdb_id
+        - derivation_type
+        - fidelity
+        - description
+        - source_property
+        - derivative_qid
+        - work_qid
+        - source_year
+        - derivative_year
+        - graph_status
+        - updated_at
+    StageProductionProjection:
+      type: object
+      description: |
+        `stage_production_projection.v1` — a Broadway / West End production and its producing credits, served from the credit and evidence ledgers. Every credit the ledger holds is listed, withdrawn ones with `active: false` so a consumer can retire what it stored; a credit's `graph_status` says whether its `PRODUCED` edge is drawn. The `coverage` block is the honesty contract: `credit_coverage` and `credit_finality` name what the roster is, and `graph_ready` is false while any active credit is short of the graph. Breaking changes require a new schema_version, never an edit.
+      properties:
+        schema_version:
+          type: string
+          enum:
+            - stage_production_projection.v1
+        run_id:
+          type: string
+          description: Deterministic per (production, source state).
+        universe_production_uuid:
+          type: string
+          format: uuid
+          description: Canonical id; also the graph node id.
+        universe_node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source_updated_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        projection_generated_at:
+          type: string
+          format: date-time
+        production:
+          $ref: '#/components/schemas/ProjectionStageProduction'
+        credits:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectionStageCredit'
+        coverage:
+          $ref: '#/components/schemas/ProjectionStageCoverage'
+        derivative_works:
+          type: array
+          description: |
+            The films and shows based on this production as Wikidata ties them (stage D52), drawn or not; additive to v1. `graph_status` says whether the `BASED_ON` edge (derivative → this production) is in the graph.
+          items:
+            $ref: '#/components/schemas/ProjectionStageDerivativeWork'
+        based_on:
+          type: array
+          description: |
+            The works this production is based on, per Wikidata P144 on its work item (a film today, D53); additive to v1. `graph_status` says whether the `BASED_ON` edge (this production → source) is in the graph.
+          items:
+            $ref: '#/components/schemas/ProjectionStageSourceWork'
+      required:
+        - schema_version
+        - run_id
+        - universe_production_uuid
+        - universe_node_uuid
+        - source_updated_at
+        - projection_generated_at
+        - production
+        - credits
+        - coverage
+        - derivative_works
+        - based_on
+    StageProductionProjectionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageProductionProjection'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
     SubgraphNode:
       type: object
       required:
@@ -4107,6 +4735,58 @@ components:
         - data
         - error
         - meta
+    ReviewMergeEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            merge_id:
+              type: string
+              format: uuid
+            survivor_id:
+              type: string
+              format: uuid
+            loser_id:
+              type: string
+              format: uuid
+            review_item_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum:
+                - applied
+            moved:
+              type: object
+              description: Rows repointed to the survivor, by table.
+              additionalProperties:
+                type: integer
+            dropped:
+              type: object
+              description: Rows the survivor already held, by table.
+              additionalProperties:
+                type: integer
+            created_at:
+              type: string
+              format: date-time
+          required:
+            - merge_id
+            - survivor_id
+            - loser_id
+            - review_item_id
+            - status
+            - moved
+            - dropped
+            - created_at
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
     ConsumerClient:
       type: object
       description: A registered consumer client. Never carries key material.
@@ -4360,6 +5040,12 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     NotFound:
       description: The resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: The request conflicts with the resource's current state.
       content:
         application/json:
           schema:
