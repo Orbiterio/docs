@@ -25,8 +25,8 @@ servers:
 tags:
   - name: Account Verification
     description: |
-      Identity verification on signup — a new user connects GitHub or
-      LinkedIn once; the backend compares the provider name with the
+      Identity verification on signup — a new user connects GitHub,
+      LinkedIn, or X once; the backend compares the provider name with the
       WorkOS signup name before person resolution/enrichment runs.
   - name: Activities
     description: |
@@ -73,8 +73,6 @@ tags:
     description: Email workspace profiles grouping connected accounts.
   - name: Experiences
     description: A person's work and education history. Requires a verified WorkOS access token.
-  - name: FalkorDB
-    description: Graph-instance credentials CRUD. Requires a verified WorkOS access token.
   - name: Files
     description: |
       File-ingestion pipeline. Register a GCS object and the worker
@@ -107,6 +105,8 @@ tags:
     description: Investment-thesis building and pitch-to-thesis vector matching (ported from Xano; public endpoints under optional auth).
   - name: Persons
     description: Person browse and detail. Requires a verified WorkOS access token.
+  - name: Relationships
+    description: The "How I Know <name>" relationship interview and its record. Requires a verified WorkOS access token.
   - name: Phones
     description: Phones on persons/companies + private notes. Requires a verified WorkOS access token.
   - name: Teams
@@ -526,6 +526,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
       requestBody:
         required: true
         content:
@@ -574,6 +575,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
         - name: code
           in: query
           required: false
@@ -7724,6 +7726,114 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /relationships/{person_id}:
+    get:
+      tags:
+        - Relationships
+      summary: Get the caller's relationship record for a person
+      description: |
+        Returns the caller's "How I Know" record for the person: the running
+        or finished interview transcript, the reflection, and the nuggets.
+        `data` is null when no interview has started yet; that is a normal
+        state, not a 404.
+      operationId: getRelationship
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PersonID'
+      responses:
+        '200':
+          description: The record, or null data when none exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipOrNullEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    put:
+      tags:
+        - Relationships
+      summary: Upsert the caller's relationship record for a person
+      description: |
+        Creates or updates the record keyed by (caller, person). Partial
+        semantics: a field absent from the body is left untouched; a present
+        field replaces the stored value. `relationship_nuggets: null` clears
+        the nuggets. The caller's contact for the person, when they hold one,
+        is stamped on the row. Returns the full record.
+      operationId: upsertRelationship
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PersonID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertRelationshipRequest'
+      responses:
+        '200':
+          description: The full record after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /relationships/{person_id}/interview:
+    post:
+      tags:
+        - Relationships
+      summary: Run one turn of the relationship interview
+      description: |
+        Pure compute: nothing is persisted. The frontend sends the running
+        transcript (or the literal `(no prior turns yet)` for the opening
+        turn) and the previous turn's summary, and saves the result through
+        the PUT afterwards.
+
+        The interviewer asks one plain-text question per turn, skipping what
+        the person's card and the caller's contact note already say. It never
+        closes before 8 exchanges and always closes by 14; in between it
+        closes as soon as every coverage area is answered. On `ready: true`,
+        `summary` is the closing reflection (two to four short paragraphs in
+        the second person), `next_question` is empty, and `nuggets` is
+        complete.
+      operationId: relationshipInterviewTurn
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PersonID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InterviewRequest'
+      responses:
+        '200':
+          description: The next question, or the closing reflection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewTurnEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /work-experiences:
     get:
       tags:
@@ -8178,113 +8288,6 @@ paths:
                 $ref: '#/components/schemas/StatusEnvelope-2'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /falkordb:
-    get:
-      tags:
-        - FalkorDB
-      summary: Get all falkordb
-      description: |
-        Returns instance rows. `mode=admin` returns every row; `mode=user`
-        (default) returns only the authenticated user's own. Credentials are included in
-        the response by design.
-      operationId: listFalkorDBInstances
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: mode
-          required: false
-          schema:
-            type: string
-            enum:
-              - admin
-              - user
-            default: user
-      responses:
-        '200':
-          description: The visible instance rows.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ListFalkorDBInstancesEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
-    post:
-      tags:
-        - FalkorDB
-      summary: Create a falkordb
-      description: |
-        Inserts an instance owned by the authenticated user (user_id is
-        taken from the session, not the body). `mode` tags the row.
-      operationId: createFalkorDBInstance
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateFalkorDBInstanceRequest'
-      responses:
-        '201':
-          description: The created instance.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FalkorDBInstanceEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /falkordb/{id}:
-    delete:
-      tags:
-        - FalkorDB
-      summary: Delete a falkordb
-      description: |
-        Deletes an instance by id. `mode=admin` deletes any row; `mode=user`
-        (default) deletes only if the row belongs to the authenticated user. Unknown id
-        (or not owned, in user mode) returns 404.
-      operationId: deleteFalkorDBInstance
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-            format: int64
-        - in: query
-          name: mode
-          required: false
-          schema:
-            type: string
-            enum:
-              - admin
-              - user
-            default: user
-      responses:
-        '200':
-          description: Deleted.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EmptyEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
   /files:
@@ -9657,7 +9660,7 @@ paths:
         - Companies
       summary: Create a company
       description: |
-        Resolve a company from its website or LinkedIn/Crunchbase company page and add it to the authenticated user's contacts. A company we do not already hold is created through the enrichment provider and written here under the id it assigns. Idempotent: repeating the call returns the same company with company_created and contact_added false.
+        Resolve a company from its website or LinkedIn/Crunchbase company page and add it to the authenticated user's contacts. A company we do not already hold is created through the enrichment provider and written here under the id it assigns. The form's phone is stored as a public number on the company and linked to the contact; its note is stored on the contact. Idempotent: repeating the call returns the same company with company_created and contact_added false.
       security:
         - bearerAuth: []
       requestBody:
@@ -9765,6 +9768,41 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /companies/{company_id}/founders:
+    get:
+      operationId: listCompanyFounders
+      tags:
+        - Companies
+      summary: List a company's founders
+      description: |
+        Powers the company sheet's founders section. Returns the people the
+        enrichment provider reports as the company's founders in the order they were linked, each with the lean person
+        card nested under `person`. The list is empty until the company's
+        package has been synced, and `meta.total` is its length.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: company_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The company's founders; empty when none are known.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCompanyFoundersEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /company-financials:
     get:
       operationId: getCompanyFinancials
@@ -10856,6 +10894,7 @@ components:
           enum:
             - github
             - linkedin
+            - x
             - null
           description: Provider of the latest verification attempt, if any.
         safe_reason:
@@ -18310,6 +18349,190 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    RelationshipNuggets:
+      type: object
+      description: |
+        The distilled memory of the relationship: short phrases per key,
+        null where unknown, and up to three concrete milestones.
+      required:
+        - how_met
+        - superpower
+        - kryptonite
+        - cadence
+        - trust
+        - milestones
+      properties:
+        how_met:
+          type:
+            - string
+            - 'null'
+        superpower:
+          type:
+            - string
+            - 'null'
+        kryptonite:
+          type:
+            - string
+            - 'null'
+        cadence:
+          type:
+            - string
+            - 'null'
+        trust:
+          type:
+            - string
+            - 'null'
+        milestones:
+          type: array
+          items:
+            type: string
+    Relationship:
+      type: object
+      required:
+        - id
+        - user_id
+        - person_id
+        - contact_id
+        - transcript
+        - relationship_summary
+        - interview_complete
+        - relationship_nuggets
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        contact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The caller's contact for the person, when they hold one.
+        transcript:
+          type: string
+          description: 'Line-formatted `User: …` / `Assistant: …` turns.'
+        relationship_summary:
+          type: string
+          description: The running summary, or the closing reflection once complete. Empty when none yet.
+        interview_complete:
+          type: boolean
+        relationship_nuggets:
+          oneOf:
+            - $ref: '#/components/schemas/RelationshipNuggets'
+            - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RelationshipOrNullEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/Relationship'
+            - type: 'null'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpsertRelationshipRequest:
+      type: object
+      required:
+        - transcript
+      properties:
+        transcript:
+          type: string
+          maxLength: 50000
+          description: The running transcript. Always replaces the stored value.
+        relationship_summary:
+          type: string
+          maxLength: 4000
+          description: Replaces the stored summary when present.
+        interview_complete:
+          type: boolean
+          description: Replaces the stored flag when present.
+        relationship_nuggets:
+          oneOf:
+            - $ref: '#/components/schemas/RelationshipNuggets'
+            - type: 'null'
+          description: Replaces the stored nuggets when present; null clears them.
+    RelationshipEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Relationship'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InterviewRequest:
+      type: object
+      required:
+        - transcript
+      properties:
+        transcript:
+          type: string
+          maxLength: 50000
+          description: The running transcript, or the literal `(no prior turns yet)` on the opening turn.
+        current_summary:
+          type: string
+          maxLength: 4000
+          description: The summary the previous turn returned, when any.
+    InterviewTurn:
+      type: object
+      required:
+        - ready
+        - summary
+        - next_question
+        - exchange_count
+        - nuggets
+      properties:
+        ready:
+          type: boolean
+          description: True when the interview closed this turn.
+        summary:
+          type: string
+          description: Best-guess summary so far; the closing reflection when ready.
+        next_question:
+          type: string
+          description: The single next question, plain text. Empty when ready.
+        exchange_count:
+          type: integer
+          description: User answers in the transcript so far.
+        nuggets:
+          oneOf:
+            - $ref: '#/components/schemas/RelationshipNuggets'
+            - type: 'null'
+    InterviewTurnEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/InterviewTurn'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     CompanyRef-2:
       type: object
       required:
@@ -19543,99 +19766,6 @@ components:
         meta:
           $ref: '#/components/schemas/Meta'
       additionalProperties: false
-    FalkorDBInstance:
-      type: object
-      required:
-        - id
-        - mode
-        - graph_name
-        - user_name
-        - password
-        - host
-        - port
-        - db_connection
-        - created_at
-      description: One graph-instance credentials row. Credentials are returned by design.
-      properties:
-        id:
-          type: integer
-          format: int64
-        user_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
-        mode:
-          type: string
-          enum:
-            - admin
-            - user
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    ListFalkorDBInstancesEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/FalkorDBInstance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-    CreateFalkorDBInstanceRequest:
-      type: object
-      description: |
-        Editable instance fields. The owner (user_id) is taken from the
-        session, never the body. mode defaults to 'user' when omitted.
-      properties:
-        mode:
-          type: string
-          enum:
-            - admin
-            - user
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-    FalkorDBInstanceEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/FalkorDBInstance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
     FileResponse:
       type: object
       required:
@@ -21055,9 +21185,21 @@ components:
           oneOf:
             - $ref: '#/components/schemas/CompanyContactNested'
             - type: 'null'
+    CompanyCreatePhone:
+      type: object
+      required:
+        - phone_number
+      properties:
+        phone_number:
+          type: string
+          description: Normalized to E.164 before it is stored.
+        phone_extension:
+          type:
+            - integer
+            - 'null'
     CompanyCreateRequest:
       type: object
-      description: Body for POST /companies.
+      description: Body for POST /companies. Strings are trimmed server-side.
       required:
         - company_name
         - domain
@@ -21068,6 +21210,15 @@ components:
           type: string
           description: |
             The company's website, with or without a scheme (acme.com, https://acme.com), or its LinkedIn/Crunchbase company page (https://www.linkedin.com/company/acme).
+        phone:
+          oneOf:
+            - $ref: '#/components/schemas/CompanyCreatePhone'
+            - type: 'null'
+          description: Stored as a public number on the company and linked to the caller's contact.
+        note:
+          type: string
+          maxLength: 10000
+          description: Stored on the caller's company contact when non-blank. A blank value leaves an existing note untouched.
     CompanyCreate:
       type: object
       description: Result of POST /companies.
@@ -21414,6 +21565,68 @@ components:
         funding:
           type: array
           items: {}
+    CompanyFounderPerson:
+      type: object
+      description: The lean person card nested under a founder row.
+      required:
+        - id
+        - full_name
+        - avatar
+        - current_title
+        - bio
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+        bio:
+          type:
+            - string
+            - 'null'
+    CompanyFounder:
+      type: object
+      description: One founder link with the person it names, keyed by its table name.
+      required:
+        - id
+        - company_id
+        - person_id
+        - person
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        person:
+          $ref: '#/components/schemas/CompanyFounderPerson'
+    ListCompanyFoundersEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompanyFounder'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     FinancialData:
       type: object
       description: |
@@ -21481,6 +21694,11 @@ components:
           description: Upstream revenue object, or null.
         acquired:
           type: boolean
+        acquired_by:
+          type:
+            - string
+            - 'null'
+          description: The acquirer as the enrichment provider names it.
         acquired_by_permalink:
           type:
             - string
@@ -21687,6 +21905,11 @@ components:
         company_id:
           type: string
           format: uuid
+        note:
+          type:
+            - string
+            - 'null'
+          description: The caller's private note on the contact; null until one is saved.
         company:
           $ref: '#/components/schemas/CompanyNested'
         contact_count:
@@ -22137,6 +22360,13 @@ components:
         type: string
         format: uuid
       description: User id (UUIDv7).
+    PersonID:
+      in: path
+      name: person_id
+      required: true
+      schema:
+        type: string
+        format: uuid
     SubscriptionID:
       in: path
       name: id
