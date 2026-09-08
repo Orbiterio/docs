@@ -3186,14 +3186,14 @@ Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, 
 
 The [closed build output manifest](/guides/open-work/roadmap/broadway-co-producers#theatre-graph-output-manifest) is the developer checklist; every relationship below has complete property data, with reused endpoint ownership documented in Node Types.
 
-**Three new relationship names are proposed:** `PRODUCTION_OF`, `STAGED_AT` and `ADAPTED_FROM`. Existing names cover producing, creative authorship and awards. Reusing a name does not make its current movie/music writer valid for new endpoint types.
+**Three new relationship names are proposed:** `PRODUCTION_OF`, `STAGED_AT` and `BASED_ON` (which replaces the earlier `ADAPTED_FROM` proposal, 2026-09-07). Existing names cover producing, creative authorship and awards. Reusing a name does not make its current movie/music writer valid for new endpoint types.
 
 | Relationship | Allowed direction / endpoints | Weight | Initial scoring / release |
 | --- | --- | --- | --- |
 | **`PRODUCED`** — stage extension | `Person or Company → Stage_Production` | Agreed **12 / 16 / 22 / 28 / 35** | Direct credit; first-release backbone |
 | **`PRODUCTION_OF`** — new | `Stage_Production → Work:Theatrical_Work` | Proposed **50** | Evidence context, excluded; optional work slice |
 | **`STAGED_AT`** — new | `Stage_Production → Place:Venue:Theatre` | Proposed **50** | Evidence context, excluded; optional venue slice |
-| **`ADAPTED_FROM`** — new | `Work:Theatrical_Work → independently resolved source work` | Proposed **55** | Evidence context, excluded; later work-lineage slice |
+| **`BASED_ON`** — new, replaces `ADAPTED_FROM` | `derivative work → source work` across `Film_TV`, `Stage_Production` and `Work:Theatrical_Work` | Proposed **55** | Evidence context, excluded; adaptation slice after 3b (Mark 2026-09-07) |
 | **`WROTE`** — theatre extension | `Person or Music_Group → Work:Theatrical_Work` | Proposed **10**, existing music precedent | Authorship context, excluded initially |
 | **`COMPOSED`** — theatre extension | Same creator endpoints → `Work:Theatrical_Work` | Proposed **8**, existing music precedent | Authorship context, excluded initially |
 | **`WROTE_LYRICS`** — theatre extension | Same creator endpoints → `Work:Theatrical_Work` | Proposed **12**, existing music precedent | Authorship context, excluded initially |
@@ -3541,9 +3541,97 @@ If a source defines a transfer as a new production, create a separate canonical 
 
 <a id="stage-adapted-from" />
 
+<a id="based-on" />
+
+### <span style={{ color: "#16a34a", fontWeight: 600 }}>BASED_ON</span>
+
+**New, adaptation slice after Broadway 3b (Mark, 2026-09-07). Replaces the `ADAPTED_FROM` proposal below, which stays for history.** **Pattern:** `derivative work → BASED_ON → source work`, one direction only: the edge runs from the thing that was made later to the thing it was made from. Wikidata's "based on" (P144) is the same fact read from the derivative side and "derivative work" (P4969) the same fact read from the source side; the graph keeps one edge and reads it either way. **Proposed weight: 55; evidence layer, excluded from scoring.** Owner: an adaptation lane that reads Wikidata for the fact and the film gate for the film endpoint.
+
+Endpoints: any pair among `Entity:Film_TV`, `Entity:Stage_Production` and `Entity:Work:Theatrical_Work`, each independently resolved through its own gate. A film reaches the graph through its IMDb id, which the Wikidata film item carries (P345); a stage work through the theatre lane. A source that has no supported identity (a novel, a short story) stays SQL evidence until a supported type exists; never invent a node for it and never use `SAME_AS`. A chain is separate edges: the 2021 film has its own edge to the 1961 film and its own edge to the 1957 musical, each described on its own.
+
+**What decides the edge and what writes the sentence are different things.** Wikidata decides whether the edge exists, its direction and the IMDb id it points at. A grounded model call writes only the `description`, from the two endpoint nodes and the Wikidata qualifiers plus web search for fidelity, and returns `SKIP` when the input is not a derivative-work relation; it never decides the edge. The description characterizes the relationship, not the endpoints: both nodes already carry their own descriptions, so restating creators, venues or awards on the edge is duplication that goes stale twice. It answers what kind of derivation, how faithful, what changed, who carried over, and the time gap, in one sentence of 25 to 45 words that reads correctly when a system sees only the edge and the two node labels.
+
+| Property | Type / requirement | Contract |
+| --- | --- | --- |
+| `derivation_type` | enum · required | `adaptation`, `remake`, `sequel`, `retelling`, `translation`; the query-side twin of the sentence. The model emits both as JSON |
+| `fidelity` | enum · optional | `faithful`, `loose`, `substantially_reworked`; empty when search could not establish it |
+| `source_property` | string · required | `wikidata:P144` today; another authority names itself |
+| `source_qid` / `target_qid` | string · required | The Wikidata items the fact was read from |
+| `chosen_fact_id` | UUID string · required | The elected relation fact, one per (derivative, source) pair |
+| `years` | object · optional | `{ "source": 1957, "derivative": 1961 }` as Wikidata states them; the edge sentence names both |
+| `description` | string · required | The one-sentence relationship description below; `description_generated_at` beside it |
+
+**Description contract** (system prompt for the writer, verbatim):
+
+```text
+You write the "description" property for a derivative-work edge in a knowledge graph. The edge runs from a target work to the source work it is based on (Wikidata P144). Input is JSON with both endpoint nodes (labels, types, dates, creators) and any Wikidata qualifiers on the relationship.
+
+Write one sentence, 25 to 45 words, describing the relationship itself. It must read correctly on its own when a system sees only this edge and the two node labels.
+
+Cover, in this priority: (1) the kind of derivation (adaptation, remake, sequel, loose retelling, translation, stage-to-screen, etc.) with both years; (2) fidelity to the source and the principal changes (medium, setting, structure, material cut or added); (3) continuity of creators across the two works, if any; (4) nothing else.
+
+Rules:
+- Do not restate facts that belong to a node (full creator lists, premiere venue, awards, cast). Name a person only when their involvement in both works is the point.
+- Use only the input or facts verified by web search. Use search to establish fidelity and changes, which Wikidata rarely encodes. Never invent. If fidelity cannot be established, describe the derivation type and years only.
+- Wikidata values win over web results unless the web source is authoritative and the Wikidata value is clearly wrong.
+- Plain text, present tense, no subject restated ("Faithful 1961 screen adaptation of..." not "The 1961 film is a faithful..."). No markdown, no citations, no em-dashes, no evaluative adjectives beyond fidelity terms (faithful, loose, substantially reworked).
+- If the target is based on multiple sources, describe only the edge to the source given in the input.
+- If the input is not a derivative-work edge, return the single word: SKIP.
+
+Output only the sentence.
+```
+
+The model emits `{ "derivation_type": ..., "fidelity": ..., "description": ... }`; the sentence is for humans and LLM context, the enums are for queries. Run the writer once per edge, never once per chain, so each edge in `2021 film → 1961 film → 1957 musical` gets its own scoped sentence.
+
+**Worked example** — `West Side Story (1961 film) → BASED_ON → West Side Story (1957 musical)`:
+
+```json
+{
+  "edge_type": "BASED_ON",
+  "from": {
+    "node_uuid": "00000000-0000-4000-8000-000000000021",
+    "entity_id": "00000000-0000-4000-8000-000000000021",
+    "node_family": "Film_TV",
+    "label": "West Side Story (1961)"
+  },
+  "to": {
+    "node_uuid": "00000000-0000-4000-8000-000000000022",
+    "entity_id": "00000000-0000-4000-8000-000000000022",
+    "node_family": "Stage_Production",
+    "label": "West Side Story (Broadway, Winter Garden Theatre, 1957)"
+  },
+  "properties": {
+    "uuid": "00000000-0000-4000-8000-000000000501",
+    "created_at": 1704067200000,
+    "updated_at": 1704067200000,
+    "description_generated_at": 1704067200000,
+    "source": "adaptations",
+    "source_property": "wikidata:P144",
+    "source_qid": "Q1064710",
+    "target_qid": "Q1064717",
+    "source_urls": [
+      "https://www.wikidata.org/wiki/Q1064710"
+    ],
+    "chosen_fact_id": "00000000-0000-4000-8000-000000000502",
+    "projection_revision": 1,
+    "policy_version": "adaptations-v1",
+    "active": true,
+    "weight": 55,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "derivation_type": "adaptation",
+    "fidelity": "faithful",
+    "years": { "source": 1957, "derivative": 1961 },
+    "description": "Faithful 1961 screen adaptation of the 1957 stage musical, co-directed by original choreographer Jerome Robbins with Robert Wise; retains the score and book, reorders some songs, and moves the action to real New York locations."
+  }
+}
+```
+
+The 2021 film gets two edges of its own: one to the 1961 film (`remake`, and the sentence says it returned to the stage text rather than remaking the earlier film) and one to the 1957 musical (`adaptation`). Neither edge inherits the other's sentence.
+
 ### <span style={{ color: "#16a34a", fontWeight: 600 }}>ADAPTED_FROM</span>
 
-**New, later optional slice. Pattern:** `Entity:Work:Theatrical_Work → ADAPTED_FROM → resolved source work`. **Proposed weight: 55; evidence layer, excluded from scoring.** Owner: facts-elected work-lineage claim and stage work replay.
+**Superseded by [`BASED_ON`](#based-on) on 2026-09-07; kept for the record of the earlier proposal.** **Was: New, later optional slice. Pattern:** `Entity:Work:Theatrical_Work → ADAPTED_FROM → resolved source work`. **Proposed weight: 55; evidence layer, excluded from scoring.** Owner: facts-elected work-lineage claim and stage work replay.
 
 An explicit adaptation attribution, such as the [official Tony description's distinction between a source book and a film](https://www.tonyawards.com/shows/the-outsiders/), supports a candidate lineage claim. It does not make those objects identical.
 
