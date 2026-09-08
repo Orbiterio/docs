@@ -1,0 +1,93 @@
+---
+title: "ORBIT-1863 QA Round 8"
+sidebarTitle: "QA ROUND 8"
+description: "Eighth QA round on the Broadway co-producer stage waterfall (D62 follow-up): both round-7 findings verified fixed, three new checks pass, no new actionable findings."
+icon: "clipboard-check"
+---
+
+**Result: PASS for the D62 follow-up. No new actionable findings.** Both round-7 findings are corrected, their three original reproductions pass, and three additional checks pass.
+
+Reviewed local HEAD **`7bad41cc40a7bb90bc1867e7a5fb889f6b51a367`** on `ORBIT-1863/stage-music-trigger`, retaining `main` at `bf21dce32e18f0165b3d1e74ee4fbc25826afc6c` as the full-stack base. This is a focused continuation of the previous stack review: the complete three-file D62 delta since `e18c2fc`, with surrounding credit persistence and discovery code. The reported commit is present locally; the remote push was not independently queried.
+
+No repository code was edited, migration applied, PR opened or preview restarted. The checkout remains clean. The three contracts were previously read in the requested order, and their changes checked in that order: `CLAUDE.md` and the schema skill are unchanged; D62 was read in full.
+
+## Findings
+
+None in the reviewed D62 changes. The coverage limits below remain; this result is not a live-database or deployment verification.
+
+## Round-7 disposition
+
+| Previous finding | Result | Evidence |
+|---|---|---|
+| Q7-1 — character spelling creates an unranked duplicate | **Pass.** | `internal/features/enrichment/stage_person_credits.go:169` writes page matches under the stored spelling. Existing additional variants are collected separately at line 144 and demoted by ID at line 203. Both original capitalization/demotion reproductions pass. |
+| Q7-2 — overlapping sources consume separate rank slots | **Pass.** | `internal/features/enrichment/stage_person_credits.go:116` coalesces page credits before ranking. `mergePersonCredit` at line 256 fills missing metadata and combines distinct award entries while retaining the first row's source and URL. Both original cap-one/cap-two subcases pass. |
+
+The saved QA7 overlay passes unchanged against HEAD. The committed versions also strengthen assertions: stored spelling is retained, no extra row is inserted, and the second source's award contributes to the shared credit.
+
+## Additional verification
+
+Three temporary tests were added outside the repository:
+
+- **Pass — `TestQA8LegacyCaseVariantsStayOutsideOneCap`:** existing spelling duplicates without drawn edges are demoted both when the credit appears on the current page and when it is persisted-only. A repeated pass does not promote a variant or create another spelling.
+- **Pass — `TestQA8VariantDemotionFailurePreventsPromotionAndRetries`:** a failed variant cleanup returns an error before filing or claiming a new winner. After the failure clears, retry demotes the legacy duplicates and restores the single selected credit.
+- **Pass — `TestQA8CoalescedEvidenceRetainsFirstPageProvenance`:** the second page supplies missing billing, opening date and an award; the resulting row is ranked correctly and the one claim retains the first page's source and URL.
+
+These checks exercise the recorder and claim-envelope path using deterministic test doubles. They do not execute PostgreSQL statements or graph writes.
+
+## A–H checks and limits
+
+| Check | Result |
+|---|---|
+| A — isolation, routes, handlers, validation | **Pass in reviewed changes.** Depguard reports zero issues. No route, handler, authentication or request-body schema changed in D62. OpenAPI lint retains four known warnings. |
+| B — identity | **Pass in reviewed changes.** Changes reconcile credit keys for already-resolved production IDs; entity lookups, collision handling and domain policy are unchanged. Stored spelling is reused at `stage_person_credits.go:169`. |
+| C — pipeline | **Pass in reviewed changes.** Coalescing occurs after person pages are ledgered in the existing discovery loop at `internal/features/enrichment/stage_discovery.go:373`. Claims still run after credit writes and only for selected rows at `stage_person_credits.go:223`. No new typed-cache write or chosen-relation bypass was introduced. |
+| D — migrations/config | **Pass for this delta.** No migration, schema or config field changed, so no new schema-skill or `.env.example` entry is required. |
+| E — tests | **Pass for executed checks; concern for unexecuted integration coverage.** Full Go suite, original QA7 overlay and new QA8 checks pass. `TEST_DB_DSN` is unset, so database integration tests skip. |
+| F — comments | **Pass.** Full `main...HEAD` scan of changed non-generated Go comment blocks finds zero blocks above two lines. No SQL or migration prose changed in D62. |
+| G — fencing, concurrency and recovery | **Pass for reviewed recovery paths; live concurrency unverified.** Variant demotions execute in the first pass at `stage_person_credits.go:197`; an error returns before promotions. Existing lease/checkpoint code is unchanged. No live contention or graph-race test was run. |
+| H — accepted caveats | **Pass.** None re-reported as new. D62's first-page provenance policy, D61's repeat-normalization behavior, D59's page-over-stored precedence and retained drawn edges, and D57's in-flight paid-call accounting gap remain accepted. |
+
+Other accepted choices and caveats remain excluded: origin-run allowance accounting, Parallel's price proxy, duplicate survivor distill, five-hold evidence retention, preview-date acceptance, SM-03 coverage, D55's separate payload/observation transactions, D52 source-year semantics, deferred work types, Sue Frost verification and the count-then-admit root-budget limit.
+
+The earlier integration/coverage concerns remain carried forward: real-schema persistence and lease contention, merge redelivery, and the adaptation/cast-detector/manual-drain cases in previous reports. This follow-up did not repeat the entire initial stack audit or perform live provider calls.
+
+Per Mark's update, `announced_at` and `opened_date` remain pending before preview restart. Neither migration was applied or independently verified against a live database.
+
+## Lint and test output summary
+
+Commands ran in `orbiter-universe`. Output logs are external QA artifacts under `~/Downloads/ORBIT-1863-QA/`.
+
+| Command/check | Result | Output |
+|---|---|---|
+| `golangci-lint run ./internal/...` | **PASS**, exit 0: `0 issues.` | `qa8-golangci.log` |
+| `go test -count=1 ./...` | **PASS**, exit 0; database integration tests skip. | `qa8-go-test.log` |
+| `npx @redocly/cli lint api/openapi.yaml` | **PASS**, exit 0; four known warnings. | `qa8-openapi.log` |
+| Original QA7 overlay, `-run '^TestQA7' -count=1 -v` | **PASS**, exit 0; all three tests and both overlap subcases. | `qa8-prior-overlay.log` |
+| New overlay, `-run '^TestQA8' -count=1 -v` | **PASS**, exit 0; all three tests, including both legacy-variant subcases. | `qa8-regressions.log` |
+| `git diff --check e18c2fc..HEAD` | **PASS**, no diagnostics. | `qa8-review-state.json` |
+| Full main-diff Go comment scan | **PASS**, zero qualifying blocks. | `qa8-long-comments.json` |
+
+OpenAPI warnings remain the missing license at `api/openapi.yaml:2` and three overlapping projection-envelope `oneOf` comparisons at `api/publish.openapi.yaml:215`.
+
+Reproduce the additional checks against the reviewed HEAD:
+
+```sh
+cd /Users/markpederson/dev_work/orbiter-universe
+go test -overlay=/Users/markpederson/Downloads/ORBIT-1863-QA/qa8-overlay.json ./internal/features/enrichment -run '^TestQA8' -count=1 -v
+```
+
+Supporting artifacts in the same QA directory: `qa8-overlay-test.go` (overlay source), `qa8-overlay.json` (overlay mapping), `qa8-fix.diff` (complete D62 diff) and `qa8-changed-files.txt` (full main-diff file inventory).
+
+## Files read or inspected
+
+Complete D62 diffs and focused surrounding code were inspected. Unchanged `CLAUDE.md` and the schema skill are carried forward from previous full reads, with their unchanged status checked. This list does not claim every source file was read in full this round; earlier reports preserve the stack-wide reading history.
+
+- `CLAUDE.md`
+- `.claude/skills/stage-enrichment/SKILL.md`
+- `.claude/skills/universe-schema/SKILL.md`
+- `internal/features/enrichment/stage_person_credits.go`
+- `internal/features/enrichment/stage_person_credits_test.go`
+- `internal/features/enrichment/stage_qa_regressions_test.go`
+- `internal/features/enrichment/stage_discovery.go`
+
+Additional QA inputs: the round-7 report (`ORBIT-1863-QA-round-7.md`), the QA7 overlay source (`qa7-overlay-test.go`) and its mapping. The machine-readable reading list is `qa8-files-read.txt`.

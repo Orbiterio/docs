@@ -1,0 +1,275 @@
+---
+title: "Smoke Tests for Broadway"
+sidebarTitle: "Smoke Tests for Broadway"
+description: "Every smoke run against the Broadway / West End stage lane on the local stack, 2026-09-07 to 2026-09-08: the entry point each one exercised, the exact calls, the seeds, and what it proved. Copy-paste ready."
+icon: "vial"
+---
+
+**Status: all runs below were executed against the local stack (Postgres 5434, FalkorDB `orbiter-falkordb`, API on 8090, worker on 8091) while the lane was built.** Each smoke names the entry point it drives so the same run can be repeated against dev once the migrations land. Decision ids (`D31`, `D55`) point at the `stage-enrichment` skill's log in `orbiter-universe`, where the full outcome and every fix each smoke forced are recorded.
+
+<Info>
+**Conventions used in every call.** Staff routes take `Authorization: Bearer staff` on the local API (`STAFF_TOKENS` in `.env`). The consumer get-add takes the smoke client key: `Authorization: Bearer $(cat .smoke-key)`. Worker events are delivered by hand with a Pub/Sub push to `localhost:8091/pubsub/push`, the body's `data` being the base64 JSON payload and `attributes.event_type` the event name. Restart **both** the API and the worker after a code change; a stale worker silently skips a claim the API just made. Feature flags the smokes needed on: `STAGE_ENABLED`, `STAGE_RESOLUTION_ENABLED`, `STAGE_DISCOVERY_ENABLED`, `STAGE_EDGE_WRITES_ENABLED`, `STAGE_PUBLISH_ENABLED`, `STAGE_LLM_ENABLED`, `STAGE_ADAPTATION_ENABLED`, `STAGE_MUSIC_DISCOVERY_ENABLED`, plus `ENRICHMENT_MUSIC_QUEUE_DRAIN_ENABLED=true` for the music seeds and `GCS_MODE=gcp` with `GCS_BUCKET=orbiter-sandbox` for the cover drain.
+</Info>
+
+## Entry points
+
+The lane has five doors in and one tick per phase. Every smoke below is filed under the door it walked through.
+
+| Entry point | Route or event | Handler |
+| --- | --- | --- |
+| Pilot submission (a hand-built roster) | `POST /v1/admin/enrichment/stage/submissions` | `submitStageProduction` |
+| Direct admission by registry id | `POST /v1/admin/enrichment/stage/productions` | `admitStageProduction` → `stage.Admit` |
+| Theatre person trigger | `POST /v1/enrichment/persons/get-add` → person run → `stepStageDiscovery` → `POST /v1/admin/enrichment/stage/discovery` | `DiscoverStageRootsOnce` |
+| Derived works (BASED_ON) | `POST /v1/admin/enrichment/stage/adaptations` or event `enrichment.stage_adaptations_requested` | `RunStageAdaptationsOnce` |
+| Music → stage (cast recordings) | `POST /v1/admin/enrichment/music/seed` → queue drain → `POST /v1/admin/enrichment/stage/music` or event `enrichment.stage_music_requested` | `DiscoverMusicStageOnce` |
+| Phase ticks | `POST /v1/admin/enrichment/stage/{drain,resolve,facts,graph,publish}` | one obligation phase each |
+| Review door | `POST /v1/admin/enrichment/stage/mentions/{id}/review`, `POST /v1/admin/entities/reviews/{id}/merge` | reviewer accept / reject / revoke, human merge |
+| Inspection | `GET /v1/admin/enrichment/stage/productions/{id}`, `GET /v1/admin/enrichment/stage/mentions?production_id=…`, `GET /v1/entities/{id}/projection` | status, mention queue, the published package |
+
+The phase ticks are the same for every smoke, so they are listed once:
+
+```bash
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+for p in drain resolve facts graph publish; do
+  echo "--- $p"
+  curl -s -m 600 -X POST localhost:8090/v1/admin/enrichment/stage/$p -H "$H" -H "$C" -d '{"max_productions":10}'
+done
+```
+
+`drain` takes `{"max_rows":N}` or `{"queue_id":"<stage_source_job id>"}` instead of `max_productions`. A pass that stops on the search budget answers `continued`; run it again.
+
+## 1. Pilot submission: Rent (2026-09-07)
+
+**Entry point:** `POST /v1/admin/enrichment/stage/submissions`. The fixture is `.local/rent-submission.json` in the repo checkout (git-excluded): a hand-built roster of the 1996 Broadway production from IBDB billing, `registry_id: broadway:rent-1996`.
+
+```bash
+H='Authorization: Bearer staff'
+curl -s -w '\nHTTP %{http_code}\n' -X POST localhost:8090/v1/admin/enrichment/stage/submissions \
+  -H "$H" -H 'Content-Type: application/json' --data-binary @.local/rent-submission.json
+
+P=01a07e83-6194-7a9a-9532-35623670a0f6   # the production the admission answered
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/drain   -H "$H" -H 'Content-Type: application/json' -d '{"max_rows":5}'
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/resolve -H "$H" -H 'Content-Type: application/json' -d '{"max_productions":5}'
+curl -s "localhost:8090/v1/admin/enrichment/stage/mentions?production_id=$P" -H "$H"
+```
+
+Mentions the ladder could not settle were accepted through the review door, one call per mention:
+
+```bash
+curl -s -X POST "localhost:8090/v1/admin/enrichment/stage/mentions/$MENTION/review" -H "$H" -H 'Content-Type: application/json' \
+  -d '{"decision":"accept","entity_id":"'"$ENTITY"'","expected_identity_revision":1,"reason":"IBDB original Broadway production billing; local smoke test"}'
+```
+
+Then `facts`, `graph`, and the retraction test:
+
+```bash
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/mentions/01a07e83-7ba8-7cec-9f28-c7623a91b69f/review -H "$H" -H 'Content-Type: application/json' \
+  -d '{"decision":"revoke","expected_identity_revision":2,"reason":"smoke test: prove the retraction"}'
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/graph -H "$H" -H 'Content-Type: application/json' -d '{"max_productions":5}'
+```
+
+**Proved:** submission → drain → resolve → review → facts → graph end to end; seven accepted producers, seven `PRODUCED` edges; the revoke flips the edge inactive. **Forced:** D31 (a withdrawn link re-raises the facts obligation, not only an accept). A forced re-run of the unchanged submission re-raises resolve and facts (verified again on 2026-09-08 under D45).
+
+## 2. Theatre person trigger: Anthony Rapp (2026-09-07)
+
+**Entry point:** `POST /v1/enrichment/persons/get-add` with `queue: true`, then the manual queue drain, then the discovery tick.
+
+```bash
+K="Authorization: Bearer $(cat .smoke-key)"
+curl -s -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H 'Content-Type: application/json' \
+  -d '{"full_name":"Anthony Rapp","imdb_url":"https://www.imdb.com/name/nm0710829/","queue":true,"force":true,"source":"local smoke test: theatre trigger"}'
+
+H='Authorization: Bearer staff'
+curl -s -X POST localhost:8090/v1/admin/enrichment/queue/$QUEUE_ID/drain -H "$H" -H 'Content-Type: application/json' -d '{}'
+curl -s localhost:8090/v1/admin/enrichment/persons/$ENTITY_ID/status -H "$H"
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/discovery -H "$H" -H 'Content-Type: application/json' -d '{"max_roots":1}'
+```
+
+**Proved:** expertise resolution already emitted stage signals; a theatre person seeds a discovery root (`expertise::person::<id>`), never a credit. Discovery admitted a Playbill "Rent" beside the pilot Rent; the two were later merged through the review door (`POST /v1/admin/entities/reviews/01a07fe1-c708-7b5e-acc5-3d8da05fd4a6/merge` with `{"note":"pilot Rent and Playbill Rent are one engagement (smoke)"}`), and the merge follow-up was replayed by hand:
+
+```bash
+DATA=$(printf '{"merge_id":"01a08041-0a27-701b-a6ab-508647ceb718","survivor_id":"01a07e83-6194-7a9a-9532-35623670a0f6","loser_id":"01a07f18-7869-781e-aa17-0c92a3d46f16","entity_type":"stage_production","moved":{}}' | base64)
+curl -s -X POST localhost:8091/pubsub/push -H 'Content-Type: application/json' \
+  -d "{\"message\":{\"messageId\":\"local-merge-replay\",\"data\":\"$DATA\",\"attributes\":{\"event_type\":\"entity.merged\"}}}"
+```
+
+**Forced:** D32 (the trigger gates on the resolved taxonomy, performers are valid roots, the root parks until an adapter exists), D39 (merge follow-up redraws moved credits and re-raises facts).
+
+## 3. Theatre person trigger, end to end: Mark Rylance (2026-09-07)
+
+**Entry point:** `POST /v1/enrichment/persons/get-add` (no queue flag: the run happens inline), then discovery and the five ticks.
+
+```bash
+K="Authorization: Bearer $(cat .smoke-key)"
+curl -s -m 60 -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H 'Content-Type: application/json' \
+  -d '{"full_name":"Mark Rylance","imdb_url":"https://www.imdb.com/name/nm0753314/","source":"stage-smoke"}'
+H='Authorization: Bearer staff'
+curl -s localhost:8090/v1/admin/enrichment/persons/01a07f17-6dc2-73dc-bf08-68b28a399cfb/status -H "$H"
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/discovery -H "$H" -H 'Content-Type: application/json' -d '{"max_roots":1}'
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/drain -H "$H" -H 'Content-Type: application/json' -d '{"max_rows":6}'
+# resolve / facts / graph / publish with {"max_productions":20}, then the package:
+curl -s localhost:8090/v1/entities/01a07f18-7dc1-7cb9-b333-75f0aa79af02/projection -H "$K"
+```
+
+**Proved:** `theatre_industry` fired on IMDb nm0753314; discovery found his Playbill page by search and admitted six Broadway hubs (Farinelli and the King, Twelfth Night, Richard III, Jerusalem, La Bête, Boeing-Boeing); the search rung linked 31 producers and filed 19 for review; 37 credits became 37 `PRODUCED` edges; `stage_production_projection.v1` served each show with evidence and the Playbill cover. **Forced:** D36 (Replacements sections dropped from the team list, the attempt key digest, the drain stops a batch on a deferral).
+
+A second pilot submission, `.local/hamilton-submission.json` (`broadway:hamilton-2015`, Richard Rodgers Theatre), went through the same door as Rent and became the held Hamilton the music smoke later converged on.
+
+## 4. Theatre person trigger at scale: Nathan Lane (2026-09-08)
+
+**Entry point:** get-add, discovery with `max_roots: 2`, then the ticks at 34 productions.
+
+```bash
+K="Authorization: Bearer $(cat .smoke-key)"
+curl -s -m 60 -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H 'Content-Type: application/json' \
+  -d '{"full_name":"Nathan Lane","imdb_url":"https://www.imdb.com/name/nm0001447/","source":"stage-smoke"}'
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/discovery -H "$H" -H "$C" -d '{"max_roots":2}'
+curl -s -m 590 -X POST localhost:8090/v1/admin/enrichment/stage/drain -H "$H" -H "$C" -d '{"max_rows":50}'
+for i in 1 2 3; do curl -s -m 890 -X POST localhost:8090/v1/admin/enrichment/stage/resolve -H "$H" -H "$C" -d '{"max_productions":34}'; done
+for p in facts graph publish; do curl -s -m 600 -X POST localhost:8090/v1/admin/enrichment/stage/$p -H "$H" -H "$C" -d '{"max_productions":34}'; done
+```
+
+**Proved:** a prominent name with a bare Playbill slug page (`/person/nathan-lane-performer`) and 34 shows. **Forced:** D40 (a Playbill party key is the vault id or the slug; the identity search is ledgered and scoped to playbill.com; a root parked `awaiting_identity` is retried after its hold), D41 (a completed resolve pass always raises facts, so the 18 shows the search budget deferred still got profiles and packages), D42 (the full portrait cover, the page synopsis first and a GLM summary only when the page prints none), D44 (his own credits filed and the notable few drawn as `WORKED_ON`, replayed by `POST /v1/admin/enrichment/stage/credits`), D45 (an award night or gala is an appearance, not a production).
+
+## 5. A West End name: Michael Ball (2026-09-08)
+
+**Entry point:** get-add, from zero on the finished lane.
+
+```bash
+K="Authorization: Bearer $(cat .smoke-key)"
+curl -s -m 60 -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H 'Content-Type: application/json' \
+  -d '{"full_name":"Michael Ball","imdb_url":"https://www.imdb.com/name/nm0050431/","source":"stage-smoke"}'
+```
+
+**Proved:** `musical theatre performance` fired the trigger; discovery found `michael-ball-vault-0000093018` by search and admitted The Woman in White and Aspects of Love; nine `PRODUCED` edges, two packages, and the credit-edge tick drew his two `WORKED_ON` edges with sentences ("Michael Ball played Count Fosco in The Woman in White…"). His London career stayed invisible until Theatricalia landed (D46). **Forced:** the synopsis fallback stops at the "People (N)" marker and rejects union notices.
+
+## 6. Direct admission by registry id (2026-09-08)
+
+**Entry point:** `POST /v1/admin/enrichment/stage/productions`. Playbill by slug, Theatricalia by production id; `refresh_mode: force` re-reads a page the lane already holds.
+
+```bash
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+# Playbill, Broadway
+for slug in the-producers-st-james-theatre-vault-0000004170 merlin-mark-hellinger-theatre-vault-0000005780 the-woman-in-white-marquis-theatre-vault-0000008181; do
+  curl -s -X POST localhost:8090/v1/admin/enrichment/stage/productions -H "$H" -H "$C" \
+    -d "{\"source\":\"playbill\",\"object_kind\":\"production\",\"source_id\":\"$slug\",\"market\":\"broadway\",\"refresh_mode\":\"force\",\"scheduling_class\":\"p1\"}"
+done
+# Theatricalia, West End (D46: Les Misérables ×3, Sweeney Todd, Passion, Aspects of Love, The Rocky Horror Show)
+for id in ztb 19d5 1e6g zka bt2 23m 22h; do
+  curl -s -X POST localhost:8090/v1/admin/enrichment/stage/productions -H "$H" -H "$C" \
+    -d "{\"source\":\"theatricalia\",\"object_kind\":\"production\",\"source_id\":\"$id\",\"market\":\"west_end\",\"refresh_mode\":\"force\",\"scheduling_class\":\"p1\"}"
+done
+# the pilot registry id, re-admitted to prove a forced refresh re-raises the obligations
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/productions -H "$H" -H "$C" \
+  -d '{"source":"pilot_submission","object_kind":"production","source_id":"broadway:rent-1996","market":"broadway","refresh_mode":"force","scheduling_class":"p1"}'
+```
+
+**Proved:** the gate keys and dedups on the registry id; a second admission answers `already_pending` with the same production; an unsupported registry (IBDB) answers `awaiting_dependency` / `source_disabled`. The Theatricalia runs resolved and drew West End producers (D46, D50 roster union for a production both registries hold).
+
+## 7. Entry-point smokes: Wicked, Matilda, Barbara Whitman, Sue Frost (2026-09-08, D54)
+
+Mark's seeds for the three doors a caller uses.
+
+```bash
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+# Wicked by Playbill URL
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/productions -H "$H" -H "$C" \
+  -d '{"source":"playbill","object_kind":"production","source_id":"wicked-broadway-gershwin-theatre-2003","source_url":"https://playbill.com/production/wicked-broadway-gershwin-theatre-2003","display_name":"Wicked","market":"broadway"}'
+# Matilda by Theatricalia URL
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/productions -H "$H" -H "$C" \
+  -d '{"source":"theatricalia","object_kind":"production","source_id":"s5n","source_url":"https://theatricalia.com/play/5pv/matilda/production/s5n","display_name":"Matilda","market":"west_end"}'
+
+# A producer with a registry page in the get-add's links (the D54 trigger)
+K="Authorization: Bearer $(cat .smoke-key)"
+curl -s -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H "$C" \
+  -d '{"full_name":"Barbara Whitman","imdb_url":"https://www.imdb.com/name/nm6460800/","links":["https://playbill.com/person/barbara-whitman-vault-0000023722"],"force":true,"source":"stage_smoke","source_function":"stage_smoke"}'
+# Sue Frost: two IMDb identities, one Playbill vault in both links
+for nm in nm13068764 nm8456174; do
+  curl -s -m 300 -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H "$C" \
+    -d "{\"full_name\":\"Sue Frost\",\"imdb_url\":\"https://www.imdb.com/name/$nm/\",\"links\":[\"https://playbill.com/person/sue-frost-vault-0000008230\",\"https://www.ibdb.com/broadway-cast-staff/sue-frost-71850\"],\"force\":true,\"source\":\"stage_smoke\",\"source_function\":\"stage_smoke\"}"
+done
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/discovery -H "$H" -H "$C" -d '{}'
+```
+
+The two collisions the smoke filed were merged through the review door:
+
+```bash
+curl -s -X POST localhost:8090/v1/admin/entities/reviews/01a081f5-0bb4-7d71-b1c1-625757eb1e31/merge -H "$H" -H "$C" \
+  -d '{"survivor_id":"01a0806f-e0a5-715b-b689-664ea13f8a3d","note":"same producer: the search-rung Barbara Whitman holds the Playbill and IBDB keys, the get-add one the IMDb id (smoke 2026-09-08)"}'
+curl -s -X POST localhost:8090/v1/admin/entities/reviews/01a08252-525f-7e82-a80d-e079c4ec0466/merge -H "$H" -H "$C" \
+  -d '{"survivor_id":"01a081ef-787a-7a21-a80a-2a1cbcb808aa","note":"same producer: IMDb holds two Sue Frost pages (nm13068764, nm8456174); the Playbill vault 0000008230 is hers (smoke 2026-09-08)"}'
+```
+
+**Proved:** both direct admissions queued and drew (Wicked eight of nine producers, Matilda → RSC); a producer's registry page in `links` becomes the discovery root even with no theatre expertise; Whitman's page admitted 26 productions and her strong-key collision with the roster-minted Whitman merged through review (16 `PRODUCED` edges under one node); Sue Frost's split identity merged and her two roots read her page. **Forced:** D54 (the `links` trigger, "theatrical" taxonomy token, a directory host is nobody's site: theatricalindex, crunchbase, facebook and the rest refused as official domains). Two wrong auto-links from the directory-domain fold were revoked by hand through the mention review route. **Caveat, still open:** whether Playbill vault 0000008230 is the Junkyard Dog producer is unverified (Playbill and IBDB refuse unauthenticated fetches); the merge is the reversible half.
+
+## 8. Derived works, BASED_ON: Grease and the film alternates (2026-09-08, D51–D53)
+
+**Entry point:** the adaptation tick, by route or by event, after the film exists in the estate. Films enter through the person cascade, so the seeds were people.
+
+```bash
+K="Authorization: Bearer $(cat .smoke-key)"; C='Content-Type: application/json'
+# Grease (1978, tt0077631) via its cast; Susan Buckner's short filmography reaches 1978
+for body in \
+  '{"full_name":"Randal Kleiser","imdb_url":"https://www.imdb.com/name/nm0459170/","source":"stage_smoke","source_function":"stage_smoke"}' \
+  '{"full_name":"Olivia Newton-John","imdb_url":"https://www.imdb.com/name/nm0000556/","source":"stage_smoke","source_function":"stage_smoke"}' \
+  '{"full_name":"Susan Buckner","imdb_url":"https://www.imdb.com/name/nm0118761/","source":"stage_smoke","source_function":"stage_smoke"}'; do
+  curl -s -X POST localhost:8090/v1/enrichment/persons/get-add -H "$K" -H "$C" -d "$body"
+done
+
+# the whole lane in order (both discoveries, replay, re-describe), sweep or scoped
+H='Authorization: Bearer staff'
+curl -s -m 900 -X POST localhost:8090/v1/admin/enrichment/stage/adaptations -H "$H" -H "$C" -d '{}'
+# scoped to one entity through the worker event
+DATA=$(printf '{"entity_id":"01a081a4-3dfc-76c6-acb7-96b7cd5f1712"}' | base64)
+curl -s -m 900 -X POST localhost:8091/pubsub/push -H "$C" \
+  -d "{\"message\":{\"data\":\"$DATA\",\"attributes\":{\"event_type\":\"enrichment.stage_adaptations_requested\"}}}"
+# the based_on claim is elected by distill before the edge draws
+DATA=$(printf '{"entity_id":"%s","entity_type":"stage_production"}' $PROD | base64)
+curl -s -X POST localhost:8091/pubsub/push -H "$C" \
+  -d "{\"message\":{\"data\":\"$DATA\",\"attributes\":{\"event_type\":\"fact.distill_requested\"}}}"
+```
+
+**Proved:** the scoped tick read Wikidata Q267721 → P144 → Q611626 (first performed 1971), found no held production, and the grounded locate named `playbill.com/production/grease-eden-theatre-vault-0000002031`; the page was fetched, verified (same title, opening 1972 within a year of 1971) and admitted as a root with the film as seed; the replay drew Grease (1978) → Grease (1972) as `substantially_reworked` with a 40-word sentence. Nine `BASED_ON` edges local, including film → film (the 2021 West Side Story to the 1961 film and to the 1957 musical, one edge per hop). A guessed IMDb id seeded a stranger on the first Kleiser attempt: verify ids through Wikidata P345 first. **Forced:** the root-admission depth rule for counterparts (commit 0642841), the colon-subtitle title fold, and the D56 to D62 QA fixes on this path (fetch, ledger and verify before admission; election gates; budget holds).
+
+## 9. Music → stage: SM-01, SM-03, SM-04 (2026-09-08, D55)
+
+**Entry point:** a MusicBrainz release-group seed with `queue: true`, the manual queue drain (which needed a music case, commit 21b0714), then the music observation drain.
+
+```bash
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+# SM-01 Hamilton OBC · SM-03 Bonnie & Clyde OWEC · SM-04 Little Shop of Horrors (off-Broadway, must be excluded)
+for mb in 4c615b1c-5af9-432b-9342-e39137ade143 ed97715a-e5f4-429e-a2ed-a22854807044 8b674263-ad09-3d0e-b2eb-89a9583a1f03; do
+  curl -s -X POST localhost:8090/v1/admin/enrichment/music/seed -H "$H" -H "$C" \
+    -d "{\"kind\":\"release_group\",\"mbid\":\"$mb\",\"queue\":true,\"priority_tier\":0}"
+done
+curl -s -X POST localhost:8090/v1/admin/enrichment/queue/$QUEUE_ID/drain -H "$H" -H "$C" -d '{}'
+curl -s -m 600 -X POST localhost:8090/v1/admin/enrichment/stage/music -H "$H" -H "$C" -d '{}'
+# the admitted London production's own waterfall, by its job
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/drain -H "$H" -H "$C" -d "{\"queue_id\":\"$JOB\"}"
+curl -s localhost:8090/v1/entities/01a08216-127d-7649-9372-b3a3eefde96f/projection -H "Authorization: Bearer $(cat .smoke-key)"
+```
+
+**Proved:** SM-04 filed one observation `outside_v1_scope` and admitted nothing; SM-01 converged warm on the held Hamilton with an `estate` receipt, no model call, no spend (after the title fold learned to drop a colon subtitle that only names the form); SM-03 located Playbill `bonnie-clyde-london-arts-theatre-2022`, fetched and verified it, and admitted a new West End production with the observation as parent and the music root as root, which then drained, resolved, landed its profile, wrote its node and published. Its `PRODUCED` edge waits on a West End roster source: Playbill's London pages carry no production-team list. Not run live: SM-02 (artist catalogue), SM-05 replay, SM-06 recovery, SM-07 disabled flag; SM-02 and SM-05 are unit-tested.
+
+## 10. Cover re-host against orbiter-sandbox (2026-09-08, D43)
+
+**Entry point:** the poster drain runs in the worker only (the API's route answers "not wired"), so it is driven by the media tick event.
+
+```bash
+H='Authorization: Bearer staff'; C='Content-Type: application/json'
+curl -s -X POST localhost:8090/v1/admin/enrichment/stage/posters -H "$H" -H "$C" -d '{}'   # answers not wired on the API
+DATA=$(printf '{}' | base64)
+for i in 1 2 3 4 5 6 7 8; do
+  curl -s -m 600 -o /dev/null -w "tick %{http_code} " -X POST localhost:8091/pubsub/push -H "$C" \
+    -d "{\"message\":{\"data\":\"$DATA\",\"attributes\":{\"event_type\":\"media.rehost_requested\"}}}"
+done
+```
+
+**Proved:** eight pushes re-hosted 76 Playbill covers as aspect-preserving WebP under `avatars/playbill/<production>/<hash>.webp` in `orbiter-sandbox`, retired one on a Playbill 403, and the packages now serve the re-hosted `poster_url` (Rent's package checked). Deploy note: the worker's env needs `GCS_MODE=gcp`, `GCS_BUCKET` and `GCS_AVATAR_PREFIX`; the API's needs the signer settings only.
+
+## What is still owed a live run
+
+- SM-02, SM-05, SM-06 and SM-07 from the music brief.
+- A West End roster source, so SM-03's production earns its `PRODUCED` edges.
+- The dev run of everything above once the eleven migrations are applied there; the local runs used `orbiter-sandbox` for covers and the local FalkorDB for the graph.
