@@ -1,9 +1,11 @@
 ---
 title: "Node Types"
-description: "FalkorDB node inventory, properties and examples, including proposed Go theatre nodes"
+description: "FalkorDB node inventory, properties and examples, including proposed Go theatre and video-game nodes"
 ---
 
 Core graph node types plus enrichment-specific graph nodes, organized by logical group.
+
+**Video game contract synchronized September 8, 2026:** [six game node families, reused endpoints, properties and image examples](#video-game-nodes). These are Go/GCP build contracts, not deployed game writers.
 
 Most product graph nodes carry the base label **`Entity`** plus one or more type-specific labels. Legacy non-`Entity` labels are called out in the [Master Label List](#master-label-list). Nodes are created during the person and company get-add pipelines, funding ingestion, IMDB credit processing, expertise identification, and MusicBrainz waterfall enrichment.
 
@@ -56,7 +58,15 @@ This is the canonical label inventory for node label combinations used by the do
 | `Entity:Film_TV:Short_Film` | IMDB title `type` | Film/TV title subtype. |
 | `Entity:Film_TV:Documentary` | IMDB title `type` | Film/TV title subtype. |
 | `Entity:Film_TV:TV_Special` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:Video_Game` | IMDB title `type` | Film/TV title subtype supported by the title writer. |
+| `Entity:Film_TV:Video_Game` | IMDB title `type` | Existing title-writer shape; the proposed game intake reuses its UUID during transition to `Entity:Video_Game`, never creates a duplicate game. |
+| `Entity:Video_Game` | **Proposed Go** game waterfall | Canonical game; [properties and thumbnail examples](#video-game-nodes). |
+| `Entity:Game_Series` | **Proposed Go** bounded game support identity | Series context, separate from an individual game; no catalog traversal. |
+| `Entity:Game_Platform` | **Proposed Go** bounded game support identity | Platform context, e.g. Windows or PlayStation 4. |
+| `Entity:Game_Engine` | **Proposed Go** bounded game support identity | Optional evidenced engine/version context. |
+| `Entity:Game_Release` | **Proposed Go** scoped game release identity | Optional platform/territory/edition release; not a music `Release`. |
+| `Entity:Game_Award` | **Proposed Go** scoped game recognition identity | One award result for a game, category and ceremony. |
+| `Entity:Game_Award:Winner` | **Proposed Go** elected winner result | Result modifier; no automatic individual recipients. |
+| `Entity:Game_Award:Nominee` | **Proposed Go** elected nominee result | Result modifier on the same scoped identity if the outcome later changes. |
 | `Entity:Film_TV:Music_Video` | IMDB title `type` | Film/TV title subtype supported by the title writer. |
 | `Film_TV` | IMDB title and credit Cypher | Subset / match label for any film or TV title subtype. |
 | `Film_TV_Award:Winner` | IMDB award `nominee_or_winner` | Legacy non-`Entity` award node. |
@@ -516,6 +526,8 @@ Nodes representing film/TV titles and their awards.
 
 The base node for any IMDB title. Carries an additional dynamic type label based on the title type.
 
+**Go game routing:** the legacy `Film_TV:Video_Game` shape below remains documented for compatibility. The [game contract](#video-game-nodes) uses `Entity:Video_Game`; IMDb aliases must resolve to the same UUID before any game node is admitted. Movie adaptations retain their own Film/TV UUID and poster.
+
 **Possible label combinations:**
 
 - `Entity:Film_TV:Movie`
@@ -623,6 +635,79 @@ Represents a specific award nomination or win for a film/TV title. Carries an ad
 
 ---
 
+
+<a id="video-game-nodes" />
+
+## Video game nodes — proposed Go contract
+
+<Info>
+**Synchronized September 8, 2026.** This is the node reference for the [Go/GCP video-game build plan](/guides/open-work/video-game-waterfall). Game runtime registration and writers remain proposed. The [real-data simulation](/guides/open-work/video-game-waterfall-examples) contains **29 nodes and 30 edges**, with real names/source IDs and simulated internal UUIDs and processing state. It is not a production graph snapshot.
+</Info>
+
+### Game entity families and reused endpoints
+
+There are **six game-specific node families** in the proposed output manifest. `Video_Game` is the primary game card; the other five are bounded support identities. Each enabled family needs explicit identity, merge, graph-dispatch and reader registration. An `Entity` label on a support node does not authorize full enrichment or a new root. Only declared identity-only leaves can create its scoped record.
+
+| Proposed labels | What the node represents | Identity / minimum specific properties | Nodes in fixture |
+| --- | --- | --- | ---: |
+| `Entity:Video_Game` | A base game, independently identified remake/remaster, DLC, expansion or compilation | Stable UUID plus source aliases; `name`, `game_kind`; first-release date/precision when known | 3 |
+| `Entity:Game_Series` | A series containing separately identified games | Stable UUID/QID or provider series ID; `name`; never keyed only on a title string | 1 |
+| `Entity:Game_Platform` | An evidenced gaming platform | Stable UUID/QID or provider platform ID; `name`, normalized `platform_code` | 2 |
+| `Entity:Game_Engine` | An engine used by a game | Stable UUID/strong engine ID; `name`; version only when explicitly known | 0 — optional later slice |
+| `Entity:Game_Release` | A separately addressable release with platform/territory/edition context | Stable UUID and provider release ID or reviewed scoped identity; date precision, platform/territory/edition references | 0 — optional later slice |
+| `Entity:Game_Award`, optionally `:Winner` / `:Nominee` | One scoped recognition result | Game + ceremony/year + category; `name`, `ceremony_qid`, `category_qid`, `award_year`, `result` when known. Outcome changes preserve the identity. | 1 |
+
+All six families inherit UUID, name, timestamps and source provenance. Missing source fields remain absent. Support types have no automatic standalone cards. `Game_Release` and `Game_Award` must not be substituted for music releases or Film/TV awards.
+
+The **other 22 fixture nodes reuse five existing endpoint families**:
+
+| Reused family | Fixture count | Game relationship role |
+| --- | ---: | --- |
+| `Person` | 15 | Named game contributors and existing movie/theatre/music creators; includes one `Person:Music_Artist`, counted once |
+| `Company` | 4 | Developers and publishers; retain normal Company identity and classification |
+| `Film_TV:TV_Series` | 1 | The Last of Us TV adaptation, distinct from the 2013 game |
+| `Work:Theatrical_Work` | 1 | Shakespeare's Hamlet, distinct from the game and from any stage production |
+| `Release_Group` | 1 | The Last of Us soundtrack album group, distinct from a composition or recording |
+
+Later slices may also reference existing `Stage_Production`, `Music_Group`, `Music_Work`, `Recording`, `DomainExpertise` and `SubDomainExpertise`. Their owners retain their identities, facts and edges. These types are not extra nodes claimed by the current fixture. Games, developers, authors, albums and adaptations discovered by a game cannot restart their owning waterfalls.
+
+### Video_Game properties
+
+| Property | Type | Contract |
+| --- | --- | --- |
+| `uuid` | UUID string | Stable internal game identity; adding an external ID never changes it |
+| `name` | string | Selected title with language provenance |
+| `created_at` / `updated_at` | epoch milliseconds | Preserve creation time; application-managed update time |
+| `source` / `source_revision` | string / source revision | Chosen source and observed revision; full evidence remains in the shared ledger |
+| `wikidata_qid` | string, optional | Exact game item, e.g. `Q64826862` |
+| `imdb_id` | string, optional | Title alias, e.g. `tt10562854`; never an `nm` person ID |
+| `mobygames_id` | numeric string, optional | Current P11688 ID, e.g. `174989` |
+| `igdb_numeric_id` / `igdb_slug` | string, optional | Distinct aliases, e.g. `119133` and `elden-ring` |
+| `steam_app_ids` | string list, optional | Matched app IDs with platform/edition scope retained in SQL |
+| `game_kind` | enum | Base game/remake/remaster/expansion/DLC/compilation only as evidenced |
+| `first_release_date` / `date_precision` | ISO partial date / enum | Earliest confirmed release for this identity; no day invented from a year |
+| `description`, `visibility` | string / boolean | Selected description and shared visibility policy |
+| `image_url` | string, optional graph/display media reference | Only after shared media ingestion; render delivery URLs through the shared media service. Keep signed/expiring URLs out of durable graph facts. |
+
+**Thumbnail file contract:** use the same Go file pipeline as avatars/movie posters, the aspect-preserving poster conversion, the configured shared bucket and media renderer. Persist `storage_key` on the shared media/read-model record as `game-thumbnail/<game-uuid>/<source-url-hash>.webp`. Source image URL, attribution, source revision and content hash remain provenance; an image candidate is not an uploaded object. Reuse `film_tv_display` with the game discriminator; no separate game display table is required by this contract.
+
+### Real game-node image examples
+
+**Elden Ring — game Q64826862 / Steam 1245620.**
+
+<img src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578" alt="Elden Ring video-game node thumbnail from Steam" width="460" />
+
+[Official source](https://store.steampowered.com/app/1245620/_/) · [Source image](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578)
+
+**Hamlet — game Q280104 / Steam 222160.**
+
+<img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/222160/header.jpg?t=1765636960" alt="Hamlet video-game node thumbnail from Steam" width="460" />
+
+[Official source](https://store.steampowered.com/app/222160/) · [Source image](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/222160/header.jpg?t=1765636960)
+
+These are real landscape store-image candidates shown for the proposed nodes. Their presence here does not claim a completed GCS upload. Hamlet's Steam page describes its later store release; the fixture's original-game date and this artwork's store scope remain separate. The 2013 Last of Us node does not receive artwork from the separately identified Part I remake merely because the titles are similar.
+
+See [complete game-node properties and planned file key](/guides/open-work/video-game-waterfall-examples#game-thumbnail-example), [all 29 node records](/assets/video-game-waterfall/graph-simulation.json), and [the game edge reference](/guides/ontology/edges#video-game-edges). The image is a node/media property, not a new relationship node. Genres and themes also remain properties.
 
 <a id="theatre-nodes" />
 
