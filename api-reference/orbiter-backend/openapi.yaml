@@ -25,8 +25,8 @@ servers:
 tags:
   - name: Account Verification
     description: |
-      Identity verification on signup — a new user connects GitHub or
-      LinkedIn once; the backend compares the provider name with the
+      Identity verification on signup — a new user connects GitHub,
+      LinkedIn, or X once; the backend compares the provider name with the
       WorkOS signup name before person resolution/enrichment runs.
   - name: Activities
     description: |
@@ -73,8 +73,6 @@ tags:
     description: Email workspace profiles grouping connected accounts.
   - name: Experiences
     description: A person's work and education history. Requires a verified WorkOS access token.
-  - name: FalkorDB
-    description: Graph-instance credentials CRUD. Requires a verified WorkOS access token.
   - name: Files
     description: |
       File-ingestion pipeline. Register a GCS object and the worker
@@ -526,6 +524,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
       requestBody:
         required: true
         content:
@@ -574,6 +573,7 @@ paths:
             enum:
               - github
               - linkedin
+              - x
         - name: code
           in: query
           required: false
@@ -8180,113 +8180,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
-  /falkordb:
-    get:
-      tags:
-        - FalkorDB
-      summary: Get all falkordb
-      description: |
-        Returns instance rows. `mode=admin` returns every row; `mode=user`
-        (default) returns only the authenticated user's own. Credentials are included in
-        the response by design.
-      operationId: listFalkorDBInstances
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: mode
-          required: false
-          schema:
-            type: string
-            enum:
-              - admin
-              - user
-            default: user
-      responses:
-        '200':
-          description: The visible instance rows.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ListFalkorDBInstancesEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
-    post:
-      tags:
-        - FalkorDB
-      summary: Create a falkordb
-      description: |
-        Inserts an instance owned by the authenticated user (user_id is
-        taken from the session, not the body). `mode` tags the row.
-      operationId: createFalkorDBInstance
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateFalkorDBInstanceRequest'
-      responses:
-        '201':
-          description: The created instance.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FalkorDBInstanceEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /falkordb/{id}:
-    delete:
-      tags:
-        - FalkorDB
-      summary: Delete a falkordb
-      description: |
-        Deletes an instance by id. `mode=admin` deletes any row; `mode=user`
-        (default) deletes only if the row belongs to the authenticated user. Unknown id
-        (or not owned, in user mode) returns 404.
-      operationId: deleteFalkorDBInstance
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: integer
-            format: int64
-        - in: query
-          name: mode
-          required: false
-          schema:
-            type: string
-            enum:
-              - admin
-              - user
-            default: user
-      responses:
-        '200':
-          description: Deleted.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EmptyEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/Internal'
   /files:
     get:
       tags:
@@ -9657,7 +9550,7 @@ paths:
         - Companies
       summary: Create a company
       description: |
-        Resolve a company from its website or LinkedIn/Crunchbase company page and add it to the authenticated user's contacts. A company we do not already hold is created through the enrichment provider and written here under the id it assigns. Idempotent: repeating the call returns the same company with company_created and contact_added false.
+        Resolve a company from its website or LinkedIn/Crunchbase company page and add it to the authenticated user's contacts. A company we do not already hold is created through the enrichment provider and written here under the id it assigns. The form's phone is stored as a public number on the company and linked to the contact; its note is stored on the contact. Idempotent: repeating the call returns the same company with company_created and contact_added false.
       security:
         - bearerAuth: []
       requestBody:
@@ -9765,6 +9658,41 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /companies/{company_id}/founders:
+    get:
+      operationId: listCompanyFounders
+      tags:
+        - Companies
+      summary: List a company's founders
+      description: |
+        Powers the company sheet's founders section. Returns the people the
+        enrichment provider reports as the company's founders in the order they were linked, each with the lean person
+        card nested under `person`. The list is empty until the company's
+        package has been synced, and `meta.total` is its length.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: company_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The company's founders; empty when none are known.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCompanyFoundersEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /company-financials:
     get:
       operationId: getCompanyFinancials
@@ -10856,6 +10784,7 @@ components:
           enum:
             - github
             - linkedin
+            - x
             - null
           description: Provider of the latest verification attempt, if any.
         safe_reason:
@@ -19543,99 +19472,6 @@ components:
         meta:
           $ref: '#/components/schemas/Meta'
       additionalProperties: false
-    FalkorDBInstance:
-      type: object
-      required:
-        - id
-        - mode
-        - graph_name
-        - user_name
-        - password
-        - host
-        - port
-        - db_connection
-        - created_at
-      description: One graph-instance credentials row. Credentials are returned by design.
-      properties:
-        id:
-          type: integer
-          format: int64
-        user_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
-        mode:
-          type: string
-          enum:
-            - admin
-            - user
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    ListFalkorDBInstancesEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/FalkorDBInstance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-    CreateFalkorDBInstanceRequest:
-      type: object
-      description: |
-        Editable instance fields. The owner (user_id) is taken from the
-        session, never the body. mode defaults to 'user' when omitted.
-      properties:
-        mode:
-          type: string
-          enum:
-            - admin
-            - user
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-    FalkorDBInstanceEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/FalkorDBInstance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
     FileResponse:
       type: object
       required:
@@ -21055,9 +20891,21 @@ components:
           oneOf:
             - $ref: '#/components/schemas/CompanyContactNested'
             - type: 'null'
+    CompanyCreatePhone:
+      type: object
+      required:
+        - phone_number
+      properties:
+        phone_number:
+          type: string
+          description: Normalized to E.164 before it is stored.
+        phone_extension:
+          type:
+            - integer
+            - 'null'
     CompanyCreateRequest:
       type: object
-      description: Body for POST /companies.
+      description: Body for POST /companies. Strings are trimmed server-side.
       required:
         - company_name
         - domain
@@ -21068,6 +20916,15 @@ components:
           type: string
           description: |
             The company's website, with or without a scheme (acme.com, https://acme.com), or its LinkedIn/Crunchbase company page (https://www.linkedin.com/company/acme).
+        phone:
+          oneOf:
+            - $ref: '#/components/schemas/CompanyCreatePhone'
+            - type: 'null'
+          description: Stored as a public number on the company and linked to the caller's contact.
+        note:
+          type: string
+          maxLength: 10000
+          description: Stored on the caller's company contact when non-blank. A blank value leaves an existing note untouched.
     CompanyCreate:
       type: object
       description: Result of POST /companies.
@@ -21414,6 +21271,68 @@ components:
         funding:
           type: array
           items: {}
+    CompanyFounderPerson:
+      type: object
+      description: The lean person card nested under a founder row.
+      required:
+        - id
+        - full_name
+        - avatar
+        - current_title
+        - bio
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+        bio:
+          type:
+            - string
+            - 'null'
+    CompanyFounder:
+      type: object
+      description: One founder link with the person it names, keyed by its table name.
+      required:
+        - id
+        - company_id
+        - person_id
+        - person
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        person:
+          $ref: '#/components/schemas/CompanyFounderPerson'
+    ListCompanyFoundersEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompanyFounder'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     FinancialData:
       type: object
       description: |
@@ -21481,6 +21400,11 @@ components:
           description: Upstream revenue object, or null.
         acquired:
           type: boolean
+        acquired_by:
+          type:
+            - string
+            - 'null'
+          description: The acquirer as the enrichment provider names it.
         acquired_by_permalink:
           type:
             - string
@@ -21687,6 +21611,11 @@ components:
         company_id:
           type: string
           format: uuid
+        note:
+          type:
+            - string
+            - 'null'
+          description: The caller's private note on the contact; null until one is saved.
         company:
           $ref: '#/components/schemas/CompanyNested'
         contact_count:
