@@ -1,0 +1,243 @@
+---
+title: "Video Game Waterfall"
+sidebarTitle: "Video Game Waterfall"
+description: "Scope for adding video games as an entity type — a Video_Game node reusing the existing WORKED_ON credit edge, and a four-tier source waterfall that defers the expensive credits licence until coverage is measured."
+icon: "gamepad"
+---
+
+<Note>
+  **Status: SCOPE ONLY — nothing built.** Drafted 2026-09-08. No Xano tables, functions, or queues exist yet. Table IDs below are `TBD`.
+</Note>
+
+## The one-line version
+
+Adding video games is **not a new edge type**. `WORKED_ON` already exists in the ontology as `(Person)-[:WORKED_ON]->(Film_TV)` at weight **30**. Video games are the same shape pointed at a new node label — so this pipeline is largely a re-skin of the [IMDB Waterfall](/guides/enrichment/waterfall/imdb-waterfall), not a new design.
+
+The only genuinely new problem is **sourcing**: unlike IMDB, the best credits database gates person-level credits behind a $4,999.99/mo tier.
+
+---
+
+## Source waterfall
+
+Four tiers, cheapest first. Tiers 1–3 are committed; tier 4 is a decision gate, not a plan.
+
+| Tier | Source | Gives us | Licence | Cost |
+| :-: | --- | --- | --- | --- |
+| **1** | **Wikidata** | Catalog seed, **vendor ID cross-walk**, notable person credits (director, writer, voice actor) | CC0 — no restrictions | **$0** |
+| **2** | **PDL / Enrich Layer** | Self-reported shipped titles from job history + project text | Already licensed | **$0 marginal** |
+| **3** | **MobyGames Bronze** | Catalog depth — titles, alt titles, genres, platforms, releases, developer/publisher orgs, cover art | Commercial, 1 req/s | **$99.99/mo** |
+| **4** | *MobyGames Gold* or *IMDb Essential Metadata* | Full person-level credits (1.1M people) | Commercial | **$4,999.99/mo** |
+
+<Warning>
+  **MobyGames Bronze and Silver do NOT include credits.** Credits are a Gold-tier entitlement only.
+
+  | Tier | Price | Rate | Credits |
+  | --- | --- | :-: | :-: |
+  | Bronze | $99.99/mo | 1 req/s | No |
+  | Silver | $499.99/mo | 4 req/s | No |
+  | Gold | $4,999.99/mo | 8 req/s | **Yes** — 1.1M people, + trivia + player reviews |
+
+  You are paying Gold for **entitlement, not throughput** — Bronze's 1 req/s already crawls the full catalog in ~4 days. There is **no free trial**; the subscription is month-to-month, cancel anytime, so one month at $4,999.99 is the only evaluation path.
+</Warning>
+
+### Why tier 1 comes first
+
+Wikidata is CC0 and carries `mobygames_id`, `igdb_id`, `steam_appid` and `imdb_id` as statements on the same item. Seeding from it means the **cross-walk is already built** on the day we decide to layer Gold or IMDb credits on top. Skipping it turns that upgrade into a re-resolution project.
+
+It also already produces real credit edges. A live pull of `Q64826862` (Elden Ring) on 2026-09-07 returned **11 person credits for free** — 1 director, 2 screenwriters, 9 voice actors — which is exactly the notable/senior tier a relationship graph cares about.
+
+### The decision gate before tier 4
+
+Build tiers 1–3, then measure coverage against ~500 game-industry people our users actually search for. Only if the free layer misses do we price Gold — and we then have a hard coverage number to negotiate with.
+
+Note that Gold's unique value is **historical depth**. Much of the 1.1M shipped a title decades ago and is not someone a user can get a meeting with. Orbiter monetises *reachable and currently relevant*, which is what tier 2 delivers.
+
+---
+
+## Nodes
+
+### `Video_Game`
+
+New node label, mirroring `Film_TV`. Canonical definition belongs in [Ontology → Node Types](/guides/ontology/nodes) once ratified; this page is pipeline-scoped.
+
+Worked example — real values pulled live from Wikidata `Q64826862`, not invented:
+
+```json
+{
+  "natural_key": "elden-ring:2022",
+  "title": "Elden Ring",
+  "title_normalized": "elden ring",
+  "alt_titles": ["ELDEN RING", "エルデンリング"],
+  "first_release_date": "2022-02-25",
+  "first_release_year": 2022,
+  "franchise": "Elden Ring",
+  "platforms": ["pc_windows", "ps4", "ps5", "xbox_one", "xbox_series"],
+  "genres": ["action role-playing game", "soulslike", "dark fantasy"],
+  "developer_org_ids": ["<master_org: FromSoftware>"],
+  "publisher_org_ids": ["<master_org: Bandai Namco Entertainment>", "<master_org: FromSoftware>"],
+  "external_ids": {
+    "wikidata_qid":   "Q64826862",
+    "steam_appid":    "1245620",
+    "imdb_id":        "tt10562854",
+    "opencritic_id":  "12090",
+    "igdb_slug":      "elden-ring",
+    "mobygames_slug": "elden-ring",
+    "mobygames_id":   null
+  }
+}
+```
+
+### Four things the live pull taught us
+
+<AccordionGroup>
+  <Accordion title="Wikidata stores SLUGS, not numeric IDs">
+    `P5794` returned `elden-ring`, not a numeric IGDB id. `P1933` likewise. So the schema needs **both** `mobygames_slug` (the resolution key we get free from Wikidata) and `mobygames_id` (the numeric `game_id` that only Bronze returns). Seed the slug, backfill the id.
+  </Accordion>
+  <Accordion title="P577 returned TWO publication dates">
+    `2022-02-25` and `2026-08-28` — an original release and a later re-release. Confirms `first_release_date = MIN(all release dates)`, and that any natural key must bind to the **first** year or it churns on every port and remaster.
+  </Accordion>
+  <Accordion title="Platform QIDs do not reliably carry English labels">
+    Four of six platform QIDs resolved to nothing via `wbgetentities`. Wikidata platform values are unusable raw — a `platform_qid → normalized_code` mapping table is **mandatory**, which is why `platforms` is an array of controlled codes rather than free text.
+  </Accordion>
+  <Accordion title="The free tier already produces real credits">
+    11 credit edges for one game, CC0, zero vendor cost. This is the evidence that tiers 1–2 should ship before anyone signs a credits contract.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Edges
+
+Reuse the canonical definitions in [Ontology → Edge Types](/guides/ontology/edges); weights are on the shared **lower = stronger** scale from [Edge Weights](/guides/ontology/edge-weights). Hub-node edges sit Weak or below and **never sub-1**.
+
+| Edge | Pattern | Weight | Mirrors |
+| --- | --- | :-: | --- |
+| `WORKED_ON` | `(Person)→(Video_Game)` | **30** | Identical to the [IMDB credit edge](/guides/enrichment/waterfall/imdb-edges#worked-on) — same edge type, new target label |
+| `HAS_AWARD` | `(Video_Game)→(Game_Award)` | 40 | `Film_TV → Film_TV_Award` |
+| `WON_AWARD` | `(Person)→(Game_Award:Winner)` | 30 | Film & TV awards |
+| `NOMINATED_FOR` | `(Person)→(Game_Award:Nominee)` | 35 | Film & TV awards |
+| `HAS_EXPERTISE` | `(Person)→(SubDomainExpertise)` | 10–50 | Existing resolver #12926, no change |
+
+Awards map cleanly onto the film pattern: The Game Awards, BAFTA Games, DICE, and the GDC Awards all have the same title-and-person shape as the Academy Awards scrapers.
+
+Edge descriptions should be stamped **at write time** via the shared `generate-edge-description` (#13181), exactly as #13013 / #13015 do — not deferred to a backfill trio.
+
+### The two-confidence rule
+
+Because tier 2 credits are self-reported, every credit carries **two** independent scores:
+
+- `confidence` — *did this credit happen?*
+- `resolution_score` — *is this the right human?*
+
+Conflating them is the classic identity-resolution bug: a rock-solid Gold credit attached to the wrong "Chris Taylor" reads as high confidence and is completely wrong. An edge goes active only when **both** clear their floor.
+
+| `resolution_method` | Condition | Score |
+| --- | --- | :-: |
+| `exact_id` | Vendor person ID already mapped to a `master_person` | 0.98 |
+| `name_org_year` | Name match + shared org + overlapping years | 0.75 |
+| `llm_match` | LLM adjudicated with bio context | 0.55 |
+| *name only* | — | **No edge written** |
+
+---
+
+## Tables
+
+Mirrors the [IMDB table conventions](/guides/enrichment/waterfall/imdb-tables#conventions--indexes) — `id` int PK; `created_at` not null default now; `updated_at` nullable app-managed on source tables only; raw payloads in a `json` field literally named `json`; flags bool not null default `false` with verbed names; FKs int not null **default `0` = unset** with a `tableref` named for the target table; text fields carry `trim` validators.
+
+| Table | Xano ID | Role |
+| --- | :-: | --- |
+| `video_game` | **TBD** | Source of truth — title records, raw `json`, enrichment metadata, `image_url` for cover art |
+| `game_credit_join` | **TBD** | Relational mirror of `WORKED_ON`, mirroring `imdb_credit_join` (#397) field-for-field, **including the pending-row pattern** |
+| `game_award` | **TBD** | Award rows, mirroring `film_tv_award` (#396) |
+| `queue_game_title` | **TBD** | Upsert-only enrichment queue |
+
+### Deliberate deviations from the IMDB tables
+
+<AccordionGroup>
+  <Accordion title="No `game_person` source table">
+    IMDB has `imdb_person` (#394) because IMDB is itself the person source. Here the person side arrives from Wikidata and PDL and resolves straight into the existing `master_person`. Adding a parallel person table would create a second identity space for no gain.
+  </Accordion>
+  <Accordion title="Queue keys on a source-prefixed ID, not a URL">
+    IMDB queues key on a normalized `imdb_url`; the music tables key on a stable `mbid`. Games have neither a single URL surface nor one stable ID — discovery can arrive from Wikidata *or* MobyGames. Proposal: a `game_key` text unique field holding a source-prefixed stable id (`wd:Q64826862`, `mg:12345`), collapsed to the MobyGames id once known. **This is open question Q1.**
+  </Accordion>
+  <Accordion title="`enrich_depth` is lazy, not cascading">
+    Detail fetches are prioritised by popularity, not crawled blind — see the crawl budget below.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  **`log_crash` (#542) `phase` is a strict enum.** Any new phase value written by this pipeline must be added to the table's enum first — values outside the list **fail at runtime**, they do not fall through.
+</Warning>
+
+Graph node UUIDs register in `node_registry` (#758). Note the live column is spelled `entitiy_type`.
+
+---
+
+## Crawl budget at Bronze (1 req/s)
+
+The list endpoint is nearly free; detail endpoints are the entire cost.
+
+| Pass | Requests | Wall clock |
+| --- | --- | --- |
+| Full catalog via `/v1/games` at `limit=100` | ~3,500 | **~1 hour** |
+| Per-release detail via `/v1/games/{id}/platforms/{pid}` | ~700,000 | **~8 days saturated** |
+
+**Therefore: page the full list up front, then lazy-fill detail.** Prioritise release-detail fetches by popularity and fetch on demand whenever a credit edge or user query first touches a game. Do not attempt a blind full detail crawl — that is 8 days of saturated rate limit for data that stays cold for ~95% of the catalog. `queue_game_title.priority_tier` exists for exactly this.
+
+---
+
+## Field mapping — MobyGames v1 → `video_game`
+
+| MobyGames field | → | Endpoint |
+| --- | --- | --- |
+| `game_id` | `external_ids.mobygames_id` | `/v1/games` |
+| `title` | `title` (+ derived `title_normalized`) | `/v1/games` |
+| `alternate_titles[]` | `alt_titles` | `/v1/games` |
+| `description` | `summary` | `/v1/games` |
+| `genres[]` | `genres` / `themes` | `/v1/games` |
+| `platforms[].platform_name` | `platforms` | `/v1/games` |
+| `platforms[].first_release_date` | `first_release_date` (MIN) | `/v1/games` |
+| `sample_cover.image` | `image_url` | `/v1/games` |
+| `moby_score` / `num_votes` | `player_score` | `/v1/games` |
+| group membership | `franchise` | `/v1/groups` |
+| release companies + role | `developer_org_ids` / `publisher_org_ids` | `/v1/games/{id}/platforms/{pid}` |
+
+---
+
+## Open questions
+
+| # | Question |
+| :-: | --- |
+| **Q1** | Queue key shape — source-prefixed `game_key`, or force a MobyGames id before enqueue? |
+| **Q2** | Do we need `DEVELOPED_BY` / `PUBLISHED_BY` edges to `Organization`, or are developer/publisher FKs on `video_game` enough for v1? The IMDB waterfall emits no equivalent. |
+| **Q3** | Is `Video_Game` a distinct node label, or a `Film_TV` variant with a `medium` discriminator? Distinct is proposed — franchises, platforms, and DLC trees have no film analogue. |
+| **Q4** | Does a game credit feed `HAS_EXPERTISE` the same way film credits do, or does it need its own sub-domain vocabulary? |
+| **Q5** | Interests overlap — a game is also an *affinity* on a persona ("is into Elden Ring"). Same node, or a separate interest reference? |
+
+## Vendor questions before subscribing
+
+Ask MobyGames all three **before** any tier is purchased:
+
+<Steps>
+  <Step title="Storage and re-serving">
+    Does the Bronze commercial licence permit storing and re-serving derived catalog data?
+  </Step>
+  <Step title="Retention on termination">
+    What happens to ingested data if the subscription is cancelled? This is the one that matters — if data must be deleted on cancellation, then "subscribe briefly, bulk ingest, downgrade" is a contract breach rather than a strategy. Applies at Bronze too, not just Gold.
+  </Step>
+  <Step title="Attribution">
+    Required attribution wording and placement.
+  </Step>
+</Steps>
+
+<Note>
+  **Commercial context:** MobyGames and Atari launched *Moby Professional*, a game-industry career and networking product built on the same credits database. That is adjacent enough to Orbiter that they may read us as a competitor rather than a customer at the Gold tier — worth surfacing early in any commercial conversation.
+</Note>
+
+## Sources ruled out
+
+| Source | Why not |
+| --- | --- |
+| **IGDB** | Best-structured catalog, but the free tier is **non-commercial** under the Twitch Developer Services Agreement, and it has **company-level involvement only — no individuals**. Commercial use needs a partner agreement. |
+| **Giant Bomb** | Has a real `person` resource and game credit links, but is **non-commercial only** with written permission required. |
+| **RAWG** | Free plan permits commercial use to 20k req/mo, but requires an **attribution backlink from every page using the data** — a product constraint on our UI — and its people data is thin. |
