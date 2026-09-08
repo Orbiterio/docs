@@ -1,0 +1,249 @@
+---
+title: "Video Game Waterfall — Sources and Locked Graph Contract"
+sidebarTitle: "Sources & Graph Contract"
+description: "Source-by-source coverage for the six game entity types, approved mappings, real support-node examples and implementation gates."
+icon: "database"
+---
+
+<Info>
+**Contract baseline: `games-v1`, September 8, 2026.** This locks the intended Go/GCP design, not a claim of implemented workers or enabled vendor access. Keep **six game entity families**. The game worker owns their creation/reuse through the finite queued plan; the movie pipeline supplies the existing game identity and credits. Graphs → [Node Types](/guides/ontology/nodes#game-type-contract-v1) and [Edge Types](/guides/ontology/edges#game-edge-contract-v1) are the normative identity and relationship references.
+</Info>
+
+## Decision by node type
+
+| Type | Decision for the first Go build | Sources that can support it | Main relationship |
+| --- | --- | --- | --- |
+| `Video_Game` | Required canonical game; reuse an IMDb-created UUID and keep it hidden until game publication | Wikidata, reused IMDb identity, exact official game/store evidence; enabled catalog providers | Credits, companies, adaptations and game context |
+| `Game_Series` | Include when a **video-game series** and membership are evidenced | Typed Wikidata P179; verified official series membership; enabled catalog series mapping | `IN_GAME_SERIES` |
+| `Game_Platform` | Include exact supported platform identities | Typed Wikidata P400; explicit official/store platform evidence; enabled catalog platform records | `AVAILABLE_ON` after release evidence |
+| `Game_Engine` | Include when exact game-engine use is evidenced; no blanket requirement for every game | Typed Wikidata P408, official developer/engine-maker evidence; enabled engine mapping | `USES_ENGINE` with version/use scope |
+| `Game_Release` | Include **conditionally**, when a coherent platform release needs its own identity; retain sparse dates as facts | Qualified Wikidata dates; exact official releases; enabled catalog release records | `RELEASE_OF`, scoped `AVAILABLE_ON` |
+| `Game_Award` | Include scoped nominations/results with known ceremony/category/nominee entry | The Game Awards, qualified Wikidata, other explicitly supported award-body pages | `HAS_AWARD`; named `WON_AWARD` / `NOMINATED_FOR` |
+
+Support coverage is optional per game. Missing engine, series, release or award facts do not prevent a valid game publishing. An attempted **required** stage failure still blocks publication under the declared manifest; an optional unsupported provider cannot be silently marked successful. All support identities compete within the existing leaf budgets.
+
+## Complete source inventory
+
+This inventory covers every source class in the current game plan. “Can support” describes evidence capability; production access, parser verification and fact election are separate gates. No new subscription or global catalog import is required to implement the six contracts.
+
+| Source | Can support | Cannot establish / enabling condition |
+| --- | --- | --- |
+| **Wikidata** | Crosswalks, game types, selected credits, companies, adaptations, typed series/platform/engine links, qualified dates and awards | Sparse statements are not complete catalogs or credits. Preserve GUID, rank, qualifiers and references. [Frozen records](/assets/video-game-waterfall/source-evidence.json) |
+| **Existing movie/IMDb snapshot** | Existing `Video_Game` UUID/`tt` alias and explicit named game credits | Does not create the five support types. Does not supply public game display parameters or artwork. [Handoff contract](/guides/open-work/video-game-waterfall#movie-to-game-handoff) |
+| **Existing person/company enrichment** | Canonical endpoints, work history and video-game specialization that authorize bounded probes | Employment or a role title alone cannot create a game credit, developer/publisher edge or game support node |
+| **Official game, studio, publisher and engine-maker pages** | Exact game identities, explicitly billed people/companies, series, platforms, engine use, release scope and approved artwork | Each extraction needs an exact subject, dated source and supported template. A studio catalog is enumerated only by the authorized company root. [Engine example](#real-engine-and-release-examples) |
+| **Steam official store** | Store app alias/type, game-specific fields, explicit platform/release evidence and game artwork candidates | Steam is a storefront, not `Game_Platform`. App/package/bundle/DLC/soundtrack identities must be distinguished. [Steam's application model](https://partner.steamgames.com/doc/store/application) and [soundtrack distinction](https://partner.steamgames.com/doc/store/application/dlc) |
+| **The Game Awards** | Year/category-scoped game results and explicitly named performance/music recipients; selected game tiles | No complete archive nominee coverage, company-role inference or award-to-entire-crew shortcut. [Verified examples and adapter](/guides/open-work/video-game-waterfall-game-awards) |
+| **IGDB, when enabled** | Games, collections, platforms, engines, release dates and company involvement | Optional commercial capability. No verified full individual-credit contract here. [Official API schema](https://api-docs.igdb.com/) |
+| **MobyGames, when enabled** | Candidate game/platform/release/company/cover coverage; qualified groups; named people when entitled | Tier and endpoint response must be verified before activation. Current documentation fetch returned 403; do not treat an inaccessible schema as verified. [API](https://www.mobygames.com/info/api/) · [Tiers](https://www.mobygames.com/api/subscribe/) · [Published Gold credits scope](https://www.mobygames.com/forum/3/thread/270120/important-changes-to-mobypro-subscription-service/) |
+| **MusicBrainz / existing music sources** | Independently identified release groups, music works, recordings and artists for exact game bridges | Use the [fourth primary entry adapter](/guides/open-work/video-game-waterfall#music-waterfall-entry). Keep existing music types/owners; a music release is not `Game_Release`. A soundtrack title alone cannot identify a game. [API entity families](https://musicbrainz.org/doc/MusicBrainz_API) · [Existing frozen response](/assets/video-game-waterfall/source-evidence.json) |
+| **Wikimedia Commons** | An exact-game image candidate with file-level source/license metadata | Does not create a game/credit/award fact merely by file category. Inspect each file; Wikidata CC0 does not license its linked images. [File reuse rules](https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia) |
+| **Future licensed full credits** | Potential long-tail named contributions | Separate contract and held-out coverage review; no assumed entitlement, acquisition or new relationship family |
+| **Search / extraction models** | Candidate URLs, entity-match proposals and structured extraction from retained evidence | Neither search snippets nor model output are independent proof. Resolve and elect the underlying source statement; never create a node/edge from a suggestion alone |
+
+### Adapter mapping details
+
+**Wikidata:** type-check the target of [P179](https://www.wikidata.org/wiki/Property:P179), [P400](https://www.wikidata.org/wiki/Property:P400) and [P408](https://www.wikidata.org/wiki/Property:P408). These properties span more than our game classes. P179 is not automatic franchise membership; P408 may describe another software-engine kind. [P577](https://www.wikidata.org/wiki/Property:P577) dates need their own platform/territory qualifiers; never multiply independent arrays into release combinations. P166/P1411 requires category, ceremony/year and recipient scope before `Game_Award` projection. P144/P4969 retains the existing normalized adaptation contract. A bounded inverse P406 lookup can support the music-to-game handoff after soundtrack and game identity resolve.
+
+**IGDB schema binding:** use `game_type`, `game_status`, `collections`; the older game `category`, `status`, `collection` fields are deprecated. Read typed collection membership, not every grouping. For `release_dates`, preserve `game`, `platform`, `release_region`, `date_format`, `date`, `status`; old `region`/`category` are deprecated. An ID there aliases a date assertion, not automatically a canonical release. Company flags distinguish `developer`, `publisher`, `porting`, `supporting`; inspect the role instead of assuming every involved company is the developer. `game_engines` supplies an engine candidate; a version needs its own evidence. The API documentation is reviewed; no authenticated response/entitlement is claimed. [Schema](https://api-docs.igdb.com/)
+
+**MobyGames binding remains conditional:** verify fields and permitted retention for the enabled tier with a retained response before mapping. Group membership may describe an engine, theme or editorial grouping; classify it before accepting a series or engine relation. No generic group-to-series cast, assumed credits endpoint or fabricated provider release ID. A Wikidata Moby ID is still useful as an alias without buying access.
+
+## Real engine and release examples
+
+These extend the coverage review without changing the original **29-node / 30-edge** fixture. [Companion JSON](/assets/video-game-waterfall/support-type-examples.json) contains simulated internal node/edge properties backed by the cited source observations; it is not a production ingestion result.
+
+| Example | Locked interpretation |
+| --- | --- |
+| Elden Ring `Q64826862` → series `Q124706366` | Existing fixture; a distinct typed series identity with `IN_GAME_SERIES`, not another copy of the title |
+| Elden Ring → Windows `Q1406` and PS4 `Q5014725` | Existing fixture; exact platform identities, with source-scoped availability |
+| **Senua's Saga: Hellblade II → Unreal Engine** | Engine family node plus `USES_ENGINE.engine_versions=["5"]`. [Xbox's development report](https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/) explicitly discusses the game's work in Unreal Engine 5. A trailer engine alone would not prove shipped-game use |
+| **The Last of Us (2013), PS3, worldwide release assertion, June 14, 2013** | A scoped `Game_Release` → `RELEASE_OF` → the existing 2013 game, and release → `AVAILABLE_ON` → PS3. Retain the [Wikidata statement/qualifiers](/assets/video-game-waterfall/source-evidence.json), [PlayStation global-date announcement](https://blog.playstation.com/2013/06/04/the-last-of-us-multiplayer-revealed/) and [Sony launch release](https://www.prnewswire.com/news-releases/award-winning-developer-naughty-dog-launches-new-ip-the-last-of-us-exclusively-for-playstation3-211525641.html) as separate evidence scopes |
+| Elden Ring — 2022 Best Game Direction | Existing `Game_Award` UUID; official corroboration does not create another result |
+
+
+<AccordionGroup>
+<Accordion title="Engine node and game-use edge">
+
+```json
+{
+  "nodes": [
+    {
+      "labels": [
+        "Entity",
+        "Game_Engine"
+      ],
+      "properties": {
+        "uuid": "a5b975e0-fcc9-5b30-8822-521fa033d21f",
+        "name": "Unreal Engine",
+        "created_at": 1788868800000,
+        "updated_at": 1788868800000,
+        "source": "official_xbox",
+        "engine_kind": "game_engine",
+        "source_urls": [
+          "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "785cd33a-56c9-587c-bd18-0eb2bf839c05",
+      "type": "USES_ENGINE",
+      "to": "a5b975e0-fcc9-5b30-8822-521fa033d21f",
+      "properties": {
+        "uuid": "c8a56cd0-e6f0-5379-b0e9-61773c43a866",
+        "created_at": 1788868800000,
+        "updated_at": 1788868800000,
+        "source_urls": [
+          "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/"
+        ],
+        "chosen_fact_ids": [
+          "7e3c1581-0f6c-57f4-8fb4-132ea3052958"
+        ],
+        "projection_revision": 1,
+        "policy_version": "games-v1",
+        "active": true,
+        "layer": "evidence",
+        "weight": 80,
+        "excluded_from_scoring": true,
+        "engine_versions": [
+          "5"
+        ],
+        "engine_use_record_ids": [
+          "example:hellblade-ii-unreal-5"
+        ]
+      }
+    }
+  ]
+}
+```
+
+</Accordion>
+<Accordion title="Platform release and its relationships">
+
+```json
+{
+  "nodes": [
+    {
+      "labels": [
+        "Entity",
+        "Game_Release"
+      ],
+      "properties": {
+        "uuid": "7fa971f9-571c-52e7-9c53-a6b323ed16dc",
+        "name": "The Last of Us — PS3 — worldwide release assertion",
+        "created_at": 1788868800000,
+        "updated_at": 1788868800000,
+        "source": "wikidata",
+        "release_scope_key": "release:7fa971f9-571c-52e7-9c53-a6b323ed16dc",
+        "game_entity_id": "7ccbbe2d-52c3-5bca-8d8c-5a0193bd669c",
+        "platform_entity_id": "36a76ee6-b18f-514a-b2a2-42a7fbae2317",
+        "territory_key": "wikidata:Q13780930",
+        "release_date": "2013-06-14",
+        "date_precision": "day",
+        "release_status": "released",
+        "source_urls": [
+          "https://www.wikidata.org/w/index.php?title=Q1986744&oldid=2535799766",
+          "https://blog.playstation.com/2013/06/04/the-last-of-us-multiplayer-revealed/",
+          "https://www.prnewswire.com/news-releases/award-winning-developer-naughty-dog-launches-new-ip-the-last-of-us-exclusively-for-playstation3-211525641.html"
+        ],
+        "visibility": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "7fa971f9-571c-52e7-9c53-a6b323ed16dc",
+      "type": "RELEASE_OF",
+      "to": "7ccbbe2d-52c3-5bca-8d8c-5a0193bd669c",
+      "properties": {
+        "uuid": "881acc22-f170-5f13-bd54-bc5c75879ef1",
+        "created_at": 1788868800000,
+        "updated_at": 1788868800000,
+        "source_urls": [
+          "https://www.wikidata.org/w/index.php?title=Q1986744&oldid=2535799766",
+          "https://www.prnewswire.com/news-releases/award-winning-developer-naughty-dog-launches-new-ip-the-last-of-us-exclusively-for-playstation3-211525641.html"
+        ],
+        "chosen_fact_ids": [
+          "c02f9464-2514-5f39-a73b-19f1cbbca796"
+        ],
+        "projection_revision": 1,
+        "policy_version": "games-v1",
+        "active": true,
+        "layer": "evidence",
+        "weight": 30,
+        "excluded_from_scoring": true,
+        "release_scope_record_ids": [
+          "example:tlou-ps3-worldwide"
+        ]
+      }
+    },
+    {
+      "from": "7fa971f9-571c-52e7-9c53-a6b323ed16dc",
+      "type": "AVAILABLE_ON",
+      "to": "36a76ee6-b18f-514a-b2a2-42a7fbae2317",
+      "properties": {
+        "uuid": "627ac6cd-e5fb-5717-af31-2dcd41a88386",
+        "created_at": 1788868800000,
+        "updated_at": 1788868800000,
+        "source_urls": [
+          "https://www.wikidata.org/w/index.php?title=Q1986744&oldid=2535799766",
+          "https://blog.playstation.com/2013/06/04/the-last-of-us-multiplayer-revealed/",
+          "https://www.prnewswire.com/news-releases/award-winning-developer-naughty-dog-launches-new-ip-the-last-of-us-exclusively-for-playstation3-211525641.html"
+        ],
+        "chosen_fact_ids": [
+          "91f9309c-e46c-5364-a099-3e14b9653423"
+        ],
+        "projection_revision": 1,
+        "policy_version": "games-v1",
+        "active": true,
+        "layer": "evidence",
+        "weight": 80,
+        "excluded_from_scoring": true,
+        "availability_record_ids": [
+          "example:tlou-ps3-worldwide"
+        ]
+      }
+    }
+  ]
+}
+```
+
+</Accordion>
+</AccordionGroup>
+
+The 2013 Last of Us item also contains later PS4 date assertions. Their presence on one provider item does **not** authorize merging remaster/port identities or copying PS4 dates onto the original PS3 release. Resolve the exact edition first; keep ambiguous later records pending. Hamlet's two unqualified date assertions likewise do not imply two fully specified release nodes.
+
+## Frozen boundaries and maximum relationship value
+
+- Use the six game types plus **existing** Person, Company, movie/theatre and music identities. Genres, themes, modes, ratings and artwork are scoped properties/media records; no new genre, character, award-category or storefront hubs in this build.
+- `Game_Series` means a typed video-game series. Generic franchises, fictional universes, marketing collections and bundles stay source context until a separate compatible contract exists. Their labels alone cannot create `IN_GAME_SERIES` or `BASED_ON`.
+- Remakes/remasters and substantive separately identified expansions may be distinct `Video_Game` identities. A port, SKU, cosmetic DLC or soundtrack app cannot automatically become another game. `EDITION_OF` and `EXPANSION_OF` need the exact typed relation; sequel/similarity links cannot stand in for either.
+- Reuse company identity for a studio with development and publishing roles, while preserving separate scope records. Engine-owner, platform-maker, outsourcing, rights-holder and distribution assertions may be retained as typed pending facts; the current game-only edge endpoints do not authorize new predicates or ownership inferences.
+- The useful paths are named people across games/movie/music; studios across scoped releases; titles across typed series/platform/engine contexts; and **actual** award recipients. Do not materialize inferred acquaintance edges or broaden discovery from those paths.
+
+### Reuse each fetched source across allowed facts
+
+Fetch an exact source object once per retained revision and extract all allowed claims for the already admitted game. The same [Xbox report](https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/) identifies Benoit Macon as combat director and Melina Juergens as Senua’s performer alongside engine-use evidence. These can feed separately resolved `WORKED_ON` claims from the same snapshot. The article author and studio job titles alone do not become game credits. Extra claims still compete within the fixed endpoint/relation manifest; they never admit more games or full person waterfalls.
+
+## Queue and source capability lock
+
+Persist an adapter capability record with source, version, enabled endpoint/page kinds, accepted subject types, field/edge allowlists, entitlement, retention/attribution policy, pagination/response limits and coverage scope. Pin that capability revision in the root manifest. Disabled or unverified capabilities yield a coverage reason without provider spend; do not silently fall back to an unrestricted scraper.
+
+Every provider request and support lookup stays within the **same** 20-game / 60-new-leaf / 100-job / 100-network-attempt root limits. A support node is an identity-only leaf. Never enumerate games from a series/platform/engine, releases from another game, award archives or company catalogs from a descendant. A larger provider response is truncated deterministically; it cannot enlarge admission. Game cards and incident relationships remain hidden until game-owned publication succeeds; game-scoped release/award nodes and their incident edges inherit that readiness. All game-domain edges remain excluded from scoring.
+
+The award seed's 200-entry parser ceiling is a defensive response bound, not permission to admit 200 candidates. The shared discovery limit of **50 candidates per page across at most 3 pages**, at most 20 admitted games and all lower remaining root limits still applies. Exact-target award lookups observe other entries without admitting them.
+
+All adapters use the [same Universe failure/stage/attempt facilities](/guides/open-work/video-game-waterfall#shared-universe-error-logging-required). Capability/coverage reasons are not new `error_code` values. A 403, loading shell, partial page or wrong-year award body cannot masquerade as an empty successful result.
+
+## Implementation acceptance
+
+1. Replay all six typed examples with stable UUIDs; cross-source aliases and changed names do not allocate duplicates. A movie-created game keeps its UUID and receives game-owned publication only.
+2. A generic franchise/group, Steam soundtrack app and middleware-only item produce zero wrongly typed game support nodes.
+3. Release-date correction preserves its release UUID; unqualified dates and ambiguous remaster/platform scope remain facts pending resolution. Unknown territory is not worldwide and cannot join every region.
+4. A nominated person becoming the winner updates the same award entry, replacing the current nominee projection while retaining history; same-game co-nominees remain separate.
+5. Disabled IGDB/Moby capabilities spend nothing and do not claim complete coverage; supported free/official sources can still produce evidenced support types.
+6. Series/platform/engine/award/identity leaves enqueue zero new roots. Duplicate events, retries and relation repair preserve budgets and do not reveal unpublished games.
+
+[Machine-readable contract baseline](/assets/video-game-waterfall/type-source-contract.json) · [Node Types](/guides/ontology/nodes#game-type-contract-v1) · [Edge Types](/guides/ontology/edges#game-edge-contract-v1) · [Build plan](/guides/open-work/video-game-waterfall)

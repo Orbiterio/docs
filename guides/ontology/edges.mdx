@@ -1228,6 +1228,14 @@ ON MATCH SET
 **Synchronized September 8, 2026; game writers remain proposed.** This is the graph output reference for the [Go/GCP game waterfall](/guides/open-work/video-game-waterfall), with [node types and image examples](/guides/ontology/nodes#video-game-nodes). Every game-domain edge starts with `excluded_from_scoring: true`. Existing movie/music/publication edges keep their current behavior. Weights below are proposed endpoint-specific traversal values, not evidence of interpersonal closeness.
 </Info>
 
+**Movie-credit handoff:** a stored person credit for a game queues the [same existing game identity into the game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). Retain each role/character assertion and reconcile existing `WORKED_ON` credits through one elected game replay owner. The trigger is durable upstream evidence; creating or replaying the graph edge must not launch discovery. Pending game nodes and their incident edges remain internal until the [game publication gate](/guides/open-work/video-game-waterfall#game-publication-gate) succeeds; public readers enforce readiness on both endpoints.
+
+**Person-role intake:** the [person pipeline adapter](/guides/open-work/video-game-waterfall#person-role-entry) uses job titles to queue a bounded search for named game credits. Title matches and employment authorize a probe only; explicit elected person/game evidence is still required for `WORKED_ON`. Esports, recruiting or marketing relevance does not imply development work.
+
+**Music entry:** the [music-to-game adapter](/guides/open-work/video-game-waterfall#music-waterfall-entry) lands evidence before queued game admission. `Release_Group` / `Music_Work → SOUNDTRACK_FOR → Video_Game` and `Recording → USED_IN → Video_Game` preserve exact music scope. Artist/album credits are not copied into game `WORKED_ON`; shared title, soundtrack classification or track membership alone cannot establish a bridge.
+
+**Official awards:** [The Game Awards adapter](/guides/open-work/video-game-waterfall-game-awards) feeds game recognition and named recipient edges. Each recipient links to their own nominee entry; a shared game or billed company does not make everyone a winner. Performance/music participation is a separate elected credit claim.
+
 ### Game edge inventory
 
 Rows reserve endpoint contracts; a reused edge name does not authorize its existing writer to accept a new node type. Green names are proposed new families. All rows involving new game endpoints require Go type registration, fact election, endpoint readiness and the owning queued replay before activation.
@@ -1246,13 +1254,47 @@ Rows reserve endpoint contracts; a reused edge name does not authorize its exist
 | `RELEASE_OF` — extension | Game_Release → Video_Game | 30 | Exact release identity and scoped platform/territory/edition; distinct dispatch from music Release → Release_Group | Release slice |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>AVAILABLE_ON</span> | Video_Game or Game_Release → Game_Platform | 80 | Confirmed availability; retain release/version/date context | Optional context |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>USES_ENGINE</span> | Video_Game → Game_Engine | 80 | Explicit engine and version evidence | Optional context |
-| `HAS_AWARD` — extension | Video_Game → Game_Award | 40 | Scoped game/category/ceremony/result; not an eternal category hub | Awards slice |
+| `HAS_AWARD` — extension | Video_Game → Game_Award | 40 | Scoped award body/category/ceremony/nominee entry; separate same-game recipient entries; outcome is mutable | Awards slice |
 | `WON_AWARD` — extension | Explicit Person or Company → Game_Award:Winner | 30 | Named recipient evidence, independent of the game's award | Awards slice |
 | `NOMINATED_FOR` — extension | Explicit Person or Company → Game_Award:Nominee | 35 | Named nominee evidence; no credit-list fan-out | Awards slice |
 
 Existing music-owned `RELEASED`, `COMPOSED`, `PERFORMED` and related edges remain music outputs with their existing weights; existing theatre-owned `WROTE` remains theatre context. `HAS_EXPERTISE` uses the existing taxonomy/policy when the follow-on slice is enabled. No new Person, Company or Music_Artist relationship identities are invented for games. No `KNOWS` clique, inferred employment or award-to-everyone edges are emitted.
 
 <a id="game-published-by" />
+
+<a id="game-edge-contract-v1" />
+
+### Locked game relationship contract — games-v1
+
+**Design baseline locked September 8, 2026.** The inventory above fixes names, directions and weights; this table fixes admission and ownership. Runtime writers remain proposed. [Source coverage](/guides/open-work/video-game-waterfall-sources) and [six node contracts](/guides/ontology/nodes#game-type-contract-v1) must pass before an endpoint extension activates. The existing endpoint-specific weights stay unchanged.
+
+| Relationship | Accepted evidence and additional properties | Single replay owner / rejection rule |
+| --- | --- | --- |
+| `WORKED_ON` | Explicit named person/game credit from retained IMDb, typed Wikidata, official credit or enabled licensed source; `roles`, scoped credit-record IDs, optional character/language/version | Game credit replay; role title, employment, award proximity or name-only match cannot create the credit |
+| `DEVELOPED_BY` | Exact developer or explicitly described co-development/port-development role; `development_role`, correlated role/scope-record IDs | Game company replay; parent ownership or a generic “supporting” company flag does not establish development |
+| `PUBLISHED_BY` | Explicit publisher with scoped territory/platform/time records | Game company replay; distribution, rights ownership and unlabeled company billing stay distinct |
+| `BASED_ON` | Explicit derivative/source relation, preserving original P144/P4969 direction and qualifiers | Shared adaptation replay; never infer from shared franchise, sequel order or Best Adaptation category alone |
+| `SOUNDTRACK_FOR` / `USED_IN` | Exact music endpoint plus game relation; soundtrack/work/recording kind and scoped usage records | Music/game bridge replay; named composer or an album track list alone cannot establish the bridge |
+| `IN_GAME_SERIES` | Typed video-game series membership; `membership_record_ids`, optional literal `series_ordinal` | Game context replay; reject generic franchise/group membership and title similarity |
+| `EDITION_OF` | Separately identified derivative game and exact source-game remake/remaster/edition claim; `edition_kind`, relation-record IDs | Game version replay; orient derivative → original. Packaging-only SKU, port date, sequel and similarity do not authorize this edge |
+| `EXPANSION_OF` | Substantive game/expansion identity with explicit base-game relation; `expansion_kind`, scoped relation-record IDs | Game version replay; reject soundtrack/cosmetic apps and do not follow the base game's catalog |
+| `RELEASE_OF` | Resolved `Game_Release` scope with one canonical game target; release-scope record IDs | Game release replay; exactly one active game target, no date-only release identity |
+| `AVAILABLE_ON` | Exact platform plus verified released/availability scope; `availability_record_ids`, optional `release_entity_ids`, territory/date summaries | Game release/context replay; announced, backward-compatible or cloud-streamed alone is insufficient. Scoped SQL records are authoritative |
+| `USES_ENGINE` | Explicit engine use on the exact game; `engine_use_record_ids`, optional `engine_versions`, scoped release/platform/time references | Game context replay; do not infer from a studio's tools, a trailer or middleware usage |
+| `HAS_AWARD` | Game associated with a resolved ceremony/category/nominee entry; award-evidence record IDs | Game recognition replay; the game is context for a named-person award, not a claim every contributor won |
+| `WON_AWARD` / `NOMINATED_FOR` | Explicit independently resolved Person/Company recipient of that particular entry; recipient-record IDs | Game recognition replay; billing an organization next to a game does not make it an award recipient |
+
+These owner names designate modules/stages in the **shared Go application and queue**, not new services. They consume elected facts and bounded manifests. A writer cannot trigger source discovery, full person/company enrichment, an award archive or another game's waterfall. Related games needed for version/adaptation endpoints remain hidden identity-only stubs unless already independently admitted or published.
+
+**Edge identity and cardinality:** one semantic edge per canonical ordered endpoint pair and edge family, shared across supporting sources. Multiple roles, engine versions, publishing regions or release observations become correlated SQL records referenced by that edge; they do not become duplicate parallel edges or Cartesian products. `RELEASE_OF` additionally enforces one active parent per release. Merges rekey through the canonical resolver; stale aliases cannot resurrect an obsolete endpoint. Reject game-to-itself adaptation/edition/expansion claims after alias resolution; a second alias does not create a second work.
+
+**Availability projection:** a release → platform edge describes that exact release. A game → platform edge is a deduplicated summary supported by explicit game availability and/or elected released scopes of the same canonical game. Both use the same owner; the summary is not a second source assertion or a second unit of scoring support. Never aggregate a separately identified remake into its original. If its final eligible scope is withdrawn, retire the summary edge. A surviving historical release supports “released on”; current store sale status is a separate time-scoped fact, so delisting does not erase release history.
+
+**Award outcome transitions:** nomination → win keeps the award node UUID, replaces the current `Nominee` label with `Winner`, retires the current `NOMINATED_FOR` projection and activates `WON_AWARD` for the exact elected recipients. The historical nomination stays in SQL. Reverse corrections perform the converse; recipient replacement affects only that entry. Unresolved outcomes project no guessed recipient result edge. Replay/read revisions prevent mixed old/new result states from appearing as a completed projection.
+
+**Retraction and public reads:** incomplete source coverage cannot delete omitted edges. Complete replacements retire only their source/scope, re-elect remaining evidence and deactivate an edge only when its last eligible support disappears. All game endpoint variants carry `excluded_from_scoring=true`, including reused edge names. Public traversal requires readiness of both endpoints and inherited game readiness for scoped `Game_Release` / `Game_Award` nodes. Release → platform and person → award paths remain hidden if the associated game is unpublished; checking only direct `Video_Game` endpoints is insufficient. An internal graph's existence is not public publication.
+
+**Endpoint lock:** this build does not extend `DEVELOPED_BY` to engines/platforms, infer company ownership, mint franchise/character relationships or add expertise from generic job-title matching. Retain useful unsupported assertions for a later explicit endpoint contract. [Machine-readable baseline](/assets/video-game-waterfall/type-source-contract.json)
 
 ### Shared names and replay ownership
 
