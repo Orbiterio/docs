@@ -21,6 +21,8 @@ Make a game a useful professional relationship hub: who worked on it, which stud
 
 The first release delivers game identity, person credits, developer/publisher relationships, IMDb handoff, Wikidata adaptation intake, company intake, pending-edge replay, corrections and public display projections. The soundtrack, award and series slices follow through the same queues. Platform/engine and edition context are optional additions with explicit budgets. Broad catalog crawling, automatic franchise expansion and inferred interpersonal edges are outside this plan.
 
+**Graph references are synchronized:** [Node Types — six game families, reused endpoints and real image examples](/guides/ontology/nodes#video-game-nodes) · [Edge Types — endpoint/weight/property manifest](/guides/ontology/edges#video-game-edges) · [simulation breakdown by type](/guides/open-work/video-game-waterfall-examples#fixture-breakdown). The fixture has 7 game-family nodes plus 22 reused endpoints, totaling 29 nodes and 30 edges. These pages specify the proposed Go build, not deployed writers.
+
 ## What changes from the original scope
 
 | Original assumption | Revised build decision |
@@ -259,6 +261,10 @@ Delete the earlier unmeasured “full catalog in four days” promise. Budget us
 
 *Elden Ring: actual landscape thumbnail from [Steam](https://store.steampowered.com/app/1245620/_/). The shared avatar/movie-poster file pipeline will save the selected game artwork under `game-thumbnail/`.*
 
+<img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/222160/header.jpg?t=1765636960" alt="Hamlet video-game node thumbnail from its Steam store page" width="460" />
+
+*Hamlet: a second real game-node thumbnail from [Steam](https://store.steampowered.com/app/222160/), matched by app ID `222160`. The store-release scope stays distinct from the game's original release date. See [Node Types](/guides/ontology/nodes#video-game-nodes) for the image/property contract.*
+
 **Recommendation:** reuse a suitable, permitted poster already acquired by the IMDb title pipeline first. If it is missing, use **IGDB for a consistent portrait-cover source**, or **MobyGames if that adapter is already enabled**. A verified Steam store image is a useful landscape fallback for games with a Steam app ID. Do not buy a credits tier solely to obtain a thumbnail.
 
 | Source | What we can obtain | Selection rule |
@@ -307,7 +313,7 @@ Weights use the existing **lower = stronger** convention. Reused weights below a
 | --- | ---: | --- | --- |
 | Person → `WORKED_ON` → Video_Game | 30, reused | Explicit role; all roles/languages/characters/versions retained. One edge per person/game pair; detailed credit records in SQL. | Core |
 | Video_Game → `DEVELOPED_BY` → Company | 35, new | Named developer; lead/co-development/porting/support role if stated. Specific studio, not automatically its parent. | Core |
-| Video_Game → `PUBLISHED_BY` → Company | 45, new | Named publisher; preserve territory, platform and dates in scoped records. Distribution is not silently publishing. | Core |
+| Video_Game → `PUBLISHED_BY` → Company | 45, game endpoint extension | Named publisher; preserve territory, platform and dates in scoped records. Existing publication → company uses weight 20 and remains unchanged. Distribution is not silently publishing. | Core |
 | derivative → `BASED_ON` → source | 55, adaptation proposal | Explicit P144/P4969, normalized once. Endpoints add Video_Game to existing film/stage/work support. | Core bridge |
 | Release_Group or Music_Work → `SOUNDTRACK_FOR` → Video_Game | 55, new | Explicit score/soundtrack relation. Album ≠ composition ≠ recording. | Music slice |
 | Recording → `USED_IN` → Video_Game | 60, new | Exact named recording and game use, with scene/usage/version when known. Album membership alone is insufficient. | Later music slice |
@@ -323,6 +329,8 @@ Weights use the existing **lower = stronger** convention. Reused weights below a
 | Person → `HAS_EXPERTISE` → existing expertise taxonomy | Existing policy | Versioned role-to-expertise mapping with game evidence. Expertise writer gets no discovery capability. | Follow-on slice |
 
 `Game_Platform`, `Game_Engine`, `Game_Series`, `Game_Release` and `Game_Award` are support entities with stable scoped identities, not automatic standalone cards. Genres/themes remain properties, following Music. An affinity for a game is private user-graph data referencing the same public game UUID; the enrichment pipeline cannot infer it from employment or credits.
+
+**Shared names have endpoint-specific owners.** The game extension of `PUBLISHED_BY` does not change the publication writer or its weight. `RELEASE_OF` dispatch distinguishes game releases from music releases. For this build, `BASED_ON` edges have at least one `Video_Game` endpoint and use one shared adaptation replay owner; the older theatre-only `ADAPTED_FROM` proposal is not a second writer for the same game relationship. A stage work ↔ game adaptation uses `BASED_ON` exactly once. Any later unification of the non-game adaptation names requires an explicit migration, not dual emission.
 
 All graph writes use the shared parameterized writer, stable UUID keys, preserved `created_at`, application-managed `updated_at`, omitted empty optional fields and real errors. Allowlist labels/edge types; source text cannot become executable query syntax. Store complex nested qualifiers in SQL; project primitive scalar/list fields and relation-record IDs to FalkorDB, rather than pretending arbitrary JSON objects are graph property values.
 
