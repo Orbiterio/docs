@@ -1,15 +1,445 @@
 ---
 title: "Video Game Waterfall"
 sidebarTitle: "Video Game Waterfall"
-description: "Go/GCP build plan: bounded IMDb, Wikidata, theatre and company entry points; durable queues; canonical game identity; evidence-backed credits and cross-media relationships."
+description: "Go/GCP build plan: bounded person, company, movie, music, Wikidata and theatre entry points; durable queues; canonical game identity; evidence-backed credits and cross-media relationships."
 icon: "gamepad"
 ---
 
 <Info>
-**Build plan — revised September 8, 2026.** Implementation target: **Go in Orbiter Universe on GCP**, with AlloyDB, Pub/Sub, Cloud Run, GCS and the Universe FalkorDB graph. This page specifies proposed work; it does not claim game migrations, workers or graph writers are built. **No Xano implementation or dependency.**
+**Build plan — revised September 8, 2026.** Implementation target: **Go in Orbiter Universe on GCP**, with AlloyDB, Pub/Sub, Cloud Run, GCS and the Universe FalkorDB graph. This page specifies proposed work; it does not claim the dedicated game migrations, workers or graph writers are built. Existing IMDb/Film-TV writers can already create video game subtype nodes. **No Xano implementation or dependency.**
 
 The user constraint is stronger than a depth cap: **no recursive waterfall execution**. A root owns a finite staged plan. Every fan-out is queued, every job has a fixed capability, and discovered people, companies, games and works cannot restart discovery.
 </Info>
+
+**Locked source/type review:** [Sources & Graph Contract](/guides/open-work/video-game-waterfall-sources) maps every proposed source to the six entity families. Graphs → [Node Types](/guides/ontology/nodes#game-type-contract-v1) and [Edge Types](/guides/ontology/edges#game-edge-contract-v1) hold the `games-v1` identity, property and replay rules. All six types are in the intended build; supporting nodes are created only when evidenced.
+
+## Entry points
+
+All entries call one proposed Go `GameGate.Admit` boundary. HTTP/event names below are new contracts, not existing endpoints. Every request includes a trusted upstream event ID, origin, policy version and immutable ancestry; the server derives execution scope. A caller cannot grant itself a fresh root by supplying `depth: 0`.
+
+| Entry | Identity/evidence required | Admitted work |
+| --- | --- | --- |
+| **1. Company enrichment: video game specialization** | Canonical Company with a completed, accepted video game domain/subdomain classification behind `SPECIALIZES_IN` | Queue one bounded company-to-title lookup, then exact-game jobs for the selected titles. Broad video game relevance admits a probe; each company/game relationship needs its own evidence. [Detailed review below](#company-specialization-entry). |
+| **2. Movie/IMDb pipeline: person has a game credit** | An already resolved person, stored IMDb credit and exact `tt…` classified as a video game | Save the person/game credit evidence and queue that exact game. Preserve roles and characters; reuse the person. [Detailed review below](#movie-person-credit-entry). |
+| **3. Person pipeline: relevant job title** | Existing canonical person with a matching current or past role from the proposed game-role intake registry | Queue one bounded search for this person’s game credits, then hand verified game results to the existing game queue. No IMDb ID or known game required. [Detailed review below](#person-role-entry). |
+| **4. Music waterfall: game soundtrack, score or recording use** | An authorized music run with a resolved music endpoint and explicit game evidence, or a bounded soundtrack/game-credit candidate needing resolution | Queue the [music-to-game adapter](#music-waterfall-entry), then the exact hidden game. Preserve soundtrack/use/credit evidence; no game → music → game rediscovery. |
+| **IMDb title** | IMDb extraction says `videoGame`, or a verified game alias matches the title | Use the [same movie-to-game handoff](#movie-to-game-handoff). Create/reuse identity with the current node writer, then queue the game adapter with that UUID and already paid-for snapshot; skip movie-only enrichment for the game. |
+| **Movie/TV adaptation** | Resolved film QID and explicit P144/P4969 statement involving a supported game | Admit the game and the relationship evidence. Preserve film → game or game → film according to the statement. |
+| **Forthcoming theatre adaptation** | Resolved theatrical work or production QID and explicit Wikidata relation | Admit the directly connected game. A play and one production of that play are not interchangeable endpoints. |
+| **Reviewed Game Awards seed batch** | Trusted user/admin event with explicit ceremony year and category/page allowlist | Freeze a bounded set of nominated/winning games and queue the existing game flow. [Official-source adapter](/guides/open-work/video-game-waterfall-game-awards); no archive recursion. |
+| **User/admin direct game** | Strong ID or a title/year/platform candidate for review | One game root; ambiguous matches return candidates, not an automatic merge. |
+
+<a id="company-specialization-entry" />
+
+### 1. Company enrichment through SPECIALIZES_IN
+
+**Decision: yes — any accepted specialization in the video game domain can be a company entry point.** It need not be classified narrowly as a developer. Company enrichment resolves the company's specialties, identifies video game relevance, and queues a bounded search for titles connected to that exact company. The selected titles enter the game waterfall as queued jobs within the same authorized plan.
+
+```mermaid
+flowchart TD
+  C[Authorized company enrichment: Rockstar Games] --> S[Completed specialty classification]
+  S --> V[Accepted video game domain or subdomain]
+  V --> Q[Queue one bounded company title lookup]
+  Q --> M[Resolve and freeze selected game references]
+  M --> G[Queue one snapshot job per selected game]
+  G --> L[Queued identity-only credits and company endpoints]
+  L --> R[Fact election, relationship replay and publication]
+```
+
+#### What classification we read
+
+The existing Go company classifier produces `industry` and `specialties`. The facts-backed company view supplies the specialty rebuild, which resolves those specialties to `DomainExpertise` or `SubDomainExpertise` targets and writes `SPECIALIZES_IN`. A subdomain can have its parent linked by `HAS_SUBDOMAIN`. Here, **domain means the expertise taxonomy**; the company's website domain is an identity/source hint.
+
+The game detector must recognize both a **direct video game domain match** and a **video game subdomain match**, including its resolved immediate parent. Read the resolved classification snapshot; do not recursively traverse the taxonomy. Bind eligibility to canonical taxonomy IDs through a versioned registry. The labels below illustrate intended coverage; exact existing IDs and aliases must be verified before enabling the detector.
+
+| Classification result | Entry behavior | Relationship rule |
+| --- | --- | --- |
+| Video games; game development/design; video game publishing | Eligible for one bounded title probe | Developer and publisher are separately evidenced roles; publishing is enabled as part of this company entry |
+| Other confirmed video game specialties: game art, audio, localization, QA, middleware, esports or video game retail | Also eligible for the bounded probe, scoped to titles the company explicitly made, published or contributed to | A category match, stocking a title, or hosting its tournament does not prove development/publishing; unsupported company contribution roles remain pending evidence |
+| Ambiguous “gaming”, generic entertainment/software, or an unresolved taxonomy match | Preserve a classification-review result; no automatic title enumeration until video game relevance is resolved | Do not silently treat gambling, board games or a general retailer as a video game creator |
+| No accepted video game classification | No company-triggered title probe | An independently evidenced exact-game entry from another lane remains valid |
+
+**Eligibility and title evidence are separate decisions.** Broad video game relevance grants a small, bounded lookup. It grants no company/game edge by itself. Wikidata company classes can corroborate classification, but a Wikidata developer class or even a company QID is not mandatory when canonical company identity and accepted specialty evidence already exist. Name substrings, edge descriptions and vector distance alone do not authorize the trigger.
+
+#### When the company waterfall queues it
+
+The inspected Go implementation calls `RequestSpecialtiesRebuild` from the company's `specialties_rebuild` step and publishes `graph.specialties_rebuild_requested`. The graph consumer can clear and rebuild specialties asynchronously; a request, a partial graph, a missing dependency or a successful no-op is **not** proof of a completed classification. The current music bridge separately reads `industry`/`specialties` from the stored about-writer payload; its probe pattern is useful, but it is not already a game detector.
+
+The company-entry review additionally inspected Universe revision **`8871eb8ed2d024de3c2bdb0d2f07ff8016a53036`**: `company/steps_about.go`, `company/steps_closing.go`, `company_gate.go`, `graph/specialties.go` and `company/steps_music_label_verify.go`. This identifies the integration work; it does not claim the proposed game trigger exists.
+
+**Required Go extension:** persist a versioned, completed specialty-resolution snapshot and readiness receipt, then emit a correlated company-game evaluation job through the shared outbox. The receipt binds the accepted company facts to the resolved taxonomy targets. A classifier failure or incomplete rebuild waits/retries with the shared Universe failure records; it must not be cached as “not a video game company.” A successful empty classification is a distinct recorded outcome.
+
+| Trigger contract | Required behavior |
+| --- | --- |
+| Origin and identity | Proposed origin `company_specialization`; canonical company UUID, verified aliases, classification snapshot/revision and qualifying taxonomy IDs |
+| Durable scope | Persist the company run ID, upstream event ID, root/job lineage, policy version and remaining shared budget. The existing entity-only graph trigger does not supply this whole contract; add correlated durable context before enabling the game handoff |
+| Root authority | Only an already authorized company run with game-discovery capability may schedule the probe. An identity-only company found inside a game has no such capability, even if it specializes in video games |
+| One evaluation | Collect qualifying specialties into one company-level decision. Three matching specialties do not produce three probes |
+| Deduplication | Uniquely reserve one probe per canonical company + authorized root + job kind under its immutable policy. Store the eligibility digest/revision as a validation fence, not as another reservation slot. Rebuilt edge UUIDs, aliases, classification revisions and Pub/Sub delivery IDs cannot authorize a second pass within that root |
+| Refresh and retraction | Check the current classification generation before admission/provider spend. A changed classification cannot expand a frozen manifest or replenish budget; a retraction stops new discovery while independently supported game facts survive |
+| Producer behavior | Persist the handoff and return `queued`; do not run title lookup or game enrichment inline in the company worker |
+
+#### Finding titles: Rockstar Games example
+
+**Real company and titles; simulated pipeline behavior.** If a completed Rockstar Games classification qualifies, its [official games catalog](https://store.rockstargames.com/view-all-games) provides candidates such as [Grand Theft Auto V](https://www.rockstargames.com/gta-v) and [Red Dead Redemption 2](https://www.rockstargames.com/games/RedDeadRedemption2). These source pages were checked on September 8, 2026; this does not claim a live Orbiter classification or queued run for Rockstar.
+
+1. Reuse the canonical Rockstar Games company, its verified website and any existing provider IDs. Resolve additional company aliases only within this probe's budget; a brand, parent company and development studio are not interchangeable identities.
+2. Look for exact-company title associations in an entitled provider's company catalog, bounded Wikidata inverse lookups for [developer P178](https://www.wikidata.org/wiki/Property:P178) / [publisher P123](https://www.wikidata.org/wiki/Property:P123), or the verified company's own title/portfolio pages. All sources share the same limits. A company without a QID can start from its verified official portfolio; do not crawl its whole website or a retailer's entire stock list.
+3. Retain source URLs, source company IDs, claimed role, game identifiers and edition/platform qualifiers. Official catalog inclusion supplies a discovery candidate; the title snapshot must verify any developer/publisher assertion. A brand catalog must not silently turn every title into that brand's development credit.
+4. Resolve game identity, deduplicate aliases and freeze the selected manifest. The pilot permits **at most 3 discovery pages total and 20 selected games**, subject to the root's remaining **100 non-replay jobs / 100 network attempts** and all other shared limits. No separate allowance per provider, specialty or game.
+5. Queue the selected GTA V and Red Dead Redemption 2 snapshot jobs. Each emits facts and bounded endpoint candidates. `PUBLISHED_BY` / `DEVELOPED_BY` are written only after the relevant title-level evidence is elected; unresolved roles stay pending. Newly discovered studios receive identity-only jobs.
+6. Finish with selected/deferred counts and explicit partial coverage. Do not follow studios, subsidiaries, sequels or sibling titles to create another catalog run. Future catalog discovery requires a new trusted demand event under the normal admission policy.
+
+**Stopping example:** if a selected title names Rockstar North as its developer, that studio can be resolved and linked from the title's evidence. Its own video game specialization cannot trigger Rockstar North's catalog from this run. The same applies if a studio points back to Rockstar Games.
+
+<a id="movie-person-credit-entry" />
+
+### 2. Movie/IMDb pipeline through a person's video game credit
+
+**Decision: when the movie/IMDb person pipeline adds a credit for a video game, it queues that exact game into this waterfall.** This entry needs a credited person and an identified game; it does not require a company specialization or an adaptation relationship. Reuse the person's canonical UUID and IMDb `nm…` alias.
+
+**Agreed adapter design:** keep the current shared identity/node creation path. It creates or reuses the game node; a Go adapter then queues the dedicated video game waterfall with that same UUID. The internal node starts hidden. The game worker supplies its displayed properties and game-source artwork, schedules the permitted queued fan-outs, and makes it visible only through its successful publication gate. The adapter does not run the waterfall inline, and a later graph update does not call the adapter again.
+
+#### Already-created game nodes: reuse them
+
+**Video game nodes already appear in recorded sandbox output from the existing title pipeline.** The [Warner Bros. QA fixture](/guides/enrichment/waterfall/qa-smoke-tests/warner-bros#sandbox-test-results) records these two nodes with `Entity`, `Film_TV` and `Video_Game` labels, alongside David Haddad's `WORKED_ON` credits:
+
+| Existing title | IMDb ID | Recorded graph UUID |
+| --- | --- | --- |
+| Lego Harry Potter: Years 5–7 (2011) | `tt1954614` | `ddfc9d12-c0d4-42af-a8ed-794033126528` |
+| Lego Star Wars: The Force Awakens (2016) | `tt5430544` | `ed0d89b5-b35e-4720-8f6b-29feb57f750f` |
+
+The fixture's node/edge timestamps are July 31, 2026. It is historical sandbox evidence, not a count of today's Universe production graph. The inspected Go implementation also supports the shape: `graph/film_tv_sync.go` maps title type `video game` to `Video_Game`, and `platform/graph/film_tv.go` allows that subtype on the Film/TV node.
+
+**The new work extends an existing game identity and credit path.** Resolve the verified IMDb alias first and retain the same UUID and existing credit/identifier evidence. Movie metadata may remain in source history but does not supply the published game card. Register the dedicated game job/credit owner; migrate labels and reader discriminators only through the compatibility plan. Do not create a second game because its first node carries `Film_TV`, and do not launch a full catalog scan merely because it predates this waterfall. Existing IMDb image URLs are excluded from game artwork selection, including already rehosted IMDb posters. The game flow selects new artwork from its enabled game sources.
+
+“Credit added” means **the source credit has been durably stored**, including a pending credit whose game endpoint is unresolved. The trigger must not wait for a `WORKED_ON` graph edge: game identity and endpoint readiness may be the very work the queued job needs to perform. Credit existence and full game enrichment have separate completion states.
+
+```mermaid
+flowchart TD
+  P[Authorized movie / IMDb person run] --> C[Stored person credits]
+  C --> T[Resolve title type and exact IMDb title ID]
+  T --> V[Video game credit: retain person, role and evidence]
+  V --> Q[Reserve scope and queue exact-game job]
+  Q --> G[Resolve game and collect required snapshot]
+  G --> F[Elect person-to-game credit facts]
+  F --> R[Queued WORKED_ON replay and publication]
+```
+
+<a id="movie-to-game-handoff" />
+
+#### Existing node writer → Go adapter → queued game waterfall
+
+**Required connection:** after an authorized movie/person run creates or resolves the game through the existing identity/node writer, its Go adapter records a durable game-enrichment demand for **that same canonical entity**. Reuse the current `Entity:Film_TV:Video_Game` node shape and reader compatibility for IMDb-created games; a label cleanup is not a prerequisite for enrichment. The new game worker consumes the demand through the shared queue and updates that node. A legacy game node is an intake endpoint, not evidence that the dedicated game waterfall has already run.
+
+Budget admission still precedes creating a new entity or spending with a provider. Once identity is admitted, keep the current node writer and pass its UUID to the adapter. A pending graph projection does not require a replacement entity: the job keeps the UUID, and publication/replay waits for node readiness. Other entry points use the same canonical identity contract without requiring an IMDb ID.
+
+```mermaid
+flowchart LR
+  M[Authorized movie pipeline identifies game] --> N[Current node writer creates or reuses hidden game UUID]
+  N --> H[Go adapter: validate scope and persist handoff]
+  H --> Q[AlloyDB game job and Pub/Sub wakeup]
+  Q --> G[Game waterfall prepares properties and game artwork]
+  G --> R[Bounded queued credits, identities, media and replay]
+  R --> P[Successful game publication makes the same node visible]
+```
+
+| Producer / moment | Connection to the game lane |
+| --- | --- |
+| Person credit intake identifies the exact title as a game | Persist the credit and `imdb_person_credit` handoff before movie-only dispatch. Reuse the canonical game UUID if already resolved; otherwise admit the verified reference through the same resolver |
+| A queued IMDb title check identifies the title as a game later | Persist an `imdb_title` handoff with the original run's ancestry, title payload and existing entity UUID. Transfer any already reserved unfinished title work into the game scope exactly once, with prior spend retained; do not leave parallel movie and game enrichment jobs |
+| The movie path finds an already enriched `Film_TV:Video_Game` | Evaluate game-lane requirements **before** returning a movie freshness/no-op result. A legacy movie `enriched` flag or image does not satisfy game facts, game replay or game publication receipts |
+| Another person's game credit arrives while game work is queued/running | Attach that person's evidence and pending replay dependency to the existing scoped game work. Do not enqueue a second snapshot or lose the new credit when an older worker completes |
+| The required game snapshot is already fresh | Queue only missing credit/fact/replay/publication stages under the authorized scope. Fresh game detail never suppresses a newly added person's credit |
+| Graph sync, credit replay, image refresh or an identity-only descendant rewrites the node | No new game demand. These consumers can finish existing dependencies but cannot act as root/discovery producers |
+
+**One Go admission owner handles both movie entry routes.** The person-credit adapter and the late title-classification adapter converge on the same root + canonical game + job-kind/generation reservation. Provider aliases and two entry origins are not two games or two budgets. If classification arrives before canonical identity is ready, keep an unresolved reference handoff and let the admitted identity stage resolve it; do not use `tt…` as a fabricated graph UUID.
+
+The durable handoff carries the upstream run/event and root IDs, canonical entity UUID when known, verified IMDb title ID, classification evidence reference, source payload revision, credit references/person UUID when applicable, policy/manifest/generation, and a reservation/receipt reference. Pub/Sub carries only the handoff/job ID. Resolve ancestry and permitted stages from stored state; neither an event boolean nor the presence of the `Video_Game` label grants authority.
+
+**Close the persistence gap:** when the source credit/type evidence commits, record its handoff intent in the same transaction/outbox. The admission consumer then atomically reserves or finds the scoped game job and marks that intent admitted/deferred. Recovery retries the same intent; it cannot repeat discovery or treat each delivery as new demand. Existing game UUIDs from a graph-only record must first be reconciled through the owning entity/identifier resolver while preserving their identity; a missing relational registration is a recorded compatibility issue, not permission to mint a replacement.
+
+**Credit ownership moves with the game lane.** Keep one active writer for each game/person relationship through the transition. Preserve existing credit UUIDs where possible and record any required key migration; importing old rows does not automatically elect unsupported claims. Old movie game-credit rows and new game credit evidence reconcile under one typed replay owner. No delete-and-recreate cycle, duplicate `WORKED_ON` edge, loss of role/character evidence or new discovery from the replay itself.
+
+**Existing-node rollout:** first verify a small, explicitly selected set of existing game entities in the target environment, including their IMDb aliases, credits and current game-lane receipts. Submit a bounded user/admin admission for that set and use this same handoff/queue contract. The historical Warner Bros. UUIDs above are test evidence, not production IDs to enqueue blindly. Do not trigger a whole-graph sweep from deployment, label migration or an ordinary graph update.
+
+**Acceptance:** a newly admitted IMDb game uses the current node writer once, and its adapter queues game work that updates the exact returned UUID; an existing game with movie enrichment complete but no game-lane receipt queues its missing game work; a second credit or duplicate title event adds evidence without a second snapshot; fresh game detail still gets the new credit replayed; and every game-written node/credit update produces **zero return handoffs**. All resulting work retains the original identity, ancestry and remaining budget.
+
+<a id="game-publication-gate" />
+
+#### Visibility and display ownership: publish only after the game flow
+
+**Required: create internally, enrich through the game flow, then reveal.** A game stub created by the movie pipeline has `visibility=false` and `game_publication_status=pending`. Preserve its UUID, aliases and source credit records internally. The Go adapter queues the game waterfall; it cannot publish the movie-derived card or reuse its IMDb image while that work runs.
+
+| Stage | Internal state | User-visible behavior |
+| --- | --- | --- |
+| Movie pipeline creates/resolves game and stores credit | Same UUID; game publication pending; IMDb identifiers and credit evidence retained | Game node/card and incident graph relationships remain hidden |
+| Queued/running game waterfall | Game-owned candidate properties, elected credits and thumbnail ingestion are in progress | No partially populated game or IMDb poster appears |
+| Required game stages succeed | Game facts and required graph/replay receipts are ready; game-source artwork has passed the shared file pipeline; matching display revision is prepared | Game publication atomically activates that revision and sets visibility true |
+| Fetch, thumbnail, required replay or publication fails/is budget-blocked | Keep partial work and classified failure/pending receipts for bounded retry | First publication stays hidden; no IMDb or movie-property fallback |
+| Refresh of a previously game-published node | Build the next generation separately; retain the last successful game publication | Continue serving that prior complete game version until replacement is ready, unless it is explicitly retracted |
+
+**The game flow owns the displayed parameters:** title/name, description, release dates, game kind, genres, platforms, source links and artwork are selected from the enabled game-source facts and the game projection contract. An IMDb title label can be an internal identity hint; it is not a finished game description, release record, rating or image. IMDb IDs and explicit person credits remain legitimate identifiers/relationship evidence. Unavailable optional fields remain absent; do not fill them from the movie display row.
+
+**Scoped support also inherits the gate.** A `Game_Release` or `Game_Award` and all of its incident edges remain hidden until its associated game has a matching published revision. This includes person → award and release → platform paths that bypass a direct game endpoint. Internal graph replay may finish while hidden; the public projection/read policy checks the game dependency without making publication depend on prior public visibility.
+
+**Artwork is required for first publication.** Choose an exact-game asset through enabled IGDB/MobyGames, Steam, official game artwork, an approved exact-game award tile or a game-linked Commons source. Exclude IMDb source images and rehosted copies of those images. Store the approved result through the shared avatar/movie-poster file pipeline at `game-thumbnail/<game-uuid>/<source-url-hash>.webp`. Missing or rejected art yields a recorded pending reason; exhausted retries/budget park first publication. A placeholder may appear in an internal review view, but it does not satisfy this public publication gate.
+
+**Visibility must be enforced at read time as well as write time.** Game cards, search, people/company credit lists, graph neighborhoods, paths and counts expose only the last successfully published game revision. Both endpoints must be public before an incident edge appears. `Film_TV` compatibility labels, a movie `enriched` flag, node existence or a missing visibility property cannot bypass the game gate. Operational review can still inspect pending evidence and internal nodes.
+
+Only the game publisher may set game visibility true. The current node writer therefore needs a game-specific hidden-stub mode, and movie sync/publish must defer game display fields and visibility to the game owner. Add a durable `game_publication_status`/revision receipt and generation fencing through the existing publication framework. Stage graph/projection data before activation; readers require the matching committed publication revision so a crash between stores cannot expose half a game. Late movie syncs and stale workers cannot restore IMDb artwork, overwrite game parameters or reveal a pending node.
+
+A legacy movie-visible game with no successful game-publication receipt is unready under this contract: exclude it from public game surfaces until the bounded migration/admission process completes its game flow. Preserve its identity and historical evidence. Missing game-publication state defaults to pending for game subtypes; it does not change visibility rules for genuine movies or TV series.
+
+#### Detect the game before movie-only enrichment
+
+The inspected Go `person/steps_credit_cascade.go` reads the already stored IMDb profile and offers titles to the Film/TV path. Its root-person branch can run the top two titles inline. `person/credit_tiers.go` reads each credit's `type`, demotes `video game` as a weak format, and then retains a title/roles structure without that type. It deduplicates repeated title IDs by keeping the first occurrence. `person/credit_roles.go` maps only a small crew vocabulary; person-side cast/character credits are deliberately omitted by the existing movie mapper.
+
+**Required Go extension:** split classified game credits from the raw stored credit collection **before** movie-only tiering, first-occurrence deduplication and inline enrichment. Reuse the shared canonical resolver and current node writer, then pass the resulting UUID and credit evidence to the queued game adapter. A game can retain its existing Film/TV compatibility labels; the split changes its enrichment owner, not its identity. These seams were reviewed at Universe revision **`8871eb8ed2d024de3c2bdb0d2f07ff8016a53036`**, alongside `film_tv_credit_replay.go`. The existing movie behavior remains owned by the movie pipeline; this is a proposed game-specific dispatch branch.
+
+| Credit intake case | Required game behavior |
+| --- | --- |
+| Source explicitly classifies the exact `tt…` as a video game | Normalize the source's type through a versioned mapping and admit the game reference. An IMDb title ID alone does not distinguish a game from a movie |
+| Type missing, ambiguous or conflicting | Preserve the credit and queue one bounded identity/type check if authorized. Keep reason `title_type_unresolved` or an identity conflict until resolved; a familiar title/name match must not mint a Film/TV or game duplicate |
+| Actor, voice, performance, writer, director, producer or another supported game role | Retain raw credit category, role text, character, credited-as name, language and other supplied qualifiers. Apply the game role map; do not pass through the movie-only crew filter |
+| Character name without a trustworthy performance category | Keep the character text and pending role evidence. Do not guess voice acting versus performance capture from the character name or the game's medium |
+| Several roles/characters for one person and game | One selected game job; distinct normalized credit records keep each evidenced role/character/qualifier combination. No first-credit-wins loss |
+| Existing canonical game, including legacy `Film_TV:Video_Game` | Reuse the UUID through the verified IMDb alias. Add the new person's credit evidence and wake bounded replay; fetch game detail only when a required snapshot is absent or stale under policy |
+
+A selected automatic game job is **tier 1**, so it is eligible for the shared tier 0–1 drain; an explicit user request can supply tier 0. Do not inherit the movie weak-format demotion or inline-top-two path. Ranking selects within the root's cap; overflow remains deferred with its credit evidence and reason. Game classification never turns all of a person's credits into an unlimited queue.
+
+#### Credit handoff, queue and ownership
+
+1. **Store evidence first.** Reuse the IMDb profile payload already fetched by the movie/person run. Retain payload ID/revision, credit locator, source URL, person UUID/IMDb ID, exact title ID, observed title type and every supplied role/qualifier. A refused admission keeps a bounded pending source reference; it does not create an unfunded entity.
+2. **Admit once through Go.** Use origin `imdb_person_credit` and a stable upstream credit event ID. Validate the producer's stored scope and the original root's remaining budget before game identity creation or provider work. Persist the credit-to-game handoff, job reservation and outbox transactionally so a crash between credit persistence and delivery cannot lose the request.
+3. **Queue each selected game.** Preserve upstream run/root IDs, causation, policy, manifest and generation. Several people or sources crediting the same title within one root share one game snapshot job while retaining every person's claims. Separate authorized roots still share canonical identity and source-cache/freshness rules; their receipts and budgets remain attributable.
+4. **Preserve and elect the credit.** A valid person-side assertion can support the edge even if another provider omits that credit. Normalize/elect exact role and qualifier evidence through the shared facts framework. Missing corroboration is not a retraction; contradictory evidence follows election policy. Unknown roles stay pending instead of being dropped.
+5. **Replay through one owner.** When both endpoints and elected evidence are ready, the game credit replay materializes `Person → WORKED_ON → Video_Game` using the game contract: weight 30, evidence layer, excluded from scoring. Movie and game replays must not both write this same game credit. Endpoint readiness or a fresh existing game cannot suppress newly pending credit work.
+6. **Finish without discovery callbacks.** Game failure or budget deferral is visible through shared Universe attempts/stages and pending reasons while the person's saved credit survives. A graph retry, duplicate credit event or game completion cannot call the person/movie enrichment gate or refill the filmography.
+
+The [admission payload below](#admission-and-worker-interfaces) shows this exact entry origin. Extend its evidence reference to the complete stored credit record; event-supplied flags cannot grant discovery authority. The game lane may use the already paid-for title snapshot when available, and any remaining title fetch is queued and charged to the same root.
+
+#### Example and stopping point
+
+The [existing real-data simulation](/guides/open-work/video-game-waterfall-examples) includes **Martha Mackintosh** (`nm0533594`) credited as **voice actor / Melina** on **Elden Ring** (`tt10562854`). Its frozen evidence is Wikidata; it illustrates the endpoint and credit properties, not a captured IMDb person response. Given the equivalent explicit IMDb credit, this entry reuses Martha's person identity, queues Elden Ring once and retains the role/character for the elected `WORKED_ON` relationship.
+
+**Stopping example:** Elden Ring may reveal other credited people and its studio. Those endpoints receive bounded identity-only resolution. Their IMDb aliases, filmographies and video game specialties do not restart movie, person, company or game discovery. An identity-only person reached from a game cannot emit this entry even if a lookup exposes another game credit; that source mention can remain evidence without new discovery.
+
+<a id="person-role-entry" />
+
+### 3. Person pipeline through relevant job titles
+
+**Decision: add a Go person-to-game adapter that tries to find game results for people with these roles.** A matching current or historical title qualifies for one bounded game-credit probe; an IMDb profile, known game or confirmed game employer is not required to try. Several matching titles still produce one person-level probe. Its results must resolve the person and name a game contribution before they become a credit.
+
+```mermaid
+flowchart TD
+  P[Authorized person enrichment] --> T[Original current and historical titles]
+  T --> A[Go adapter matches role registry and retains context]
+  A --> Q[Queue one bounded person game-credit probe]
+  Q --> S[Existing evidence, then enabled source lookups]
+  S --> V[Resolve same person and explicit game credit]
+  V --> G[Queue exact game using existing UUID or hidden stub]
+  G --> F[Game flow owns properties, artwork and publication]
+  S --> N[No result / review / failure recorded without invented edges]
+```
+
+#### Role coverage and matching
+
+All **ten supplied role families** are included. The complete [proposed intake registry (JSON)](/assets/video-game-waterfall/person-role-intake.json) retains every supplied title group, including adjacent disciplines. It is a build artifact, not an enabled runtime configuration or a replacement for the graph credit-role taxonomy.
+
+| Family | Examples that qualify for the probe |
+| --- | --- |
+| Engineering / Programming | Gameplay/engine/tools/network/AI programmers, Unity/Unreal developers, technical directors, build/release/DevOps engineers |
+| Art | Technical artists, riggers, character/environment artists, animators, VFX/lighting/UI artists, art directors |
+| Design | Game/systems/level/combat/economy/narrative designers, writers, UX, game/creative/design directors |
+| Production / Leadership | Producers, development/project/program managers, studio heads, general managers, founders and executives |
+| Audio | Sound designers, composers, music supervisors, dialogue/voice/audio directors and leads |
+| QA / Player Support | QA, SDET/test automation, compliance/certification and player/community support |
+| Live Ops / Product / Analytics | LiveOps, product, data/game/monetization analysts, user acquisition and growth |
+| Publishing / Business / Marketing | Publishing, brand/community/creator relations, PR, partnerships, licensing and publishing leadership |
+| Esports / Adjacent | Esports/tournament operations, broadcast, shoutcasters, players, team managers, coaches and analysts |
+| Localization & Ops | Localization/LQA/translators, IT/studio operations, games recruiting and talent acquisition |
+
+<AccordionGroup>
+<Accordion title="Engineering / Programming — complete supplied list">
+
+- Gameplay Programmer / Gameplay Engineer
+- Engine Programmer, Graphics Programmer, Rendering Engineer
+- Tools Programmer / Tools Engineer, Pipeline Engineer
+- Network Programmer, Multiplayer Engineer, Backend Engineer (Live Services)
+- AI Programmer, Physics Programmer, Audio Programmer
+- Technical Director (TD), Lead Engineer, Principal Engineer
+- Build Engineer, Release Engineer, DevOps / Infrastructure Engineer
+- Generalist: Game Developer, Unity Developer, Unreal Developer, Game Programmer
+
+</Accordion>
+<Accordion title="Art — complete supplied list">
+
+- Concept Artist, Character Artist, Environment Artist, Prop Artist
+- 3D Artist, Modeler, Texture Artist, Material Artist
+- Technical Artist (very common, distinct discipline), Rigger, Character TD
+- Animator, Gameplay Animator, Cinematic Animator, Motion Capture Specialist
+- VFX Artist, Lighting Artist, UI Artist / UI Designer
+- Art Director, Lead Artist, Visual Development Artist
+
+</Accordion>
+<Accordion title="Design — complete supplied list">
+
+- Game Designer, Systems Designer, Level Designer, Encounter Designer
+- Combat Designer, Economy Designer, Monetization Designer (F2P/mobile)
+- Narrative Designer, Writer, Game Writer, Story Lead
+- UX Designer, UI/UX Designer, Player Experience Designer
+- Creative Director, Game Director, Design Director, Lead Designer
+
+</Accordion>
+<Accordion title="Production / Leadership — complete supplied list">
+
+- Producer, Associate Producer, Senior Producer, Executive Producer
+- Development Director (Ubisoft/EA-flavored term for producer-ish roles)
+- Project Manager, Program Manager, Scrum Master / Agile Coach
+- Studio Head, Studio Director, General Manager, Head of Studio
+- COO / CEO / Co-Founder (indie studios especially)
+
+</Accordion>
+<Accordion title="Audio — complete supplied list">
+
+- Sound Designer, Audio Designer, Technical Sound Designer
+- Composer, Music Supervisor, Audio Director
+- Dialogue Supervisor, Voice Director, Audio Lead
+
+</Accordion>
+<Accordion title="QA / Player Support — complete supplied list">
+
+- QA Tester, QA Analyst, QA Lead, QA Manager
+- Test Automation Engineer, SDET
+- Compliance / Certification Specialist (first-party cert: Sony, MS, Nintendo)
+- Player Support Specialist, Community Support Agent
+
+</Accordion>
+<Accordion title="Live Ops / Product / Analytics — complete supplied list">
+
+- Live Operations Manager, LiveOps Producer
+- Product Manager, Senior Product Manager, Director of Product
+- Game Analyst, Data Analyst, Data Scientist, Monetization Analyst
+- UA Manager (User Acquisition), Growth Manager, Performance Marketing Manager
+
+</Accordion>
+<Accordion title="Publishing / Business / Marketing — complete supplied list">
+
+- Publishing Manager, Product Marketing Manager, Brand Manager
+- Community Manager, Social Media Manager, Content Creator Manager
+- Influencer / Creator Relations Manager
+- PR Manager, Communications Manager
+- Business Development Manager, Partnerships Manager
+- Licensing Manager, Head of Publishing, VP of Publishing
+
+</Accordion>
+<Accordion title="Esports / Adjacent — complete supplied list">
+
+- Esports Manager, Tournament Organizer, Esports Operations Manager
+- Broadcast Producer, Shoutcaster / Commentator
+- Pro Player, Team Manager, Coach, Analyst
+
+</Accordion>
+<Accordion title="Localization &amp; Ops — complete supplied list">
+
+- Localization Manager, Localization QA (LQA) Tester, Translator
+- IT / Studio Operations, Talent Acquisition (Games), Recruiter — Games
+
+</Accordion>
+</AccordionGroup>
+
+Match case, punctuation, known spelling variants and seniority modifiers without losing the source title. Treat `TD`, `SDET`, `LQA`, `UA` and `LiveOps` as contextual aliases, not arbitrary substring matches. Preserve Technical Artist as its own discipline. These matches are **search eligibility**, not assertions that a programmer wrote a particular game or that a QA tester has the same relationship as an esports player.
+
+Broad titles such as Backend Engineer, Producer, Data Analyst, Recruiter, CEO or Coach can still receive this bounded probe. Use already stored employer identity, accepted game specialization, work dates, geography, portfolio and known source IDs to disambiguate and rank candidates. A weak-context result can be `review_required`; do not auto-attach the first same-name result. Reading an employer's stored classification must not launch company enrichment or its catalog discovery.
+
+#### Person pipeline hook
+
+The inspected Go person pipeline's `stepRoles` reads original work rows through `RecordStore.ListWork`, current first and then past roles, but its reduced output uses a closed vocabulary and drops unknown labels. The new adapter must read the **original current and past work records and existing profile evidence**, not depend on the role reducer retaining “Gameplay Programmer” or “Technical Artist.” The `rolesAlreadyWritten` shortcut must not suppress new game-probe eligibility when work history changes.
+
+Add a proposed `person_game_probe` handoff step after the run has persisted its available work/profile/identifier evidence and before closeout. It records origin `person_game_role` through the shared outbox and returns `queued`; provider searches happen in the game lane, never inline in the person worker. The step is independent of movie-domain classification and can run when no IMDb ID exists. A failed unrelated optional role-reduction/identity-bridge step must not erase valid stored title evidence.
+
+Use `job_kind=root_discovery`, immutable scope `person_credit_probe`, under the **existing authorized root**. The name identifies the first discovery stage of that finite plan; it does not create a new root for each role. Store person UUID, stable source aliases, work/profile snapshot IDs and role-row references, matched registry family/terms, context/evidence digest, upstream run/event/root IDs, policy, plan hash and budget reservation. The API reads those records to validate scope; user payload flags cannot enable a leaf.
+
+#### How the game adapter looks for results
+
+1. **Read what is already known.** Check canonical identifiers and the existing elected/pending game-credit ledger for this person. Reuse exact game and person aliases and already acquired IMDb credits. An exact named-game assertion goes directly to the same admission/replay path as entry two; do not repeat a provider search for that assertion.
+2. **Use strong person IDs when available.** Query enabled sources for that person's direct game credits: bounded Wikidata role predicates against the resolved person QID, an already stored IMDb person snapshot, or a licensed provider's person-credit endpoint when its capability is enabled. Never assume a catalog/cover subscription includes person credits; IGDB company/game metadata alone is not evidence of an individual's contribution.
+3. **For people without a credit-provider ID, run targeted discovery.** Search the person's name/credited aliases with known employer, discipline and optional named project; inspect exact portfolio, official credit, studio biography or permitted provider pages. Search snippets supply candidates only. Freeze at most five candidate person identities and retain corroborating profile links, employers, role/date context and source identifiers. Name equality or a job-title match alone cannot merge people.
+4. **Require an explicit person-to-game assertion.** Extract the credited name, game ID/title, literal role, source URL/snapshot/locator and any version, language or character qualifiers. Resolve both endpoints and elect the scoped relationship. Employment during a release year, a games-domain specialty or a staff directory does not prove work on every studio title. Date mismatch is a review signal; release dates do not define the whole development period.
+5. **Queue only resolved, admitted results.** Each selected game uses the existing canonical UUID or an admitted hidden stub, then the queued game waterfall. Retain the initiating person's credit evidence. Reuse an already fresh game snapshot while replaying new credits; the game flow still owns its public parameters and non-IMDb artwork. Identity or relationship ambiguity remains pending without creating a speculative game credit.
+
+**Adjacent roles remain eligible for discovery.** A marketing, recruitment, player-support or esports title must not be rewritten as game development. An explicit in-game production/support credit can use the appropriate accepted game credit role. Merely playing, streaming, coaching, selling or covering a game stays scoped evidence for its proper relationship; this entry does not introduce `WORKED_ON` for those activities or invent new edge names. A future relationship extension needs its own owner and evidence contract.
+
+#### Bounds, deduplication and results
+
+One person probe is uniquely reserved per canonical person + authorized root + `person_credit_probe`, with the policy and evidence digest stored as fences. Roles, aliases, current/past jobs, source providers and redeliveries do not get separate probes. Read at most **50 work rows**, with explicit truncated coverage; inspect at most **5 candidate identities**, **3 discovery pages total** and **10 network attempts including retries** for the probe. Select at most **20 games** shared with any IMDb/company/adaptation intake in that root. These are sublimits of the existing root budgets; the adapter cannot mint a new allowance of 100 jobs or requests.
+
+The coordinator freezes the selected games before scheduling later stages. Queue only those games and their bounded identity-only leaves. A person discovered while enriching a game **cannot run this adapter**, even when their title matches. Game results cannot cause company-catalog discovery, another person's credit search, or a second game-discovery stage. A deliberately separate later person request is new trusted demand under the normal admission policy.
+
+| Result | Meaning / next action |
+| --- | --- |
+| `matched` | Resolved person plus explicit named game credit(s); return canonical game IDs, credit/evidence references and admitted/deferred counts; queue admitted work |
+| `no_match` | Enabled, attempted sources returned no supported result within the completed probe scope; no credit edge and no claim of complete career coverage |
+| `review_required` | Ambiguous person, game identity, role or unsupported relationship; preserve candidate evidence without a speculative graph link |
+| `coverage_unavailable` | Needed person-credit source is disabled/not entitled or could not supply that coverage; not a negative career result |
+| `budget_deferred` | Remaining root/probe budget prevents completion; retain counts/cursor and resume only within the authorized plan |
+| `provider_failed` | Shared classified failure and retry receipt; do not cache as no match |
+| `scope_blocked` | Identity-only/descendant scope or missing trusted lineage; no provider spend or new discovery |
+
+Store probe outcomes in the shared job/payload/attempt facilities, with the same Universe logger and failure vocabulary. Proposed negative-cache lifetime is **30 days**, keyed to person identity, work/profile evidence digest, registry policy and enabled-source capabilities; a failed/incomplete probe is never a negative cache hit. New substantive evidence or an expired cache can be reconsidered on a later authorized run, not by an automatic recursive retry. Repeated pipeline passes can reuse the stored result without spending again; an override remains subject to normal admission limits.
+
+**Review cases:** a Technical Artist with explicit portfolio game credits can match without IMDb; a Unity Developer with no credits gets a recorded scoped no-match; a generic Data Analyst with a same-name game-credit candidate requires identity corroboration; a Studio CEO gains no credit from the studio catalog alone; a QA or localization credit retains its exact discipline; a Pro Player or Coach is not turned into a developer; and a game-discovered artist triggers zero person probes.
+
+<a id="music-waterfall-entry" />
+
+### 4. Music waterfall → video game
+
+**Yes: Music is a primary entry, alongside person, company and movie.** Add a Go music-to-game adapter to the authorized music run. It hands exact game evidence or a bounded matching candidate to the same game admission/queue boundary. This is a planned extension; the inspected music implementation does not currently contain a game handoff or `SOUNDTRACK_FOR` writer.
+
+| Music evidence | Intake and eventual relationship |
+| --- | --- |
+| A soundtrack `Release_Group` explicitly linked to a game | Resolve/admit that game; elected `Release_Group → SOUNDTRACK_FOR → Video_Game` (55) |
+| An exact `Music_Work` composed as a score for a named game | Resolve/admit that game; elected `Music_Work → SOUNDTRACK_FOR → Video_Game` (55) |
+| An exact `Recording` explicitly used in a named game | Resolve/admit that game; elected `Recording → USED_IN → Video_Game` (60), retaining usage/version scope |
+| An explicitly named artist/person game credit found in a permitted music source | Resolve the game and person; `Person → WORKED_ON → Video_Game` (30) only for the independently supported production role |
+| Soundtrack classification, game-music context or title-only match without an exact game relationship | May authorize the bounded matching probe; creates no game node or bridge edge until evidence and identity resolve |
+
+**Do not turn every album contributor into game staff.** An artist's existing `RELEASED`, `COMPOSED` or `PERFORMED` edge stays owned by music. The music-to-game bridge supplies a useful path without copying credits onto the game. A licensed song's performer need not have worked on the game. Reuse `Music_Group` for an actual group; do not split it into invented people or extend `WORKED_ON` beyond its locked Person endpoint contract.
+
+#### Where to attach the Go adapter
+
+Review reference: Universe **`06428412a30f0336b87cbb0c298fe97e500e9568`**, inspected September 8, 2026: `music_gate.go` (`musicPayloads.LandLookup`, `LandCreditClaim`), `music/orchestrator.go`, `music/steps_release_group.go`, `steps_work.go`, `steps_recording.go`, and `clients/musicbrainz/endpoints.go`.
+
+The music flow already retains provider payloads and requests asynchronous fact normalization. Attach a **durable handoff intent** to a committed music source/claim snapshot, carrying proposed origin `music_game_evidence`, the original root/causation, music entity UUID/type, exact source aliases, payload/revision/locator, candidate game reference and intended relationship kind. Persist intent/outbox atomically with its owning stage's accepted evidence, or through an idempotent durable reconciliation if normalization completes later. The producer returns after queuing; it never runs the game worker inline. Graph writes and music card publication are not the trigger.
+
+Current release-group/work/recording MusicBrainz lookup include sets **do not request URL relationships**. Do not assume a Wikidata/game crosswalk is already in those responses. Use an already retained verified alias first; any required bounded URL-relation lookup needs an explicitly supported client change and fixture. The current canonical music release is a `music_release` support row; use its **already resolved parent release-group** when the evidence applies there. It does not become `Game_Release`, and the adapter cannot enumerate every pressing or track to find games.
+
+#### Match once, queue once, replay evidence independently
+
+1. **Validate original scope before spending.** The persisted parent manifest must authorize music-to-game intake for that music anchor. Root-origin person/company runs may include their already selected music anchors; identity-only music reached from a game cannot invoke this adapter. Music `Depth`, `AtHead`, priority or a payload flag alone is not permission.
+2. **Read retained evidence first.** Reuse game IDs, explicit credits, qualified Wikidata statements and permitted official-source links. A soundtrack classification alone does not distinguish a film, TV series, play or game. Same-title adaptations, covers, “inspired by” albums and fan playlists need independent exact-work evidence.
+3. **Resolve the game relationship.** For an identified soundtrack item, a fixed bounded inverse lookup of [Wikidata P406](https://www.wikidata.org/wiki/Property:P406) can find an already asserted game → soundtrack relation. Normalize once to soundtrack → game, preserving observed subject/object and `source_property=wikidata:P406`. No transitive music/work/game search. Recording use must identify the recording; an album/score relation cannot be copied to every track.
+4. **Freeze selected games and reserve queued work.** The coordinator reuses an existing game UUID or admits a hidden game stub, then queues the declared game stages. Dedupe with company/person/movie intake by canonical game + root + scope/generation. A freshly enriched game needs only missing bridge/credit replay, never a second snapshot just because music discovered it.
+5. **Elect and replay through one owner.** The music/game bridge owner holds the pending `SOUNDTRACK_FOR` / `USED_IN` relation. Explicit person/game credits go to the single game credit owner. Source withdrawal repairs only the affected source/scope; music completion and game publication have separate receipts. A music record can remain valid while a game match is pending.
+
+**Bounds:** at most **10 selected music anchors per root**, one `music_game_probe` reservation per canonical anchor + original root; **3 discovery pages and 10 network attempts total for the music intake**, including retries, with the shared 50-candidates/page and 20-selected-game ceilings. These are sublimits of the same root ledger and remaining upstream budget, not additional allowances. Preserve existing music fan-out limits too. No catalog expansion, recording browse, pressing enumeration or replenished budget. A later source fact may repair a selected game's relation; an unselected game arriving after the game manifest is frozen stays deferred for separately authorized demand.
+
+Use the shared stage/attempt/error facilities. Record `matched`, scoped `no_match`, `review_required`, `coverage_unavailable`, `budget_deferred`, `provider_failed` or `scope_blocked` as intake outcomes, not new error codes. Failed extraction and missing URL/credit coverage are not successful no-match. Required game publication still uses game-owned parameters and processed artwork under `game-thumbnail/`; a soundtrack cover is not automatically game artwork.
+
+#### Real example: Gustavo Santaolalla → The Last of Us
+
+The frozen MusicBrainz record identifies **The Last of Us** release group `89d11273-7aad-43a0-8ec7-ad5be83286d8` as an album/soundtrack credited to Gustavo Santaolalla. That album type/title alone cannot choose between game and television. The separate retained game statement **`Q1986744 — P406 → Q55240246`** ties the soundtrack to the **2013 game**, providing the exact bridge. [Source snapshots](/assets/video-game-waterfall/source-evidence.json) · [Existing simulated edge and properties](/assets/video-game-waterfall/graph-simulation.json)
+
+```mermaid
+flowchart LR
+  P[Gustavo Santaolalla] -->|RELEASED: existing music credit| A[The Last of Us soundtrack Release_Group]
+  A -->|SOUNDTRACK_FOR: elected exact-game evidence| G[The Last of Us 2013 Video_Game]
+```
+
+The adapter queues game UUID `7ccbbe2d-52c3-5bca-8d8c-5a0193bd669c`, reusing the existing fixture identity. The soundtrack's date remains a music date. The game stays hidden until its own waterfall finishes; the music artist/album are not re-enriched by its completion.
+
+**Acceptance:** soundtrack → exact game, score work → exact game and recording → exact game use preserve their distinct endpoint types; soundtrack-only/same-title matches create no guessed edge; a soundtrack with multiple artists creates no automatic game crew; a fresh game receives a new bridge exactly once; a game-discovered album queues zero music-to-game probes; delayed normalization cannot extend a frozen manifest or reset budgets; game failure preserves the music evidence and its pending bridge.
 
 <Card title="Real-data graph simulation" icon="diagram-project" href="/guides/open-work/video-game-waterfall-examples">
 Elden Ring; The Last of Us game, TV series and soundtrack; Hamlet's theatre-to-game bridge; and an honest missing-data case. Inspect node and edge properties plus downloadable, reproducible evidence.
@@ -19,7 +449,7 @@ Elden Ring; The Last of Us game, TV series and soundtrack; Hamlet's theatre-to-g
 
 Make a game a useful professional relationship hub: who worked on it, which studio developed it, who published it in which market, what source work it adapts, and how its music and recognition connect to the existing graph. A credit is evidence of participation; it is not proof that every credited person knows every other person.
 
-The first release delivers game identity, person credits, developer/publisher relationships, IMDb handoff, Wikidata adaptation intake, company intake, pending-edge replay, corrections and public display projections. The soundtrack, award and series slices follow through the same queues. Platform/engine and edition context are optional additions with explicit budgets. Broad catalog crawling, automatic franchise expansion and inferred interpersonal edges are outside this plan.
+The intended `games-v1` build delivers four primary adapters—person, company, movie and music—plus direct/adaptation/approved-award intake, canonical game identity, the six typed node contracts, explicit company/credit/music/context relationships, pending replay, corrections and game-owned publication. Implement in the phases below; support coverage is optional when evidence is absent, not a requirement to buy every provider. Broad catalog crawling, automatic franchise expansion and inferred interpersonal edges are outside this plan.
 
 **Graph references are synchronized:** [Node Types — six game families, reused endpoints and real image examples](/guides/ontology/nodes#video-game-nodes) · [Edge Types — endpoint/weight/property manifest](/guides/ontology/edges#video-game-edges) · [simulation breakdown by type](/guides/open-work/video-game-waterfall-examples#fixture-breakdown). The fixture has 7 game-family nodes plus 22 reused endpoints, totaling 29 nodes and 30 edges. These pages specify the proposed Go build, not deployed writers.
 
@@ -51,6 +481,8 @@ Code inspection on September 8 used a clean local Universe checkout at **`31a2fa
 | Existing seam | Reuse / required extension |
 | --- | --- |
 | `internal/features/entities/entitiespub` | Identifier-first canonical person/company/film/music/stage identities. Register `video_game` explicitly; no second game-person identity system. |
+| `enrichment/person/steps_roles.go`, `person/service.go` | Read original current/past work records for the role-triggered game probe; do not depend on the closed reduced-role vocabulary. Add a durable queued handoff with immutable root scope. |
+| `enrichment/company`, `graph/specialties.go` | Reuse stored classification and resolved `SPECIALIZES_IN` taxonomy; add completed-classification receipt and correlated queued game probe as specified above. |
 | `enrichment/filmtv`, `enrichment/music` | Gate → attempt/stage receipts → source payload → facts → graph → publish; freshness only after successful required stages. |
 | `enrichment/fanoutlimit` | Admission **before** creating or enriching an entity. Existing defaults: depth 2, 100 per run, 1,000 per seed; music sets 60 per run. These defaults alone do not meet this plan's non-recursion contract. |
 | `enrichment/queries/pipeline.sql`, `queue_drain.go` | One queue-upsert owner; explicit zero preserved; min-tier and optional promotion policy. Current general picker drains tiers 0–1, not every tier. |
@@ -61,24 +493,7 @@ Code inspection on September 8 used a clean local Universe checkout at **`31a2fa
 
 The `BASED_ON` proposal in the local docs draft **`7636024`** was also reviewed. It postdates the ontology content in this plan's starting `origin/main` (`19dac6f`). This plan carries its relevant direction, weight and description contract explicitly; merging that separate draft must not silently drop the game endpoint extension below.
 
-## Entry points
-
-All entries call one proposed Go `GameGate.Admit` boundary. HTTP/event names below are new contracts, not existing endpoints. Every request includes a trusted upstream event ID, origin, policy version and immutable ancestry; the server derives execution scope. A caller cannot grant itself a fresh root by supplying `depth: 0`.
-
-| Entry | Identity/evidence required | Admitted work |
-| --- | --- | --- |
-| **IMDb person credit** | An already resolved IMDb person and a credit with `tt…` classified as a video game | Preserve the credit assertion; admit that title once. Reuse person identity. The game cannot enumerate that person's other credits. |
-| **IMDb title** | IMDb extraction says `videoGame`, or a verified game alias matches the title | Route through the game gate **before** a new Film/TV entity is minted. Transfer the already paid-for title/credit snapshot. |
-| **Movie/TV adaptation** | Resolved film QID and explicit P144/P4969 statement involving a supported game | Admit the game and the relationship evidence. Preserve film → game or game → film according to the statement. |
-| **Forthcoming theatre adaptation** | Resolved theatrical work or production QID and explicit Wikidata relation | Admit the directly connected game. A play and one production of that play are not interchangeable endpoints. |
-| **Company classified as a game creator** | Canonical Company plus chosen classification evidence: game developer/studio/creator | One bounded catalog discovery pass, keyed to the company QID/vendor ID. Every development/publishing edge still needs title-level evidence. |
-| **Existing person enrichment** | Explicit named-game participation in a permitted profile/project source | Resolve title and role; keep an unresolved mention if identity is ambiguous. Employment dates alone do not prove game participation. |
-| **Music handoff** | Already resolved artist/work/release group with an explicit game/score relation | Resolve that exact game; never expand the artist's catalog from the game job. |
-| **User/admin direct game** | Strong ID or a title/year/platform candidate for review | One game root; ambiguous matches return candidates, not an automatic merge. |
-
-**Company classification is not a name/industry substring check.** A chosen `video_game_developer` classification, such as Wikidata Q210167, can authorize discovery. Publisher-only companies get the explicitly enabled publisher-catalog scope; retailers, esports teams, investment firms and engines do not become developers. A parent company's classification does not authorize recursively discovering every subsidiary. A retracted classification stops new discovery without deleting independently supported game credits.
-
-### Admission and worker interfaces
+## Admission and worker interfaces
 
 Proposed admission payload (IDs prefixed `example:` are explanatory placeholders, not production UUIDs):
 
@@ -123,7 +538,7 @@ A theatre production may expose its **already resolved** underlying work as a na
 
 ```mermaid
 flowchart TD
-  E[Trusted IMDb / theatre / company / user admission] --> A[Admit once and reserve root budget]
+  E[Trusted person / company / movie / music / theatre / user admission] --> A[Admit once and reserve root budget]
   A --> D[Bounded root discovery and immutable game manifest]
   D --> Q[Queued exact-game snapshot jobs]
   Q --> M[Durable claims and bounded endpoint manifest]
@@ -131,18 +546,19 @@ flowchart TD
   L --> F[Fact election]
   F --> R[Queued relation replay]
   R --> P[Display publication and completion receipt]
-  M --> I[Queued optional media ingest]
+  M --> I[Queued required artwork stage]
   I --> P
 ```
 
-Only the root coordinator can admit the game manifest. A game snapshot job emits facts and endpoint candidates; it cannot call `GameGate.Admit`, the generic full person/company gate, or a movie/music/theatre discovery runner. The coordinator can schedule only predeclared **later** stages from those candidates. Its dependency ranks never move backwards.
+Only the root coordinator can admit the game manifest. The person-role adapter is a bounded `root_discovery` scope in that same plan, never a capability given to game-discovered people. A game snapshot job emits facts and endpoint candidates; it cannot call `GameGate.Admit`, the generic full person/company gate, or a movie/music/theatre discovery runner. The coordinator can schedule only predeclared **later** stages from those candidates. Its dependency ranks never move backwards.
 
 | Job scope | May do | Must not do |
 | --- | --- | --- |
-| `root_discovery` | One bounded company/IMDb/adaptation enumeration; freeze selected game references | Follow a discovered studio's catalog, game sequels or another work's derivatives |
+| `root_discovery` | One bounded company, person-credit, IMDb, music, adaptation or reviewed award-seed enumeration; freeze selected game references | Follow a discovered studio's catalog, game sequels or another work's derivatives |
 | `game_snapshot` | Fetch one selected game and bounded permitted source details; extract its direct relationships | Start another root or fetch another game's detail as a discovered child |
 | `identity_only` | Resolve/create the named endpoint through a non-enriching public identity seam; one bounded direct profile lookup if needed | Full person/company enrichment, filmography/catalog/ownership cascades, expertise-triggered cross-waterfall kickoff |
 | `media_ingest` | Use the shared avatar/movie-poster file pipeline for a declared artwork candidate; save under `game-thumbnail/` and publish through the shared media renderer | Search galleries, traverse linked games, admit roots or reset network/byte budgets |
+| `award_evidence` | Read bounded approved award snapshots/pages for the already admitted game/person; record scoped evidence | Admit unrelated nominees, follow archive years, or launch person/company discovery |
 | `facts_replay` / `graph_replay` / `publish` | Consume existing bounded claims and elected facts; repair the same objects | Source discovery or extending the manifest |
 | `describe` | Describe an already elected relation with evidence and bounded enrichment of the sentence | Decide that a relation exists, invent endpoints or launch discovery |
 
@@ -198,7 +614,7 @@ The database is authoritative for eligible work and priority. Pub/Sub events car
 | Kill switch | Checked at admission, claim, provider reservation and commit. Separate fetch, replay and publish switches; stopping spend must still allow corrective retractions. |
 | Expiry | At 24 hours, unresolved work becomes `partial` or `blocked`, with durable pending reasons; a new trusted admission must explicitly authorize more spend. |
 
-Store separate `core_status`, `relationship_status`, `graph_status`, `projection_status` and `coverage_status`. A valid sparse game may complete with partial relationship coverage. A failed required graph write cannot stamp full enrichment success. Optional art/description failures do not erase identity or successful credits. A fresh existing node does not imply that its pending relations have replayed.
+Store separate `core_status`, `relationship_status`, `graph_status`, `projection_status` and `coverage_status`. A valid sparse game may complete with partial relationship coverage. A failed required graph write cannot stamp full enrichment success. Art/description failures do not erase internal identity or successful credit evidence. Failed required artwork or publication keeps first publication hidden. A fresh existing node does not imply that its pending relations have replayed.
 
 ### Shared Universe error logging — required
 
@@ -213,10 +629,10 @@ This contract follows the inspected `filmtv/orchestrator.go`, `music/orchestrato
 | Run attempts | Open/close through the existing `enrichment_attempts` repository, following the movie/music run-store adapters. Accumulate caught step failures with `failure.Summary.Add(step, err)` and close the affected attempt as failed with `Summary.Message()`. Preserve the step, classified code and bounded cause text; a generic “game waterfall failed” loses the evidence. A caught error followed by a nil Go return or Pub/Sub acknowledgment is not proof of a successful attempt. |
 | Failure classification and retry | Reuse `failure.Classify`, `failure.Normalize` and `Code.Retryable()`. The current closed vocabulary is `provider_retryable`, `provider_terminal`, `internal_retryable`, `internal_terminal`, `internal_panic`, `input_invalid`, `budget_exhausted`. Preserve typed provider errors through wrapping; use `failure.Panic` for recovered panics and `failure.Budget` for exhausted budgets. Any job failure columns mirror these codes. Retry eligibility still respects the immutable game manifest and remaining root budget. |
 | Empty or deferred outcomes | A successful empty lookup uses `stages.Empty(reason)` and a meaningful result/count, matching movie/music. Budget refusal, missing coverage, unsupported identity and provider failure remain distinguishable; no empty-success receipt for a failed request. A budget ceiling is not a provider outage. |
-| Thumbnail and replay failures | Route `game-thumbnail/` fetch/convert/upload failures through the shared avatar/movie-poster rehost ledger and retry/retirement handling, with the same logger and a correlated game-stage outcome. Credits, graph replay and projection failures also retain their shared classified receipts. An optional image failure can leave the core game usable while the media job/attempt records its failure; it cannot be silently stamped successful. |
+| Thumbnail and replay failures | Route `game-thumbnail/` fetch/convert/upload failures through the shared avatar/movie-poster rehost ledger and retry/retirement handling, with the same logger and a correlated game-stage outcome. Credits, graph replay and projection failures also retain their shared classified receipts. An image failure preserves internal core facts but blocks first public game publication while the media job/attempt records its failure; it cannot be silently stamped successful. |
 | Recorder failures | Keep the shared recorder's best-effort warning behavior when a diagnostic receipt cannot be written. Log the failed recording operation with run/stage context; do not repeat paid provider work just to recreate a log entry. This does not relax the required durable game job, budget, lease or completion transactions. |
 
-**Acceptance:** the same injected provider timeout/429, provider authorization failure, invalid input, recovered panic and exhausted-budget cases produce the same shared classification and retry decision as movie/music. A game failure must be traceable from structured log → run attempt → stage receipt → source/job evidence in the existing Universe error views. Include an optional thumbnail failure and a receipt-write failure; verify that each remains visible and no replay creates a new root. Redact credentials, signed URL query strings and raw provider bodies before logging; keep bounded causes and safe evidence references.
+**Acceptance:** the same injected provider timeout/429, provider authorization failure, invalid input, recovered panic and exhausted-budget cases produce the same shared classification and retry decision as movie/music. A game failure must be traceable from structured log → run attempt → stage receipt → source/job evidence in the existing Universe error views. Include a publication-blocking thumbnail failure and a receipt-write failure; verify that each remains visible and no replay creates a new root. Redact credentials, signed URL query strings and raw provider bodies before logging; keep bounded causes and safe evidence references.
 
 ## Identity, releases and source data
 
@@ -232,19 +648,21 @@ Canonical games use `entities.id` UUID and graph UUID following the existing sha
 | Steam app ID | P1733 | Preserve platform/edition qualifiers. Apps include games, DLC, demos and soundtracks; do not assume one app equals one base game. |
 | MusicBrainz release group | P436 | Exact music endpoint identity; distinguish album group from a specific release and recording. |
 
-**Recommended node choice:** `Entity:Video_Game`, canonical type `video_game`; `game_kind` distinguishes base game, remake, remaster, expansion, DLC and compilation when evidenced. `Game_Release` is a support node only when platform/territory/date/edition context needs independently addressable relationships. A port may remain a release of the same game; a remake with its own strong identity remains separate. Freeze this decision with examples before migration.
+**Locked node choice (`games-v1`):** `Entity:Video_Game`, canonical type `video_game`; `game_kind` distinguishes base game, remake, remaster, expansion, DLC and compilation when evidenced. `Game_Release` is a support node only when platform/territory/date/edition context needs independently addressable relationships. A port may remain a release of the same game; a remake with its own strong identity remains separate. Use the [locked identity boundaries and source-backed examples](/guides/open-work/video-game-waterfall-sources); migrate only after the typed acceptance fixtures pass.
 
 Missing fields remain absent. Source `novalue`, `somevalue`, deprecated claims, partial dates and time calendars have explicit representations in SQL. Unknown rank/type is quarantined. Do not take a global preferred-rank filter that loses distinct regional publisher statements. An announced release date is not a shipped date. Earliest dates can change after better evidence without changing identity.
 
 ## Source waterfall and capability gates
 
-The provider ladder is **per missing field or relationship**, not “run every provider for every game.” Stop when required evidence is present, cache by source ID and revision, and reuse upstream snapshots. Identity/catalog/credits/art have separate coverage states.
+The [complete source inventory and locked mappings](/guides/open-work/video-game-waterfall-sources#complete-source-inventory) cover catalog, credits, releases, awards, music and media sources. Provider gates stay separate from the six type contracts; optional support coverage cannot silently require a paid provider.
+
+The provider ladder is **per missing field or relationship**, not “run every provider for every game.” Stop when required evidence is present, cache by source ID and revision, and reuse upstream identity/credit snapshots. Game display fields are selected by the game flow from game-source facts; IMDb artwork and movie display parameters are excluded. Identity/catalog/credits/art have separate coverage states.
 
 | Order | Source | Useful coverage | Build posture |
 | --- | --- | --- | --- |
 | 1 | Wikidata structured statements | Identity crosswalks, notable credits, developer/publisher, adaptation, series, dates, soundtrack references | First adapter; preserve rank, qualifiers, statement GUIDs and references. Structured data is CC0; this does not license linked cover images. |
 | 2 | Already acquired IMDb and permitted person/company data | Existing named title credits; explicit shipped-title assertions | Reuse the owning pipeline's lawful snapshot and source provenance. Job-history overlap alone creates no credit. |
-| 3 | Official studio/publisher/creator/store/award pages | Missing role details, release scope and named recognition | Exact-page, bounded extraction using shared Go provider clients. Search discovers a candidate URL; it is not the fact. |
+| 3 | Official studio/publisher/creator/store/award pages, including [The Game Awards adapter](/guides/open-work/video-game-waterfall-game-awards) | Missing role details, release scope and named recognition | Exact-page, bounded extraction using shared Go provider clients. Search discovers a candidate URL; it is not the fact. |
 | 4 | MobyGames commercial adapter | Catalog/release/company detail; full credits only with the appropriate entitlement | Optional, disabled until source capability and intended-use terms are confirmed. |
 | Alternative | IGDB commercial partnership | Rich catalog, franchise, platform, engine and company detail | Reconsider as a catalog alternative; it does not solve individual-credit coverage. |
 | Later | Licensed full credits, including MobyGames Gold or a separately quoted IMDb dataset | Long-tail named production credits | Evaluate against a held-out people/game corpus before procurement. Do not assume matching coverage or price across vendors. |
@@ -254,6 +672,14 @@ Current MobyGames listed monthly tiers are Bronze **\$99.99 / 1 req/s**, Silver 
 IGDB should not remain categorically “ruled out”: its official FAQ offers commercial partnerships, says the API is free, requires fair attribution, and permits retained downloaded data after partnership termination. Secure the required partnership before production use; compare it with Bronze on coverage and integration effort. [IGDB API documentation](https://api-docs.igdb.com/)
 
 Delete the earlier unmeasured “full catalog in four days” promise. Budget using measured pages, enabled endpoint entitlements, source quotas and retries. The runtime should cache selected game detail, never block roots behind a global bootstrap crawl. Capability absence is `not_entitled`, not an endless retry. Keep Moby/IGDB key-bearing URLs out of logs.
+
+### The Game Awards: official awards and person/game evidence
+
+Add a Go adapter for [The Game Awards](https://thegameawards.com/) as a primary source for its own results. Use it to enrich admitted games, feed the person-credit probe from explicitly named performance/music entries, and optionally seed an explicitly reviewed year/category batch. The [full adapter contract and real examples](/guides/open-work/video-game-waterfall-game-awards) specify source-year validation, queued scopes, identity and corrections.
+
+The official [2022 archive](https://thegameawards.com/rewind/year-2022) corroborates Elden Ring's existing Best Game Direction result. The [2025 performance page](https://thegameawards.com/nominees/best-performance) exposes a critical identity case: multiple people nominated for the same game/category/year need **separate nominee-entry results**. Game + category + year alone is not a sufficient `Game_Award` key. Winner/nominee is a mutable outcome, not part of that key.
+
+Official category pages are reusable URLs; bind each snapshot to its verified ceremony year. Archive winners pages do not supply complete historical nominees. Resolve named people independently, preserve joint billing, and never copy a game's win to every credited person. Best Adaptation and esports/creator subjects require their correct type/scope; the award category cannot itself create a `BASED_ON` edge or game credit.
 
 ### Game thumbnails and cover art
 
@@ -265,25 +691,25 @@ Delete the earlier unmeasured “full catalog in four days” promise. Budget us
 
 *Hamlet: a second real game-node thumbnail from [Steam](https://store.steampowered.com/app/222160/), matched by app ID `222160`. The store-release scope stays distinct from the game's original release date. See [Node Types](/guides/ontology/nodes#video-game-nodes) for the image/property contract.*
 
-**Recommendation:** reuse a suitable, permitted poster already acquired by the IMDb title pipeline first. If it is missing, use **IGDB for a consistent portrait-cover source**, or **MobyGames if that adapter is already enabled**. A verified Steam store image is a useful landscape fallback for games with a Steam app ID. Do not buy a credits tier solely to obtain a thumbnail.
+**Source rule:** the video game flow selects its own artwork. Use **IGDB for a portrait-cover source when enabled**, **MobyGames when enabled**, or a verified **Steam/official game asset** for the exact game. IMDb posters are excluded, including already rehosted copies and movie-adaptation artwork. Do not buy a credits tier solely to obtain a thumbnail.
 
 | Source | What we can obtain | Selection rule |
 | --- | --- | --- |
-| Existing IMDb title snapshot/media asset | The game title's already acquired poster, when present | Reuse it as the source input with its provenance for the same canonical game; store the game thumbnail under `game-thumbnail/` through the shared file pipeline. No extra IMDb crawl. Never inherit the poster of its movie adaptation. |
 | IGDB `cover` | Cover identifier, image ID, dimensions and image URL; portrait variants including `cover_small` (maximum 90 × 128), `cover_big` (maximum 264 × 374), and `_2x` variants | Resolve by the stored numeric game ID. Prefer the matching base-game/localization cover. API use requires credentials and the commercial partnership described above. [Cover fields](https://api-docs.igdb.com/#cover) · [Image variants](https://api-docs.igdb.com/#images) |
 | MobyGames covers | Front-cover scans, with platform/release context; screenshots and promotional images are also available | Bronze lists cover images; Silver adds original full-size images. Choose a front cover, not a back cover, disc, compilation or unrelated edition. Keep the required MobyGames attribution. [Tier capabilities](https://www.mobygames.com/api/subscribe/) |
 | Steam / official publisher press kit | Store header/capsule or explicitly supplied game artwork | Use the exact known app/page and its returned asset URL. Steam has portrait library assets as well, but this does not prove a particular file URL exists. Prefer title artwork to an arbitrary screenshot. [Steam asset formats](https://partner.steamgames.com/doc/store/assets?l=english) |
+| The Game Awards exact-game tile | Game artwork on a verified award entry, when the image really depicts that game | Optional candidate under the source/media policy. Exclude performer portraits, event branding and adaptation stills; route through the same `game-thumbnail/` pipeline. [Adapter rules](/guides/open-work/video-game-waterfall-game-awards#artwork-and-publication) |
 | Wikidata-linked Commons file | An image or logo when present, with a separately inspectable file license | Optional fallback only; an item may have a logo rather than cover art. Wikidata's CC0 metadata does not establish image reuse rights. |
 
 For an IGDB-enabled game snapshot, request the cover in that exact lookup, for example the body `fields name,cover.id,cover.image_id,cover.width,cover.height,cover.url; where id = 119133; limit 1;` on `POST /v4/games`. This is an illustrative request for Elden Ring, not a claimed authenticated API response. Build the documented image variant from the returned `image_id`; never invent it. Use `cover_big_2x` for a sharp small portrait card and preserve its aspect ratio. A landscape header should remain landscape or be contained within the card; do not crop away the title to force a portrait.
 
 **Real example:** Elden Ring's stored Steam app ID is `1245620`. Its [official store page](https://store.steampowered.com/app/1245620/_/) exposes [this header image](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578), observed September 8, 2026. See the [illustrated candidate and properties](/guides/open-work/video-game-waterfall-examples#game-thumbnail-example). An observed public URL is an artwork candidate; production display/rehosting follows the enabled source's applicable rights and media policy.
 
-Artwork is an optional later stage in the **same finite plan**: at most three ranked candidates and one selected asset per game. Source metadata requests, downloads and retries count toward the existing root network/byte budgets; no gallery enumeration or separate budget. One bounded `media_ingest` job routes an approved candidate through the **same Go file pipeline used for avatars and movie posters**, stores it under **`game-thumbnail/`**, then publishes the shared `film_tv_display` image field. It has no discovery capability and cannot launch another waterfall. A missing, rejected or over-budget image publishes the deterministic placeholder and leaves credits/relationships usable.
+Artwork readiness is a required stage before first publication in the **same finite plan**: at most three ranked candidates and one selected asset per game. Source metadata requests, downloads and retries count toward the existing root network/byte budgets; no gallery enumeration or separate budget. One bounded `media_ingest` job routes an approved candidate through the **same Go file pipeline used for avatars and movie posters**, stores it under **`game-thumbnail/`**, then prepares the shared `film_tv_display` image field for the final game publication gate. It has no discovery capability and cannot launch another waterfall. A missing, rejected or over-budget image leaves first publication pending and hidden. Internal credits/relationships remain available for repair; no public placeholder or IMDb fallback satisfies artwork readiness.
 
 The required object-key contract is `game-thumbnail/<canonical-game-uuid>/<source-url-hash>.webp`, relative to the existing configured media bucket. Reuse the shared `internal/platform/images` converter and deterministic `ObjectKey` helper, the existing GCS uploader, rehost ledger/retry facilities and `internal/platform/media` renderer. Use the movie-poster `ConvertPoster` path: preserve portrait or landscape aspect ratio, cap width at the shared limit (currently 500 px), and encode WebP. The avatar square crop does not apply to game artwork. The current shared filename is the first 12 hexadecimal characters of SHA-256 of the exact source URL; retain source revision/content hash separately as described below.
 
-Persist the returned `storage_key` and use the shared configured CDN/signed-URL renderer at read/projection time. The bucket/serving host comes from shared configuration. An already hosted input can reuse the existing file, but the game's final object must still be under `game-thumbnail/<canonical-game-uuid>/`; only skip ingestion when the existing object is already at that destination. Acceptance requires the correct prefix, preserved aspect ratio, one deterministic key on retry, and the normal avatar/poster file-pipeline failure and delivery behavior.
+Persist the returned `storage_key` and use the shared configured CDN/signed-URL renderer at read/projection time. The bucket/serving host comes from shared configuration. An already hosted, approved game-source input can reuse the existing file; an IMDb-origin asset cannot. The game's final object must still be under `game-thumbnail/<canonical-game-uuid>/`; only skip ingestion when the existing object is already at that destination. Acceptance requires the correct prefix, preserved aspect ratio, one deterministic key on retry, and the normal avatar/poster file-pipeline failure and delivery behavior.
 
 Preserve candidate `source`, `source_game_id`, `source_page_url`, `source_image_url`, `asset_kind`, platform/edition/locale scope, observed dimensions, attribution, rights-policy reference and verification status. After ingestion, also retain the shared asset ID, content hash, MIME type, output dimensions, GCS object generation and source fact/revision. Keep provider URLs as provenance; project the approved serving URL. Replacing or withdrawing an image must invalidate the old selection and respect generation fencing. IGDB documents a 30-day removal window for replaced/deleted source images, so a raw CDN URL is not permanent storage. [IGDB image lifecycle](https://api-docs.igdb.com/#images)
 
@@ -316,15 +742,15 @@ Weights use the existing **lower = stronger** convention. Reused weights below a
 | Video_Game → `PUBLISHED_BY` → Company | 45, game endpoint extension | Named publisher; preserve territory, platform and dates in scoped records. Existing publication → company uses weight 20 and remains unchanged. Distribution is not silently publishing. | Core |
 | derivative → `BASED_ON` → source | 55, adaptation proposal | Explicit P144/P4969, normalized once. Endpoints add Video_Game to existing film/stage/work support. | Core bridge |
 | Release_Group or Music_Work → `SOUNDTRACK_FOR` → Video_Game | 55, new | Explicit score/soundtrack relation. Album ≠ composition ≠ recording. | Music slice |
-| Recording → `USED_IN` → Video_Game | 60, new | Exact named recording and game use, with scene/usage/version when known. Album membership alone is insufficient. | Later music slice |
+| Recording → `USED_IN` → Video_Game | 60, new | Exact named recording and game use, with scene/usage/version when known. Album membership alone is insufficient. | Music slice |
 | Person/Music_Group → existing `RELEASED`, `COMPOSED`, `PERFORMED`, etc. → music endpoint | Existing weights | Only the music owner emits its independently supported facts; no composer → Music_Work edge pointing at an album. | Music reuse |
-| Video_Game → `IN_GAME_SERIES` → Game_Series | 75, new | P179 or equivalent typed series membership; series/franchise are not a game. | Context slice |
+| Video_Game → `IN_GAME_SERIES` → Game_Series | 75, new | P179 or equivalent typed video-game series membership; generic franchises/groups remain pending context. | Context slice |
 | Video_Game → `EDITION_OF` → Video_Game | 60, new | Explicit remake/remaster/edition relation with `edition_kind`. Do not synthesize from a similar name. | Release slice |
 | Video_Game → `EXPANSION_OF` → Video_Game | 60, new | Expansion/DLC and its base game identified separately. | Release slice |
 | Game_Release → `RELEASE_OF` → Video_Game | 30, endpoint extension | Release/platform/territory record belongs to this game; separate dispatch from the music release writer. | Release slice |
 | Video_Game or Game_Release → `AVAILABLE_ON` → Game_Platform | 80, new | Confirmed release availability, with release context. Announced platforms remain pending availability. | Optional context |
 | Video_Game → `USES_ENGINE` → Game_Engine | 80, new | Explicit engine and version evidence. | Optional context |
-| Video_Game → `HAS_AWARD` → Game_Award | 40, reused | Scoped category + ceremony/year + game + result. Distinguish winner and nomination; never an eternal category hub. | Award slice |
+| Video_Game → `HAS_AWARD` → Game_Award | 40, reused | Award body + ceremony/year + category + nominee entry, including recipient scope when applicable; outcome is mutable. Distinguish winner and nomination; never an eternal category hub. | Award slice |
 | Explicit Person/Company → `WON_AWARD` / `NOMINATED_FOR` → Game_Award | 30 / 35, reused | Named recipient only. A game's win does not award every employee or credited person. | Award slice |
 | Person → `HAS_EXPERTISE` → existing expertise taxonomy | Existing policy | Versioned role-to-expertise mapping with game evidence. Expertise writer gets no discovery capability. | Follow-on slice |
 
@@ -376,7 +802,7 @@ Reuse the **`film_tv_display` physical card contract** with a `video_game` discr
 
 Use existing `person_display` and `company_display` for endpoints. Music keeps its own existing card contracts; support series/platform/release/award nodes do not automatically create new display tables. Projections carry schema version, source/graph revision, canonical UUID, generation and run receipt; apply updates monotonically. They cannot overwrite private notes, contacts or user affinity data.
 
-Show partial credits as partial, future games as announced when verified, and unresolved relationships as pending only in an appropriate review view. A missing cover image has a deterministic placeholder. Rehost permitted art through the shared avatar/movie-poster file pipeline into `game-thumbnail/`, retaining its storage key for the shared media renderer; CC0 catalog metadata does not make game artwork CC0.
+Apply the [game publication gate](#game-publication-gate): no public game node, card or incident relationship before the required game facts, game-source artwork and publication receipts succeed. After publication, show partial credit coverage as partial and future games as announced when verified. Unresolved relationships and placeholder artwork belong only in internal review. Rehost permitted game-source art through the shared avatar/movie-poster file pipeline into `game-thumbnail/`; IMDb artwork and movie display fields are excluded.
 
 ## Implementation sequence and acceptance
 
@@ -384,16 +810,32 @@ Show partial credits as partial, future games as announced when verified, and un
 | --- | --- | --- |
 | 0. Contracts and replay fixtures | Type registration, aliases, role map, output manifest, source capability registry, frozen examples | Same-name game/movie/remake cases and all identity aliases resolve correctly; missing Wikidata edge stays missing. |
 | 1. Finite scheduler | Root admission, immutable manifests, budget reservations, scoped jobs, leases/outbox, explicit game dispatcher | Company/game/person cycles cannot enqueue a new root; retries cannot replenish budget or broaden scope. |
-| 2. Wikidata + IMDb intake | Reused IMDb snapshots, typed claims, identifiers, game/credit/company ledgers | Elden Ring retains both Miyazaki roles, 11 distinct people, regional publishers and numeric aliases. |
+| 2. Wikidata + IMDb + person-role intake | Reused IMDb snapshots, raw role registry/probe, typed claims, identifiers, game/credit/company ledgers | Elden Ring retains both Miyazaki roles, 11 distinct people, regional publishers and numeric aliases. |
 | 3. Election and graph | Required node/edge registration, pending replay, exact fact scope, merge handling | Flat counts/stable UUIDs on replay; no edge before election; source withdrawal repairs graph. |
 | 4. Company + adaptation entries | Bounded company catalog and both Wikidata relation directions; theatre callback contract | The Last of Us and Hamlet inverse-P144 fixtures pass; mixed company business and wrong endpoint types are rejected. |
-| 5. Music + recognition + context | Soundtrack mapping, scoped award result, optional series/releases | No album-as-composition mistake; no award-to-everyone; no catalog expansion by music leaves. |
-| 6. Publication and bounded canary | Display package, source attribution/retention, metrics/runbook | Public projections match active elected graph state; all production feature flags are deliberate. |
+| 5. Music + recognition + support types | Music-to-game intake, exact soundtrack/recording bridges, The Game Awards adapter, typed series/platform/engine and conditional scoped releases under `games-v1` | No album-as-composition mistake; no award-to-everyone; no catalog expansion by music leaves. |
+| 6. Publication and bounded canary | Hidden game stubs, required game artwork, game-owned display fields, revisioned activation, metrics/runbook | No public game before successful game publication; no IMDb artwork/movie-field leakage; all production feature flags are deliberate. |
 | 7. Optional commercial adapter | Entitlement-aware Moby/IGDB adapter and held-out coverage comparison | Measure incremental correct edges per cost; no dependency on a paid provider for core operation. |
 
 ### Required adversarial checks
 
+- Official award pages preserve year/category/nominee-entry identity: three people nominated for one game produce separate results, a joint nomination stays one entry, and winners-only archives never retract historical nominees. Award evidence cannot discover unrelated games or reveal an unpublished game.
+- All ten supplied role families remain probe-eligible from original current/past work titles, including specialist titles omitted by role reduction. Several roles, unchanged refreshes and aliases produce one probe per person/root.
+- A relevant person with no IMDb ID can match an explicit portfolio game credit. Generic titles, same-name candidates and company employment alone never manufacture game credits; esports participation is not a development credit.
+- Probe failure/not-entitled/partial coverage cannot become a cached no-match. Role/evidence/capability changes are reconsidered only within authorized runs; retries preserve original budgets.
+- A person-role probe, IMDb credit handoff and company source identifying the same game share its identity and scoped snapshot job. Game-derived people and employers cannot restart either probe or catalog discovery.
+- An IMDb-created game stays hidden across queueing, provider work, credit replay and failed media ingestion; only a matching successful game publication reveals it.
+- IMDb source artwork, rehosted IMDb posters and movie descriptions/ratings cannot populate game display fields. The approved image key starts with `game-thumbnail/` and its provenance names an allowed game-art source.
+- Search, direct cards, person/company credits and graph paths/counts all exclude unpublished game endpoints, including legacy `Film_TV:Video_Game` nodes with missing visibility/publication state.
+- A crash between graph and display writes cannot reveal an incomplete revision; late movie sync and stale game completion cannot replace game art/properties or change its publication status.
+- A mixed movie/person credit payload routes explicit video games before movie-only tiering and inline enrichment, while retaining the shared identity/node writer. A game that ranks in the top two is still queued at tier 1; movie regression behavior is unchanged.
+- Two roles or characters for one game survive deduplication. Explicit voice/performance categories survive the movie crew-filter boundary; character-only input remains pending without inventing a role.
+- A persisted credit with no game node queues its identity/snapshot work without waiting for a graph edge. Crash-before-publish, fresh existing game and duplicate deliveries converge on one game job per root plus all valid credits.
+- Several game credits on an authorized person's IMDb payload share one capped manifest and upstream budget. The same credits observed by an identity-only game descendant produce zero new discovery jobs.
 - Same game enters concurrently from IMDb, Wikidata and company discovery: one canonical UUID, one semantic credit, all evidence retained; distinct remakes stay distinct.
+- Direct-domain and subdomain/parent video game matches each admit one company probe; several qualifying specialties, rebuilt edge UUIDs and duplicate completion events still produce one probe. Ambiguous gaming and unrelated classifications produce the specified review/no-match outcome.
+- A delayed, partially failed or no-op specialty rebuild cannot trigger a probe or create a false negative cache; a complete classification receipt recovers through the same root. Correlated lineage survives the graph-event handoff.
+- A video game publisher can enter without a developer classification or company QID; official portfolio candidates still need exact-title identity and separate role evidence. A retailer/esports specialty does not become a developer credit.
 - A company root with 20 games and thousands of credit candidates never exceeds root budgets under concurrent admission. Reserve before identity creation/provider calls.
 - A company discovered by a game is itself a developer; a person has IMDb and MusicBrainz IDs; a soundtrack points back to its game; two works form a cycle: **zero new roots or recursive dispatches**.
 - Concurrent full person request and game identity-only leaf cannot clear the leaf restriction. Missing lineage, forged root flags and unknown dispatch types fail closed.

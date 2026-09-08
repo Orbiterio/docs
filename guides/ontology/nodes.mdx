@@ -64,7 +64,7 @@ This is the canonical label inventory for node label combinations used by the do
 | `Entity:Game_Platform` | **Proposed Go** bounded game support identity | Platform context, e.g. Windows or PlayStation 4. |
 | `Entity:Game_Engine` | **Proposed Go** bounded game support identity | Optional evidenced engine/version context. |
 | `Entity:Game_Release` | **Proposed Go** scoped game release identity | Optional platform/territory/edition release; not a music `Release`. |
-| `Entity:Game_Award` | **Proposed Go** scoped game recognition identity | One award result for a game, category and ceremony. |
+| `Entity:Game_Award` | **Proposed Go** scoped game recognition identity | One scoped nominee-entry result for a game, category and ceremony; named recipient scope distinguishes multiple same-game nominees. |
 | `Entity:Game_Award:Winner` | **Proposed Go** elected winner result | Result modifier; no automatic individual recipients. |
 | `Entity:Game_Award:Nominee` | **Proposed Go** elected nominee result | Result modifier on the same scoped identity if the outcome later changes. |
 | `Entity:Film_TV:Music_Video` | IMDB title `type` | Film/TV title subtype supported by the title writer. |
@@ -644,6 +644,10 @@ Represents a specific award nomination or win for a film/TV title. Carries an ad
 **Synchronized September 8, 2026.** This is the node reference for the [Go/GCP video-game build plan](/guides/open-work/video-game-waterfall). Game runtime registration and writers remain proposed. The [real-data simulation](/guides/open-work/video-game-waterfall-examples) contains **29 nodes and 30 edges**, with real names/source IDs and simulated internal UUIDs and processing state. It is not a production graph snapshot.
 </Info>
 
+**Existing movie-created games feed this waterfall:** retain the current identity/node writer, then use a Go adapter to hand its `Entity:Film_TV:Video_Game` UUID and IMDb/credit evidence to the [queued game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). The game worker updates that same node; its existing compatibility labels can remain. The stub stays hidden until [successful game publication](/guides/open-work/video-game-waterfall#game-publication-gate) supplies game-owned properties and processed game-source artwork. Legacy movie enrichment does not mean game enrichment is complete. Node sync and identity-only leaves cannot trigger discovery.
+
+**Person entry:** [matching current or past job titles](/guides/open-work/video-game-waterfall#person-role-entry) can queue a bounded search for that existing person’s game credits. Reuse the Person UUID; the intake role registry creates no new node family and does not itself establish a game relationship.
+
 ### Game entity families and reused endpoints
 
 There are **six game-specific node families** in the proposed output manifest. `Video_Game` is the primary game card; the other five are bounded support identities. Each enabled family needs explicit identity, merge, graph-dispatch and reader registration. An `Entity` label on a support node does not authorize full enrichment or a new root. Only declared identity-only leaves can create its scoped record.
@@ -653,9 +657,11 @@ There are **six game-specific node families** in the proposed output manifest. `
 | `Entity:Video_Game` | A base game, independently identified remake/remaster, DLC, expansion or compilation | Stable UUID plus source aliases; `name`, `game_kind`; first-release date/precision when known | 3 |
 | `Entity:Game_Series` | A series containing separately identified games | Stable UUID/QID or provider series ID; `name`; never keyed only on a title string | 1 |
 | `Entity:Game_Platform` | An evidenced gaming platform | Stable UUID/QID or provider platform ID; `name`, normalized `platform_code` | 2 |
-| `Entity:Game_Engine` | An engine used by a game | Stable UUID/strong engine ID; `name`; version only when explicitly known | 0 — optional later slice |
-| `Entity:Game_Release` | A separately addressable release with platform/territory/edition context | Stable UUID and provider release ID or reviewed scoped identity; date precision, platform/territory/edition references | 0 — optional later slice |
-| `Entity:Game_Award`, optionally `:Winner` / `:Nominee` | One scoped recognition result | Game + ceremony/year + category; `name`, `ceremony_qid`, `category_qid`, `award_year`, `result` when known. Outcome changes preserve the identity. | 1 |
+| `Entity:Game_Engine` | An evidenced engine family used by a game | Stable UUID/typed alias; `engine_kind`; versions qualify `USES_ENGINE` | 0 in core; 1 in companion |
+| `Entity:Game_Release` | A separately addressable platform release | Immutable scoped registry key, exact game/platform and territory scope; dates mutable | 0 in core; 1 in companion |
+| `Entity:Game_Award`, optionally `:Winner` / `:Nominee` | One scoped recognition result | Award body + ceremony/year + category + nominee entry; include named recipient/game scope where applicable. `award_entry_key`, `subject_kind`, `award_year`, `result`; QIDs are optional crosswalks. Outcome changes preserve identity. | 1 |
+
+**Award identity:** [The Game Awards source contract](/guides/open-work/video-game-waterfall-game-awards#award-identity-one-record-per-nominee-entry) distinguishes separate people nominated for the same game/category/year and joint recipient entries. A game-only key would collapse those results. These remain `Game_Award` nodes, with source aliases reconciled and winner/nominee excluded from identity.
 
 All six families inherit UUID, name, timestamps and source provenance. Missing source fields remain absent. Support types have no automatic standalone cards. `Game_Release` and `Game_Award` must not be substituted for music releases or Film/TV awards.
 
@@ -670,6 +676,76 @@ The **other 22 fixture nodes reuse five existing endpoint families**:
 | `Release_Group` | 1 | The Last of Us soundtrack album group, distinct from a composition or recording |
 
 Later slices may also reference existing `Stage_Production`, `Music_Group`, `Music_Work`, `Recording`, `DomainExpertise` and `SubDomainExpertise`. Their owners retain their identities, facts and edges. These types are not extra nodes claimed by the current fixture. Games, developers, authors, albums and adaptations discovered by a game cannot restart their owning waterfalls.
+
+**Music entry:** the [fourth primary adapter](/guides/open-work/video-game-waterfall#music-waterfall-entry) reuses the existing music endpoint and queues an exact game from soundtrack, score, recording-use or named-credit evidence. Music release support rows do not become `Game_Release`; game-discovered music cannot restart intake.
+
+<a id="game-type-contract-v1" />
+
+### Locked game type contract — games-v1
+
+**Design baseline locked September 8, 2026; Go registration/writers still to implement.** The [source review](/guides/open-work/video-game-waterfall-sources) supports all six families below. The five support types may be created/reused by bounded game jobs when their evidence is present. They are not outputs of the current movie writer, independent waterfalls or automatic cards. Source availability controls which facts are produced, not which identities are silently substituted.
+
+| Type | Canonical identity / minimum type-specific fields | Creation boundary |
+| --- | --- | --- |
+| `Video_Game` (`video_game`) | Existing canonical UUID; exact aliases in their typed namespaces; evidenced `game_kind` | Resolve the game/edition first. Retain `Entity:Film_TV:Video_Game` compatibility labels and the original UUID when supplied by movie intake |
+| `Game_Series` (`game_series`) | Stable registry UUID and strong typed source alias; `series_kind=video_game_series` | A verified series with explicit game membership. A franchise, theme, store collection or fictional universe is not sufficient |
+| `Game_Platform` (`game_platform`) | Stable exact-platform UUID/aliases; registered `platform_code`, `platform_kind` | Accept an evidenced console, hardware platform or operating system/family. A storefront or vague hardware-family match is not an exact platform |
+| `Game_Engine` (`game_engine`) | Stable engine-family UUID/aliases; `engine_kind=game_engine` | Verified game engine, separate from its company. Versions qualify use; they do not automatically allocate engine nodes |
+| `Game_Release` (`game_release`) | Immutable `release_scope_key`; one `game_entity_id`, one `platform_entity_id`; explicit territory scope or source-local unspecified scope | Independently meaningful platform release with sufficient correlated scope. A date, SKU or source date-record ID alone is insufficient |
+| `Game_Award` (`game_award`) | Immutable `award_entry_key`, `award_body_key`, `ceremony_key`, `category_key`, `award_year`, `subject_kind`; resolved game and applicable named recipients | One scoped nominee entry. Category/ceremony QIDs are aliases; winner/nominee is mutable outcome, never identity |
+
+All use the existing UUID, name, creation/update timestamps and source envelope. The shared evidence/identity ledger holds typed aliases, source object/revision, assertion locator, resolution state and elected fact IDs. Graph projections retain primitive fields and ledger references; nested release scopes and recipient sets remain SQL records. Adding a provider alias never changes a UUID. Names are display values, not merge keys. Cross-type alias collisions stay unresolved; do not relabel a game into a series or a music release into a game release.
+
+<AccordionGroup>
+<Accordion title="Video_Game — game, edition and app identity">
+
+A separately identified remake, remaster or substantive expansion can be its own game; connect it only with evidenced `EDITION_OF` or `EXPANSION_OF`. A port normally contributes a release of the same game unless exact source identity shows a distinct work. Keep commercial editions that only change packaging, bundles, cosmetic DLC, demos and soundtracks out of automatic game creation. Compilation identity requires evidence of a game product; an arbitrary sales bundle is not a compilation game.
+
+Store app IDs are typed aliases whose game/edition/platform scope is resolved before attachment. A Steam app may serve multiple platforms; it cannot identify one release across every territory. Match IMDb `tt` identity to the same canonical game and preserve `visibility=false` until the game publication gate succeeds. Any discovered related game gets an identity-only endpoint, not a full game job unless already independently admitted in the manifest.
+
+</Accordion>
+<Accordion title="Game_Series — typed membership, no franchise shortcut">
+
+Use `series_kind=video_game_series`. Optional properties: typed `wikidata_qid`, provider collection/series aliases and `description`. Membership order belongs to `IN_GAME_SERIES.series_ordinal`, retained as a string so special ordinals are not fabricated numbers. Series and franchise provider namespaces stay separate; merge only when identity resolution proves the same typed series. Generic IGDB franchises/Moby groups remain source context unless an independently supported series mapping applies.
+
+Real fixture: Elden Ring series `Q124706366`, distinct from game `Q64826862`. The series lookup may resolve that endpoint only; it cannot enumerate its games.
+
+</Accordion>
+<Accordion title="Game_Platform — platform identity and availability are separate">
+
+`platform_kind` is a registered enum: `console`, `hardware_platform`, `operating_system`, `operating_system_family`. Examples: PS4 `Q5014725` / `ps4` / `console`; Windows `Q1406` / `pc_windows` / `operating_system_family`. Preserve the source granularity. Windows is not all PC operating systems; PS4 is not the PlayStation family. Ambiguous “PC” or cross-generation family text stays pending unless the adapter's versioned mapping proves an exact target.
+
+Platform identity can exist for an announced title. `AVAILABLE_ON` additionally requires release/availability evidence for that game/platform scope. Backward compatibility, cloud streaming and storefront presence are not silently native releases. Keep their source assertions pending until a compatible relationship contract is enabled. Optional hardware/OS versions are scoped facts, not invented node variants.
+
+</Accordion>
+<Accordion title="Game_Engine — family identity and scoped engine version">
+
+Create/reuse the engine family, e.g. **Unreal Engine**; use `engine_kind=game_engine`. Exact source aliases and optional description belong to the node. Keep `engine_versions`, platform/release/time scope and engine-use record IDs on `USES_ENGINE` and its SQL records. A game's migration to another engine/version retains history without renaming the family or applying that version to all games.
+
+An engine maker's product page can resolve identity but cannot prove every studio title uses it. Require exact game-use evidence. Exclude audio/physics middleware, SDKs, rendering APIs and internal tools unless separately classified as the game's engine. Engine maker/owner company facts remain pending context under this build's endpoint allowlist; `DEVELOPED_BY` currently connects games to companies only.
+
+</Accordion>
+<Accordion title="Game_Release — correlated scope and mutable dates">
+
+Allocate an opaque release registry key once the exact game/edition and platform scope are resolved. Correlate territory, release channel/distribution kind, edition/SKU and any release-wave distinction **only where evidenced**. Unknown territory is not worldwide. An explicitly source-unspecified scope stays source-local until independently reconciled; do not merge all unknown-region records together. Conflicting or insufficient scope stays in the fact ledger without creating a release.
+
+Optional fields include `release_date`, `date_precision`, `release_status`, `territory_key`, `edition_label`, `distribution_kind`, `store_app_ids`. `release_status` is `announced`, `released`, `delayed`, `cancelled` or `unknown`; a past date alone cannot change status to released. Support year/month/day/quarter precision without inventing days. A date correction or delay updates the same release. Provider date-record IDs alias assertions; only a verified provider release identity can alias the release itself. A distinct rerelease requires explicit distinguishing evidence, not just a changed date.
+
+Each release has exactly one active `RELEASE_OF` target and one exact platform. Multiple platform rows require independently supported releases; never cross-product arrays. Game-level availability may summarize surviving release evidence through the same owner. Real companion: The Last of Us (2013), PS3, worldwide release assertion, June 14, 2013. Later PS4 assertions do not resolve remaster identity by themselves. [Examples and sources](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples)
+
+</Accordion>
+<Accordion title="Game_Award — nominee identity and current outcome">
+
+Use award body + ceremony/year + category + nominee entry, with the game and named person/joint-recipient scope. `subject_kind` is `game`, `person_game` or `recipient_group_game` in this slice. `game_entity_id` and resolved recipient references are required before their relationships project. Separate performers nominated for one game retain separate entries; a joint nomination keeps one entry with separate recipient links.
+
+`result` is `nominee`, `winner` or unresolved. Current `Winner`/`Nominee` labels are mutually exclusive; corrections replace the modifier and current recipient edge, retaining nomination/result history in SQL. A game-only award does not manufacture an individual winner. Other subject kinds such as an adaptation season, esports team or creator remain typed pending evidence for the appropriate owner. [Full award contract](/guides/open-work/video-game-waterfall-game-awards#award-identity-one-record-per-nominee-entry)
+
+</Accordion>
+</AccordionGroup>
+
+**Public readiness of scoped support:** a `Game_Release` or `Game_Award` depends on its associated game’s published revision. Until that gate succeeds, hide the scoped node and **all** its incident edges, including release → platform and person → award paths that do not directly touch the game. Internal fact/graph replay can finish before publication; public readiness is a separate read/projection check. Shared series, platform and engine identities do not inherit one game’s visibility, but their hidden-game links remain excluded.
+
+**Frozen exclusions:** no additional game genre/theme, character, storefront, award ceremony/category or engine-version node families. Existing Person/Company/music/movie/theatre types are reused only through their allowed identity seams. Every new support identity consumes the shared leaf budget, and no support writer can admit a new root. [Machine-readable baseline](/assets/video-game-waterfall/type-source-contract.json)
 
 ### Video_Game properties
 
@@ -686,8 +762,12 @@ Later slices may also reference existing `Stage_Production`, `Music_Group`, `Mus
 | `steam_app_ids` | string list, optional | Matched app IDs with platform/edition scope retained in SQL |
 | `game_kind` | enum | Base game/remake/remaster/expansion/DLC/compilation only as evidenced |
 | `first_release_date` / `date_precision` | ISO partial date / enum | Earliest confirmed release for this identity; no day invented from a year |
-| `description`, `visibility` | string / boolean | Selected description and shared visibility policy |
-| `image_url` | string, optional graph/display media reference | Only after shared media ingestion; render delivery URLs through the shared media service. Keep signed/expiring URLs out of durable graph facts. |
+| `description` | string | Selected by the game flow from game-source facts; no movie-display fallback |
+| `visibility` | boolean | False on an unready game stub; true only after successful game publication. Missing state cannot expose a legacy game |
+| `game_publication_status` / `game_publication_revision` | enum / integer revision | Pending until a committed game publication; public readers require its matching published revision. Refresh candidates remain private |
+| `image_url` | graph/display media reference; absent while pending | Required for first publication from an approved game-source asset after shared media ingestion. No IMDb image or rehosted IMDb poster. Render through shared media service; keep signed/expiring URLs out of durable graph facts |
+
+**Thumbnail ownership:** game-source artwork and game parameters are prepared by the game waterfall before the node becomes public. A missing/failed thumbnail leaves first publication pending. The Steam examples below are source candidates, not proof that these games have passed publication.
 
 **Thumbnail file contract:** use the same Go file pipeline as avatars/movie posters, the aspect-preserving poster conversion, the configured shared bucket and media renderer. Persist `storage_key` on the shared media/read-model record as `game-thumbnail/<game-uuid>/<source-url-hash>.webp`. Source image URL, attribution, source revision and content hash remain provenance; an image candidate is not an uploaded object. Reuse `film_tv_display` with the game discriminator; no separate game display table is required by this contract.
 

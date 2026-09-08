@@ -1,0 +1,561 @@
+{
+  "contract_version": "games-v1",
+  "design_locked_on": "2026-09-08",
+  "status": "design_baseline_runtime_not_implemented",
+  "implementation": {
+    "language": "Go",
+    "platform": "GCP",
+    "queue": "shared AlloyDB queue and Pub/Sub wakeups",
+    "xano_dependency": false,
+    "recursive_discovery": false,
+    "all_game_edges_excluded_from_scoring": true
+  },
+  "authority": {
+    "nodes": "/guides/ontology/nodes#game-type-contract-v1",
+    "edges": "/guides/ontology/edges#game-edge-contract-v1",
+    "sources": "/guides/open-work/video-game-waterfall-sources"
+  },
+  "sources": [
+    {
+      "source_key": "wikidata",
+      "review_status": "frozen_statements_reviewed",
+      "candidate_game_node_types": [
+        "Video_Game",
+        "Game_Series",
+        "Game_Platform",
+        "Game_Engine",
+        "Game_Release",
+        "Game_Award"
+      ],
+      "boundary": "Typed statements and qualified scopes only; no complete catalog claim.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "imdb_upstream",
+      "review_status": "existing_movie_handoff_reviewed",
+      "candidate_game_node_types": [
+        "Video_Game"
+      ],
+      "boundary": "Reuse exact identity/credits; no support-node writer or game display/artwork.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "person_company_upstream",
+      "review_status": "existing_intake_contract_reviewed",
+      "candidate_game_node_types": [],
+      "boundary": "Identity and probe authorization only; title/employment alone creates no game fact.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "official_game_pages",
+      "review_status": "selected_primary_examples_reviewed",
+      "candidate_game_node_types": [
+        "Video_Game",
+        "Game_Series",
+        "Game_Platform",
+        "Game_Engine",
+        "Game_Release"
+      ],
+      "boundary": "Exact subject and supported template; no automatic general-site crawl.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "steam",
+      "review_status": "official_application_model_and_store_examples_reviewed",
+      "candidate_game_node_types": [
+        "Video_Game",
+        "Game_Platform",
+        "Game_Release"
+      ],
+      "boundary": "Type and scope app aliases; exclude storefront platform, soundtrack, cosmetic DLC and bundle misclassification.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "the_game_awards",
+      "review_status": "selected_official_pages_reviewed",
+      "candidate_game_node_types": [
+        "Game_Award"
+      ],
+      "boundary": "Verified year/category/nominee entry; non-game subjects pending.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "igdb",
+      "review_status": "public_schema_reviewed_authenticated_capability_unverified",
+      "candidate_game_node_types": [
+        "Video_Game",
+        "Game_Series",
+        "Game_Platform",
+        "Game_Engine",
+        "Game_Release"
+      ],
+      "boundary": "Enable only with required access; full individual credits not verified; franchises are not automatically series.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "mobygames",
+      "review_status": "conditional_tier_schema_response_unverified",
+      "candidate_game_node_types": [
+        "Video_Game",
+        "Game_Series",
+        "Game_Platform",
+        "Game_Engine",
+        "Game_Release"
+      ],
+      "boundary": "Candidate mappings only; direct docs fetch 403; retain entitled response before activation.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "musicbrainz_existing",
+      "review_status": "existing_frozen_music_response_reviewed",
+      "candidate_game_node_types": [],
+      "boundary": "Existing music entities and exact bridges; no Game_Release substitution.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "wikimedia_commons",
+      "review_status": "file_reuse_policy_reviewed",
+      "candidate_game_node_types": [],
+      "boundary": "Media only; individual exact-game asset/source policy gate.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "licensed_credits_future",
+      "review_status": "not_acquired_unverified",
+      "candidate_game_node_types": [],
+      "boundary": "Named credits only after contract and held-out coverage verification.",
+      "production_enabled_by_this_review": false
+    },
+    {
+      "source_key": "search_extraction",
+      "review_status": "discovery_not_fact_authority",
+      "candidate_game_node_types": [],
+      "boundary": "Candidate URLs/matches/extraction; underlying retained evidence required.",
+      "production_enabled_by_this_review": false
+    }
+  ],
+  "node_types": [
+    {
+      "label": "Video_Game",
+      "entity_type": "video_game",
+      "admission": "required",
+      "specific_fields": [
+        "game_kind"
+      ],
+      "identity_rule": "Existing canonical game UUID with verified game/edition aliases; artwork and display publication gate.",
+      "standalone_card": true,
+      "may_start_discovery": false
+    },
+    {
+      "label": "Game_Series",
+      "entity_type": "game_series",
+      "admission": "when_evidenced",
+      "specific_fields": [
+        "series_kind"
+      ],
+      "identity_rule": "Typed video-game series; generic franchise/group excluded.",
+      "standalone_card": false,
+      "may_start_discovery": false
+    },
+    {
+      "label": "Game_Platform",
+      "entity_type": "game_platform",
+      "admission": "when_evidenced",
+      "specific_fields": [
+        "platform_code",
+        "platform_kind"
+      ],
+      "identity_rule": "Exact console/hardware/operating-system identity; storefront excluded.",
+      "standalone_card": false,
+      "may_start_discovery": false
+    },
+    {
+      "label": "Game_Engine",
+      "entity_type": "game_engine",
+      "admission": "when_evidenced",
+      "specific_fields": [
+        "engine_kind"
+      ],
+      "identity_rule": "Engine-family identity; version is engine-use scope.",
+      "standalone_card": false,
+      "may_start_discovery": false
+    },
+    {
+      "label": "Game_Release",
+      "entity_type": "game_release",
+      "admission": "when_coherent_scope_needs_identity",
+      "specific_fields": [
+        "release_scope_key",
+        "game_entity_id",
+        "platform_entity_id",
+        "territory_key"
+      ],
+      "identity_rule": "Opaque registry identity for resolved platform release; dates/status mutable; source-unspecified scope remains source-local.",
+      "standalone_card": false,
+      "may_start_discovery": false
+    },
+    {
+      "label": "Game_Award",
+      "entity_type": "game_award",
+      "admission": "when_evidenced",
+      "specific_fields": [
+        "award_entry_key",
+        "award_body_key",
+        "ceremony_key",
+        "category_key",
+        "award_year",
+        "subject_kind",
+        "game_entity_id"
+      ],
+      "identity_rule": "One nominee entry; named/joint recipient scope distinguishes results; outcome excluded from identity.",
+      "standalone_card": false,
+      "may_start_discovery": false
+    }
+  ],
+  "edges": [
+    {
+      "type": "WORKED_ON",
+      "from_types": [
+        "Person"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 30,
+      "owner": "game_credit",
+      "evidence_requirement": "explicit named credit",
+      "specific_properties": [
+        "roles",
+        "credit_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "DEVELOPED_BY",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Company"
+      ],
+      "weight": 35,
+      "owner": "game_company",
+      "evidence_requirement": "explicit development role",
+      "specific_properties": [
+        "development_role",
+        "company_role_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "PUBLISHED_BY",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Company"
+      ],
+      "weight": 45,
+      "owner": "game_company",
+      "evidence_requirement": "explicit publisher and correlated scope",
+      "specific_properties": [
+        "publishing_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "BASED_ON",
+      "from_types": [
+        "Video_Game",
+        "Film_TV",
+        "Work:Theatrical_Work",
+        "Stage_Production"
+      ],
+      "to_types": [
+        "Video_Game",
+        "Film_TV",
+        "Work:Theatrical_Work",
+        "Stage_Production"
+      ],
+      "weight": 55,
+      "owner": "shared_adaptation",
+      "evidence_requirement": "explicit derivation with at least one Video_Game endpoint",
+      "specific_properties": [
+        "source_property",
+        "relation_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "SOUNDTRACK_FOR",
+      "from_types": [
+        "Release_Group",
+        "Music_Work"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 55,
+      "owner": "music_game_bridge",
+      "evidence_requirement": "exact soundtrack/composition relation",
+      "specific_properties": [
+        "music_game_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "USED_IN",
+      "from_types": [
+        "Recording"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 60,
+      "owner": "music_game_bridge",
+      "evidence_requirement": "exact recording use",
+      "specific_properties": [
+        "music_game_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "IN_GAME_SERIES",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Game_Series"
+      ],
+      "weight": 75,
+      "owner": "game_context",
+      "evidence_requirement": "typed series membership",
+      "specific_properties": [
+        "membership_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "EDITION_OF",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 60,
+      "owner": "game_version",
+      "evidence_requirement": "explicit remake/remaster/edition relation",
+      "specific_properties": [
+        "edition_kind",
+        "relation_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "EXPANSION_OF",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 60,
+      "owner": "game_version",
+      "evidence_requirement": "explicit substantive expansion and base game",
+      "specific_properties": [
+        "expansion_kind",
+        "relation_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "RELEASE_OF",
+      "from_types": [
+        "Game_Release"
+      ],
+      "to_types": [
+        "Video_Game"
+      ],
+      "weight": 30,
+      "owner": "game_release",
+      "evidence_requirement": "coherent release scope; one active parent",
+      "specific_properties": [
+        "release_scope_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "AVAILABLE_ON",
+      "from_types": [
+        "Video_Game",
+        "Game_Release"
+      ],
+      "to_types": [
+        "Game_Platform"
+      ],
+      "weight": 80,
+      "owner": "game_release_context",
+      "evidence_requirement": "released exact-platform scope; summary deduplicated",
+      "specific_properties": [
+        "availability_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "USES_ENGINE",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Game_Engine"
+      ],
+      "weight": 80,
+      "owner": "game_context",
+      "evidence_requirement": "explicit exact-game engine use",
+      "specific_properties": [
+        "engine_use_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "HAS_AWARD",
+      "from_types": [
+        "Video_Game"
+      ],
+      "to_types": [
+        "Game_Award"
+      ],
+      "weight": 40,
+      "owner": "game_recognition",
+      "evidence_requirement": "game context for exact nominee entry",
+      "specific_properties": [
+        "award_evidence_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "WON_AWARD",
+      "from_types": [
+        "Person",
+        "Company"
+      ],
+      "to_types": [
+        "Game_Award:Winner"
+      ],
+      "weight": 30,
+      "owner": "game_recognition",
+      "evidence_requirement": "explicit current named recipient",
+      "specific_properties": [
+        "award_recipient_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    },
+    {
+      "type": "NOMINATED_FOR",
+      "from_types": [
+        "Person",
+        "Company"
+      ],
+      "to_types": [
+        "Game_Award:Nominee"
+      ],
+      "weight": 35,
+      "owner": "game_recognition",
+      "evidence_requirement": "explicit current named nominee",
+      "specific_properties": [
+        "award_recipient_record_ids"
+      ],
+      "excluded_from_scoring": true,
+      "identity": "edge family + canonical ordered endpoint pair"
+    }
+  ],
+  "root_limits": {
+    "selected_games": 20,
+    "direct_game_root_games": 1,
+    "discovery_pages": 3,
+    "candidates_per_page": 50,
+    "new_leaf_identities": 60,
+    "new_leaf_identities_per_game": 20,
+    "non_replay_jobs": 100,
+    "network_attempts": 100
+  },
+  "common_rules": [
+    "No provider availability or production activation is implied by this design manifest.",
+    "Aliases are typed and source-scoped; names alone cannot merge identities.",
+    "Only the coordinator admits jobs; support entities are identity-only descendants.",
+    "Publication requires game-owned parameters, required stage receipts and approved game artwork in game-thumbnail/.",
+    "SQL retains correlated qualifiers and history; graph properties are primitive values and ledger references.",
+    "Retries and handoffs preserve the same root budgets.",
+    "Game_Release and Game_Award public readiness inherits the associated game publication revision, including their non-game incident edges."
+  ],
+  "deferred_semantics": [
+    "generic franchise/fictional-universe membership",
+    "character nodes",
+    "engine/platform company ownership predicates",
+    "cloud/backward-compatible availability",
+    "cosmetic DLC and soundtrack game identities",
+    "unsupported non-game award subjects"
+  ],
+  "primary_entry_points": [
+    {
+      "origin": "person_game_role",
+      "scope": "person_credit_probe"
+    },
+    {
+      "origin": "company_specialization",
+      "scope": "company_title_probe"
+    },
+    {
+      "origin": "imdb_person_credit",
+      "scope": "exact_game_handoff",
+      "additional_origins": [
+        "imdb_title"
+      ]
+    },
+    {
+      "origin": "music_game_evidence",
+      "scope": "music_game_probe"
+    }
+  ],
+  "music_entry": {
+    "status": "proposed_adapter_not_implemented",
+    "reviewed_universe_revision": "06428412a30f0336b87cbb0c298fe97e500e9568",
+    "allowed_music_endpoints": [
+      "Release_Group",
+      "Music_Work",
+      "Recording",
+      "Person",
+      "Music_Group"
+    ],
+    "bridge_endpoints": [
+      "Release_Group -> SOUNDTRACK_FOR -> Video_Game",
+      "Music_Work -> SOUNDTRACK_FOR -> Video_Game",
+      "Recording -> USED_IN -> Video_Game"
+    ],
+    "explicit_person_game_credit_only": true,
+    "sublimits_per_original_root": {
+      "music_anchors": 10,
+      "discovery_pages": 3,
+      "network_attempts_including_retries": 10
+    },
+    "new_root_budget": false,
+    "game_origin_music_may_probe": false,
+    "deduplication": "one probe per canonical music anchor and original root; shared game admission across all source origins",
+    "public_contract": "/guides/open-work/video-game-waterfall#music-waterfall-entry"
+  }
+}
