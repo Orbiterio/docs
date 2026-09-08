@@ -129,6 +129,8 @@ flowchart TD
   L --> F[Fact election]
   F --> R[Queued relation replay]
   R --> P[Display publication and completion receipt]
+  M --> I[Queued optional media ingest]
+  I --> P
 ```
 
 Only the root coordinator can admit the game manifest. A game snapshot job emits facts and endpoint candidates; it cannot call `GameGate.Admit`, the generic full person/company gate, or a movie/music/theatre discovery runner. The coordinator can schedule only predeclared **later** stages from those candidates. Its dependency ranks never move backwards.
@@ -138,6 +140,7 @@ Only the root coordinator can admit the game manifest. A game snapshot job emits
 | `root_discovery` | One bounded company/IMDb/adaptation enumeration; freeze selected game references | Follow a discovered studio's catalog, game sequels or another work's derivatives |
 | `game_snapshot` | Fetch one selected game and bounded permitted source details; extract its direct relationships | Start another root or fetch another game's detail as a discovered child |
 | `identity_only` | Resolve/create the named endpoint through a non-enriching public identity seam; one bounded direct profile lookup if needed | Full person/company enrichment, filmography/catalog/ownership cascades, expertise-triggered cross-waterfall kickoff |
+| `media_ingest` | Validate/ingest a declared artwork candidate; resize and publish through the shared media pipeline | Search galleries, traverse linked games, admit roots or reset network/byte budgets |
 | `facts_replay` / `graph_replay` / `publish` | Consume existing bounded claims and elected facts; repair the same objects | Source discovery or extending the manifest |
 | `describe` | Describe an already elected relation with evidence and bounded enrichment of the sentence | Decide that a relation exists, invent endpoints or launch discovery |
 
@@ -162,8 +165,8 @@ These are versioned game-specific starting limits, not claims that IMDb/music us
 | Selected game snapshots per root | 20 (direct-game root: 1) | Across all entry sources and aliases combined |
 | Root discovery pages | 3 total | Across direct/inverse/catalog discovery, not three per provider; max 50 candidates per page |
 | New leaf identities | 60 per root; 20 per game | People, companies and support entities combined; existing identities still consume resolution work budget |
-| Non-replay work jobs | 100 per root | Includes discovery, game, leaf and description jobs; no budget reset on retry or cross-waterfall handoff |
-| Network attempts | 100 per root | Includes searches, page fetches, profile lookups, LLM attempts and retries; separate provider quota also applies |
+| Non-replay work jobs | 100 per root | Includes discovery, game, leaf, media and description jobs; no budget reset on retry or cross-waterfall handoff |
+| Network attempts | 100 per root | Includes searches, page fetches, profile lookups, media downloads, LLM attempts and retries; separate provider quota also applies |
 | LLM attempts | 10 per root | A subset of the network budget; extraction and descriptions compete within it |
 | Retained relation mentions | 2,000 per root | Dedup first; rank/truncate deterministically; no unbounded credit response |
 | Downloaded source body bytes | 10 MiB per root | Stream size enforcement and recorded `source_too_large` outcome |
@@ -231,6 +234,26 @@ Current MobyGames listed monthly tiers are Bronze **\$99.99 / 1 req/s**, Silver 
 IGDB should not remain categorically “ruled out”: its official FAQ offers commercial partnerships, says the API is free, requires fair attribution, and permits retained downloaded data after partnership termination. Secure the required partnership before production use; compare it with Bronze on coverage and integration effort. [IGDB API documentation](https://api-docs.igdb.com/)
 
 Delete the earlier unmeasured “full catalog in four days” promise. Budget using measured pages, enabled endpoint entitlements, source quotas and retries. The runtime should cache selected game detail, never block roots behind a global bootstrap crawl. Capability absence is `not_entitled`, not an endless retry. Keep Moby/IGDB key-bearing URLs out of logs.
+
+### Game thumbnails and cover art
+
+**Recommendation:** reuse a suitable, permitted poster already acquired by the IMDb title pipeline first. If it is missing, use **IGDB for a consistent portrait-cover source**, or **MobyGames if that adapter is already enabled**. A verified Steam store image is a useful landscape fallback for games with a Steam app ID. Do not buy a credits tier solely to obtain a thumbnail.
+
+| Source | What we can obtain | Selection rule |
+| --- | --- | --- |
+| Existing IMDb title snapshot/media asset | The game title's already acquired poster, when present | Reuse the existing media reference and provenance for the same canonical game; no extra IMDb crawl. Never inherit the poster of its movie adaptation. |
+| IGDB `cover` | Cover identifier, image ID, dimensions and image URL; portrait variants including `cover_small` (maximum 90 × 128), `cover_big` (maximum 264 × 374), and `_2x` variants | Resolve by the stored numeric game ID. Prefer the matching base-game/localization cover. API use requires credentials and the commercial partnership described above. [Cover fields](https://api-docs.igdb.com/#cover) · [Image variants](https://api-docs.igdb.com/#images) |
+| MobyGames covers | Front-cover scans, with platform/release context; screenshots and promotional images are also available | Bronze lists cover images; Silver adds original full-size images. Choose a front cover, not a back cover, disc, compilation or unrelated edition. Keep the required MobyGames attribution. [Tier capabilities](https://www.mobygames.com/api/subscribe/) |
+| Steam / official publisher press kit | Store header/capsule or explicitly supplied game artwork | Use the exact known app/page and its returned asset URL. Steam has portrait library assets as well, but this does not prove a particular file URL exists. Prefer title artwork to an arbitrary screenshot. [Steam asset formats](https://partner.steamgames.com/doc/store/assets?l=english) |
+| Wikidata-linked Commons file | An image or logo when present, with a separately inspectable file license | Optional fallback only; an item may have a logo rather than cover art. Wikidata's CC0 metadata does not establish image reuse rights. |
+
+For an IGDB-enabled game snapshot, request the cover in that exact lookup, for example the body `fields name,cover.id,cover.image_id,cover.width,cover.height,cover.url; where id = 119133; limit 1;` on `POST /v4/games`. This is an illustrative request for Elden Ring, not a claimed authenticated API response. Build the documented image variant from the returned `image_id`; never invent it. Use `cover_big_2x` for a sharp small portrait card and preserve its aspect ratio. A landscape header should remain landscape or be contained within the card; do not crop away the title to force a portrait.
+
+**Real example:** Elden Ring's stored Steam app ID is `1245620`. Its [official store page](https://store.steampowered.com/app/1245620/_/) exposes [this header image](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578), observed September 8, 2026. See the [illustrated candidate and properties](/guides/open-work/video-game-waterfall-examples#game-thumbnail-example). An observed public URL is an artwork candidate; production display/rehosting follows the enabled source's applicable rights and media policy.
+
+Artwork is an optional later stage in the **same finite plan**: at most three ranked candidates and one selected asset per game. Source metadata requests, downloads and retries count toward the existing root network/byte budgets; no gallery enumeration or separate budget. One bounded `media_ingest` job may validate and resize an approved candidate through the existing Go media pipeline, write a versioned GCS object, then publish the shared `film_tv_display` image field. It has no discovery capability and cannot launch another waterfall. A missing, rejected or over-budget image publishes the deterministic placeholder and leaves credits/relationships usable.
+
+Preserve candidate `source`, `source_game_id`, `source_page_url`, `source_image_url`, `asset_kind`, platform/edition/locale scope, observed dimensions, attribution, rights-policy reference and verification status. After ingestion, also retain the shared asset ID, content hash, MIME type, output dimensions, GCS object generation and source fact/revision. Keep provider URLs as provenance; project the approved serving URL. Replacing or withdrawing an image must invalidate the old selection and respect generation fencing. IGDB documents a 30-day removal window for replaced/deleted source images, so a raw CDN URL is not permanent storage. [IGDB image lifecycle](https://api-docs.igdb.com/#images)
 
 ## AlloyDB and Go ownership
 
