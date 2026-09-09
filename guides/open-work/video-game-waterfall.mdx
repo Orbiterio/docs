@@ -683,27 +683,43 @@ Official category pages are reusable URLs; bind each snapshot to its verified ce
 
 ### Game thumbnails and cover art
 
-<img src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578" alt="Elden Ring game thumbnail — official Steam store header" width="460" />
+<img
+  src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/library_600x900.jpg"
+  alt="Elden Ring game thumbnail — official Steam library portrait, 300×450"
+  width="300"
+/>
 
-*Elden Ring: actual landscape thumbnail from [Steam](https://store.steampowered.com/app/1245620/_/). The shared avatar/movie-poster file pipeline will save the selected game artwork under `game-thumbnail/`.*
+_Elden Ring: the locked 2:3 portrait candidate from [Steam](https://store.steampowered.com/app/1245620/_/), 300×450 as served. The shared avatar/movie-poster file pipeline will save the selected game artwork under `game-thumbnail/`._
 
-<img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/222160/header.jpg?t=1765636960" alt="Hamlet video-game node thumbnail from its Steam store page" width="460" />
+<img
+  src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/222160/library_600x900.jpg"
+  alt="Hamlet video-game node thumbnail — official Steam library portrait, 300×450"
+  width="300"
+/>
 
-*Hamlet: a second real game-node thumbnail from [Steam](https://store.steampowered.com/app/222160/), matched by app ID `222160`. The store-release scope stays distinct from the game's original release date. See [Node Types](/guides/ontology/nodes#video-game-nodes) for the image/property contract.*
+_Hamlet: a second real game-node portrait from [Steam](https://store.steampowered.com/app/222160/), matched by app ID `222160` — the same 300×450 2:3 asset resolves for this 2010 indie title. The store-release scope stays distinct from the game's original release date. See [Node Types](/guides/ontology/nodes#video-game-nodes) for the image/property contract._
 
-**Source rule:** the video game flow selects its own artwork. Use **IGDB for a portrait-cover source when enabled**, **MobyGames when enabled**, or a verified **Steam/official game asset** for the exact game. IMDb posters are excluded, including already rehosted copies and movie-adaptation artwork. Do not buy a credits tier solely to obtain a thumbnail.
+**Locked 2026-09-09 — one frame, 2:3 portrait.** Every game card uses the same 2:3 frame as a movie poster, so it renders in the same card component as `film_tv_display` with no orientation special case. The **primary source is Steam's library portrait, `library_600x900.jpg`** (measured 300×450), resolved by the stored app ID. Other sources (IGDB cover, MobyGames front cover, official press kit, an exact-game award tile, a Commons file) are fallback candidates and are accepted only as contained inside the 2:3 frame; a landscape asset is letterboxed within it, never served as a different card ratio. The shared pipeline's conversion is aspect-_preserving_, not normalizing, so this unification happens at **selection**, not at conversion. IMDb posters are excluded, including already rehosted copies and movie-adaptation artwork. Do not buy a credits tier solely to obtain a thumbnail.
+
+| Steam asset (measured 2026-09-09 on app IDs `730`, `1245620`, `222160`) | Pixels | Ratio | Role |
+| --- | --- | --- | --- |
+| `library_600x900.jpg` | 300×450 | 2:3 | **Primary — locked** |
+| `library_600x900_2x.jpg` | 600×900 | 2:3 | Same asset at 2×; optional hi-DPI variant, not the locked source |
+| `header.jpg` | 460×215 | 2.14:1 | Landscape fallback, letterboxed into 2:3 |
+| `capsule_616x353.jpg` | 616×353 | 1.75:1 | Not used for cards |
+| `library_hero.jpg` | 1920×620 | 3.1:1 | Not used for cards |
 
 | Source | What we can obtain | Selection rule |
 | --- | --- | --- |
 | IGDB `cover` | Cover identifier, image ID, dimensions and image URL; portrait variants including `cover_small` (maximum 90 × 128), `cover_big` (maximum 264 × 374), and `_2x` variants | Resolve by the stored numeric game ID. Prefer the matching base-game/localization cover. API use requires credentials and the commercial partnership described above. [Cover fields](https://api-docs.igdb.com/#cover) · [Image variants](https://api-docs.igdb.com/#images) |
 | MobyGames covers | Front-cover scans, with platform/release context; screenshots and promotional images are also available | Bronze lists cover images; Silver adds original full-size images. Choose a front cover, not a back cover, disc, compilation or unrelated edition. Keep the required MobyGames attribution. [Tier capabilities](https://www.mobygames.com/api/subscribe/) |
-| Steam / official publisher press kit | Store header/capsule or explicitly supplied game artwork | Use the exact known app/page and its returned asset URL. Steam has portrait library assets as well, but this does not prove a particular file URL exists. Prefer title artwork to an arbitrary screenshot. [Steam asset formats](https://partner.steamgames.com/doc/store/assets?l=english) |
+| **Steam library portrait** (primary) / official publisher press kit | `library_600x900.jpg` (300×450, 2:3) by app ID; `header.jpg` (460×215) as a letterboxed landscape fallback; explicitly supplied press-kit artwork | Use the exact known app ID. **The library path is convention-derived — `appdetails` does not return it** — and the `header_image` the API _does_ return now carries a content-hash path segment, so treat the hash-less library URL as an observed candidate that may migrate: fetch-verify at ingest, record `image_observed_at`, and never assume it exists. Prefer title artwork to an arbitrary screenshot. [Steam asset formats](https://partner.steamgames.com/doc/store/assets?l=english) |
 | The Game Awards exact-game tile | Game artwork on a verified award entry, when the image really depicts that game | Optional candidate under the source/media policy. Exclude performer portraits, event branding and adaptation stills; route through the same `game-thumbnail/` pipeline. [Adapter rules](/guides/open-work/video-game-waterfall-game-awards#artwork-and-publication) |
 | Wikidata-linked Commons file | An image or logo when present, with a separately inspectable file license | Optional fallback only; an item may have a logo rather than cover art. Wikidata's CC0 metadata does not establish image reuse rights. |
 
-For an IGDB-enabled game snapshot, request the cover in that exact lookup, for example the body `fields name,cover.id,cover.image_id,cover.width,cover.height,cover.url; where id = 119133; limit 1;` on `POST /v4/games`. This is an illustrative request for Elden Ring, not a claimed authenticated API response. Build the documented image variant from the returned `image_id`; never invent it. Use `cover_big_2x` for a sharp small portrait card and preserve its aspect ratio. A landscape header should remain landscape or be contained within the card; do not crop away the title to force a portrait.
+For an IGDB-enabled game snapshot, request the cover in that exact lookup, for example the body `fields name,cover.id,cover.image_id,cover.width,cover.height,cover.url; where id = 119133; limit 1;` on `POST /v4/games`. This is an illustrative request for Elden Ring, not a claimed authenticated API response. Build the documented image variant from the returned `image_id`; never invent it. Every candidate is judged against the locked 2:3 frame. An IGDB `cover_big_2x` (528×748, ≈0.71) is close but not 2:3 and is contained, not cropped; a landscape header is letterboxed inside the frame. Never crop away the title to force a fit, and never serve a card at a different ratio.
 
-**Real example:** Elden Ring's stored Steam app ID is `1245620`. Its [official store page](https://store.steampowered.com/app/1245620/_/) exposes [this header image](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578), observed September 8, 2026. See the [illustrated candidate and properties](/guides/open-work/video-game-waterfall-examples#game-thumbnail-example). An observed public URL is an artwork candidate; production display/rehosting follows the enabled source's applicable rights and media policy.
+**Real example:** Elden Ring's stored Steam app ID is `1245620`. Its [official store page](https://store.steampowered.com/app/1245620/_/) exposes [this header image](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg?t=1787868578), observed September 8, 2026, and its [library portrait](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/library_600x900.jpg) — 300×450, the locked primary candidate — resolved and measured September 9, 2026. See the [illustrated candidate and properties](/guides/open-work/video-game-waterfall-examples#game-thumbnail-example). An observed public URL is an artwork candidate; production display/rehosting follows the enabled source's applicable rights and media policy.
 
 Artwork readiness is a required stage before first publication in the **same finite plan**: at most three ranked candidates and one selected asset per game. Source metadata requests, downloads and retries count toward the existing root network/byte budgets; no gallery enumeration or separate budget. One bounded `media_ingest` job routes an approved candidate through the **same Go file pipeline used for avatars and movie posters**, stores it under **`game-thumbnail/`**, then prepares the shared `film_tv_display` image field for the final game publication gate. It has no discovery capability and cannot launch another waterfall. A missing, rejected or over-budget image leaves first publication pending and hidden. Internal credits/relationships remain available for repair; no public placeholder or IMDb fallback satisfies artwork readiness.
 
