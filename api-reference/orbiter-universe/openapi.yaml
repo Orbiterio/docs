@@ -69,9 +69,9 @@ paths:
       operationId: getEntityProjection
       tags:
         - Projections
-      summary: Get the versioned projection for a company or person
+      summary: Get the versioned projection for a company, person or stage production
       description: |
-        Returns `company_projection.v1` or `person_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. Requires scope `projections:pull`.
+        Returns `company_projection.v1`, `person_projection.v1` or `stage_production_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. Requires scope `projections:pull`.
       security:
         - bearerAuth: []
       parameters:
@@ -90,6 +90,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/CompanyProjectionEnvelope'
                   - $ref: '#/components/schemas/PersonProjectionEnvelope'
+                  - $ref: '#/components/schemas/StageProductionProjectionEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -510,6 +511,529 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /v1/admin/filings/990/orgs:
+    post:
+      operationId: filingsEnqueueOrg
+      tags:
+        - Filings
+      summary: Queue a nonprofit for a 990 filing-set run (management plane)
+      description: |
+        Upserts the org queue row for an EIN. Pass `ein`, or `name` to resolve it through ProPublica Nonprofit Explorer — a single exact-name hit is accepted, anything else is a 400 listing the candidates so the operator picks an EIN explicitly. Re-adding an EIN bumps its count and never narrows its window. Staff only: a WorkOS session with role `admin`, never a consumer API key.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilingsEnqueueOrgRequest'
+      responses:
+        '202':
+          description: Queued (or already queued; `count` says how many times).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilingsEnqueueOrgEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/filings/990/orgs/{ein}:
+    get:
+      operationId: filingsOrgStatus
+      tags:
+        - Filings
+      summary: One nonprofit's queue row, filings, mention census and grant count (management plane)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: ein
+          in: path
+          required: true
+          description: Nine digits, hyphen optional.
+          schema:
+            type: string
+            pattern: ^[0-9]{2}-?[0-9]{7}$
+      responses:
+        '200':
+          description: Status. `meta.attribution` carries the ProPublica attribution their terms ask for.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilingsOrgStatusEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/filings/990/drain:
+    post:
+      operationId: filingsDrain
+      tags:
+        - Filings
+      summary: Run one Stage A pass synchronously (management plane)
+      description: |
+        Sandbox stepping without the scheduler. With `ein` it runs that org now, whatever its tier or backoff (enqueuing it first if needed); otherwise it claims up to `max_rows` from the queue exactly as a scheduler tick would — and, like the tick, does nothing while `ENRICHMENT_FILINGS_990_QUEUE_DRAIN_ENABLED` is false.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilingsDrainRequest'
+      responses:
+        '200':
+          description: One result per org run this pass.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilingsDrainEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The named org's queue row is locked by another worker or dead-lettered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/filings/990/mentions:
+    get:
+      operationId: filingsListMentions
+      tags:
+        - Filings
+      summary: List governance mentions in one resolution state (management plane)
+      description: |
+        The triage read for Stage B: Part VII roster rows by `resolution_state`, newest first, keyset-paged on the row id. `needs_review` is the human queue; `unresolved` is what the sweep will retry; `auto_linked` shows what the ladder decided and how.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - unresolved
+              - auto_linked
+              - needs_review
+              - rejected
+              - not_applicable
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          description: The `meta.next_before` cursor of the previous page.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of mentions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FilingsMentionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/jobs:
+    post:
+      operationId: donorsRequestJob
+      tags:
+        - Donors
+      summary: Request a Donors job (management plane)
+      description: |
+        Upserts a typed job: a `grantor_request` carries `ein` and asks the 990 adapter for that foundation's filings; a `recipient_sweep` carries `subject_entity_id` (a tracked School) and re-gates its unresolved lines; a `filing_replay` carries `filing_id` (a parsed filing with a canonical grantor); a `feed_scan` re-reads the whole parsed-filings feed from the beginning (the tick runs it incrementally on its own). The job key is derived from the subject, so a repeat lands on the same row — a repeat of a completed, parked or failed job returns it to pending with its checkpoint reset. Staff only: a WorkOS session with role `admin`, never a consumer API key.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DonorsRequestJobRequest'
+      responses:
+        '202':
+          description: The durable job (new, or the existing row with `count` bumped).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsJobEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A filing replay was requested while the 990 adapter is disabled, so the filing cannot be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+    get:
+      operationId: donorsListJobs
+      tags:
+        - Donors
+      summary: List jobs in one state (management plane)
+      description: |
+        The triage read: jobs by `state`, newest first, keyset-paged on the row id. `parked` shows what each job is waiting for in `outcome` (`awaiting_filings_enabled`, `not_yet_built`, …); `failed` is the dead letter.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - pending
+              - running
+              - completed
+              - failed
+              - parked
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          description: The `meta.next_before` cursor of the previous page.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of jobs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsJobsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/jobs/{id}:
+    get:
+      operationId: donorsGetJob
+      tags:
+        - Donors
+      summary: One job with its checkpoint, revision and result (management plane)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsJobEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/drain:
+    post:
+      operationId: donorsDrain
+      tags:
+        - Donors
+      summary: Run one drain pass synchronously (management plane)
+      description: |
+        Sandbox stepping without the scheduler. With `job_id` it runs that job now, whatever its tier, backoff or parked state; otherwise it claims up to `max_rows` pending jobs exactly as a scheduler tick would. Like the tick, it does nothing while `ENRICHMENT_DONORS_QUEUE_DRAIN_ENABLED` is false (a named job answers 409 instead).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DonorsDrainRequest'
+      responses:
+        '200':
+          description: One entry per job run this pass.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsDrainEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The drain gate is closed, or the named job is locked by another worker, dead-lettered or already completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/mentions:
+    get:
+      operationId: donorsListMentions
+      tags:
+        - Donors
+      summary: List grant-line mentions in one recipient resolution state (management plane)
+      description: |
+        The recipient-side triage read: source lines by `recipient_resolution_state`, newest first, keyset-paged on the row id, optionally one grantor's. `needs_review` is the human queue (an exact legal name that nominated an allowlisted School, or an alias a reviewer judged ambiguous); `auto_linked` shows what the gate decided and how; `rejected` is a reviewed distinct entity; `unresolved` waits for new evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - unresolved
+              - auto_linked
+              - needs_review
+              - rejected
+              - anonymous
+        - name: donor
+          in: query
+          description: Narrow to one grantor's lines.
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          description: The `meta.next_before` cursor of the previous page.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of mentions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsMentionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/edges:
+    get:
+      operationId: donorsListEdges
+      tags:
+        - Donors
+      summary: List DONOR_TO ledger rows in one graph state (management plane)
+      description: |
+        The DONOR_TO ledger: one row per donor → recipient pair, its recomputed aggregate and revision, and whether the graph holds it. `pending` waits on a chosen `donor_to` fact or a node; `written` carries the edge uuid and the revision it was written at; `blocked` names why no weight can be assigned (`donor_class_unsupported` for a 990 filer's Schedule I, `no_eligible_gifts` after a withdrawal, `below_floor`, `bridge_gate_closed` for a trustee-derived row — real and revisioned, never projected until Q1/Q2 settle — and `mixed_routes_unsettled` for a pair holding both a direct gift and a derived route).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - pending
+              - written
+              - blocked
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: before
+          in: query
+          description: The `meta.next_before` cursor of the previous page.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of ledger rows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DonorsEdgesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/edges/{id}:
+    get:
+      operationId: donorsGetEdge
+      tags:
+        - Donors
+      summary: One DONOR_TO ledger row with every route behind it (management plane)
+      description: |
+        The row plus its evidence: `direct` routes (the donor gave the gift) and `trustee_derived` routes (the donor sat on the foundation that gave it, in a filing period covering the grant), each with the governance refs the derivation depends on. A derived route that stopped holding is kept with `valid: false` and the check that failed — `person_unresolved`, `not_board_seat`, `trustee_former`, `period_not_covered`, `fact_not_chosen`, `canonical_edge_unwritten`, `gift_ineligible`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The row and its evidence.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DonorsEdgeDetail'
+                  error:
+                    type: 'null'
+                  meta:
+                    type:
+                      - object
+                      - 'null'
+                required:
+                  - data
+                  - error
+                  - meta
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/donors/edge-sweep:
+    post:
+      operationId: donorsEdgeSweep
+      tags:
+        - Donors
+      summary: Run one bounded DONOR_TO reconciliation pass (management plane)
+      description: |
+        Draws every pending ledger row the graph does not hold at its current revision, when it may: the donor's `donor_to` fact is CHOSEN for the recipient and both endpoints have nodes. Anything else stays pending. Like the worker's sweep, it does nothing while `ENRICHMENT_DONORS_EDGE_WRITES_ENABLED` is false.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 200
+      responses:
+        '200':
+          description: What the pass did.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    required:
+                      - written
+                      - pending
+                      - skipped
+                    properties:
+                      written:
+                        type: integer
+                      pending:
+                        type: integer
+                        description: No chosen fact yet, or a node missing.
+                      skipped:
+                        type: integer
+                        description: The aggregate moved under the write; the row stays pending.
+                  error:
+                    type: 'null'
+                  meta:
+                    type:
+                      - object
+                      - 'null'
+                required:
+                  - data
+                  - error
+                  - meta
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
   /v1/backfill/graph/seed/locations:
     post:
       operationId: seedGraphLocations
@@ -679,6 +1203,7 @@ paths:
                     - person
                     - film_tv
                     - music
+                    - stage_production
                   description: |
                     Optional scope; omit to wipe every non-reference node. `music` is the one umbrella — it covers all five music entity types (music_group, music_release_group, music_recording, music_work, music_event) plus the music_release / music_place support rows and the artist / label satellite profiles, because they are one pipeline.
                 target:
@@ -823,6 +1348,130 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/entities/reviews/{id}/merge:
+    post:
+      operationId: mergeReviewItem
+      tags:
+        - Admin
+      summary: Merge the pair a review filing names (management plane)
+      description: |
+        A human's half of the merge project: confirms a pending filing and runs the same merge transaction a strong-key clash runs — repoint every reference through the merge inventory, tombstone the loser with `merged_into`, ledger the manifest for undo, delete the loser's graph node — then announces `entity.merged` so sibling features re-derive what moved (a stage production re-lands its profile and redraws its credits under the survivor). The survivor defaults to the filing's proposed survivor; a `survivor_id` must be one of the two parties. A filing already decided answers 409. **Management plane, staff only** — an authenticated admin USER, never a consumer key.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                survivor_id:
+                  type:
+                    - string
+                    - 'null'
+                  format: uuid
+                  description: Overrides the proposed survivor; must be a party to the filing.
+                note:
+                  type:
+                    - string
+                    - 'null'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: The merge as ledgered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewMergeEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/entities/reviews/{id}/reject:
+    post:
+      operationId: rejectReviewItem
+      tags:
+        - Admin
+      summary: Close a review filing as rejected (management plane)
+      description: |
+        The pair stays two entities and the filing is closed with the reviewer's note. **Management plane, staff only.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type:
+                    - string
+                    - 'null'
+                  maxLength: 2000
+      responses:
+        '200':
+          description: The filing as closed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      review_item_id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        enum:
+                          - rejected
+                    required:
+                      - review_item_id
+                      - status
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/Internal'
   /v1/admin/clients:
@@ -1476,6 +2125,69 @@ components:
         - acquisition_price
         - operating_status
         - ipo_status
+    ProjectionCompanyInvestment:
+      type: object
+      description: |
+        One round the firm invested in. Same rules as ProjectionPersonInvestment without the firm columns: funding_round_id and company_id are null until Universe holds the round or company, external_deal_id always rides, money_raised is the absolute amount shape of companies.funding_rounds, company_logo is Universe's re-hosted logo when held, else the source's.
+      properties:
+        funding_round_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        external_deal_id:
+          type:
+            - string
+            - 'null'
+        funding_type:
+          type:
+            - string
+            - 'null'
+        money_raised:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectionMoney'
+            - type: 'null'
+        announced_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        description:
+          type:
+            - string
+            - 'null'
+        is_lead_investor:
+          type: boolean
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        company_name:
+          type: string
+        company_logo:
+          type:
+            - string
+            - 'null'
+        acquired:
+          type: boolean
+        ipo_status:
+          type:
+            - string
+            - 'null'
+      required:
+        - funding_round_id
+        - external_deal_id
+        - funding_type
+        - money_raised
+        - announced_date
+        - description
+        - is_lead_investor
+        - company_id
+        - company_name
+        - company_logo
+        - acquired
+        - ipo_status
     ProjectionInvestorProfile:
       type: object
       description: |
@@ -1516,6 +2228,17 @@ components:
           type:
             - string
             - 'null'
+        portfolio_investments:
+          type: array
+          description: Rounds the firm invested in, newest first, at most 50. Exits are excluded.
+          items:
+            $ref: '#/components/schemas/ProjectionCompanyInvestment'
+        portfolio_exits:
+          type: array
+          description: |
+            DERIVED, not stored: rounds whose company was acquired or went public. Newest first, at most 50.
+          items:
+            $ref: '#/components/schemas/ProjectionCompanyInvestment'
       required:
         - exits
         - investment_range
@@ -1525,6 +2248,8 @@ components:
         - llm_investor_summary
         - active_in_sector
         - derived_thesis_summary
+        - portfolio_investments
+        - portfolio_exits
     ProjectionBanner:
       type: object
       properties:
@@ -2315,6 +3040,85 @@ components:
         - skills
         - languages
         - interests
+    ProjectionPersonInvestment:
+      type: object
+      description: |
+        One round the person took part in. funding_round_id and company_id are null until Universe holds the round or company; external_deal_id is always present so a consumer can heal the reference later. firm_* is set on institutional rows only. money_raised is the same absolute amount shape as companies.funding_rounds, not millions. company_logo and firm_logo are Universe's re-hosted logo when it holds one, else the source's own logo url.
+      properties:
+        funding_round_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        external_deal_id:
+          type:
+            - string
+            - 'null'
+        funding_type:
+          type:
+            - string
+            - 'null'
+        money_raised:
+          oneOf:
+            - $ref: '#/components/schemas/ProjectionMoney'
+            - type: 'null'
+        announced_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        description:
+          type:
+            - string
+            - 'null'
+        is_lead_investor:
+          type: boolean
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        company_name:
+          type: string
+        company_logo:
+          type:
+            - string
+            - 'null'
+        firm_company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        firm_name:
+          type:
+            - string
+            - 'null'
+        firm_logo:
+          type:
+            - string
+            - 'null'
+        acquired:
+          type: boolean
+        ipo_status:
+          type:
+            - string
+            - 'null'
+      required:
+        - funding_round_id
+        - external_deal_id
+        - funding_type
+        - money_raised
+        - announced_date
+        - description
+        - is_lead_investor
+        - company_id
+        - company_name
+        - company_logo
+        - firm_company_id
+        - firm_name
+        - firm_logo
+        - acquired
+        - ipo_status
     ProjectionPersonInvestorProfile:
       type: object
       description: |
@@ -2364,6 +3168,22 @@ components:
           type:
             - string
             - 'null'
+        angel_investments:
+          type: array
+          description: Rounds the person backed with their own money, newest first, at most 50. Exits are excluded.
+          items:
+            $ref: '#/components/schemas/ProjectionPersonInvestment'
+        institutional_investments:
+          type: array
+          description: Rounds where the person was the credited partner at the investing firm, newest first, at most 50. Exits are excluded.
+          items:
+            $ref: '#/components/schemas/ProjectionPersonInvestment'
+        exits:
+          type: array
+          description: |
+            DERIVED, not stored: a round from either bucket whose company was acquired or went public. Newest first, at most 50.
+          items:
+            $ref: '#/components/schemas/ProjectionPersonInvestment'
       required:
         - investor_type
         - llm_investor_summary
@@ -2376,6 +3196,9 @@ components:
         - investment_range
         - investment_sweet_spot
         - derived_thesis_summary
+        - angel_investments
+        - institutional_investments
+        - exits
     ProjectionAvatar:
       type: object
       properties:
@@ -2811,6 +3634,508 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/PersonProjection'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    ProjectionStageProduction:
+      type: object
+      description: The distilled profile; dates are ISO days.
+      properties:
+        title:
+          type:
+            - string
+            - 'null'
+        market:
+          type:
+            - string
+            - 'null'
+          description: '`broadway` or `west_end`.'
+        form:
+          type:
+            - string
+            - 'null'
+        production_kind:
+          type:
+            - string
+            - 'null'
+        season_label:
+          type:
+            - string
+            - 'null'
+        season_scheme:
+          type:
+            - string
+            - 'null'
+        first_preview_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        opening_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        press_night_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        announced_closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        booking_until_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        run_status:
+          type:
+            - string
+            - 'null'
+        run_status_as_of:
+          type:
+            - string
+            - 'null'
+          format: date
+        official_website_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+        poster_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: The re-hosted poster when one exists, else the source's.
+        description:
+          type:
+            - string
+            - 'null'
+        source_names:
+          type: array
+          items:
+            type: string
+        source_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        visibility:
+          type: boolean
+          description: |
+            Derived, never authored: true when the lane extracted the production, a strong source key names it, and a title and market are known. False is an un-enriched shell to hide from search.
+        tombstone:
+          type: boolean
+      required:
+        - title
+        - market
+        - form
+        - production_kind
+        - season_label
+        - season_scheme
+        - first_preview_date
+        - opening_date
+        - press_night_date
+        - announced_closing_date
+        - closing_date
+        - booking_until_date
+        - run_status
+        - run_status_as_of
+        - official_website_url
+        - poster_url
+        - description
+        - source_names
+        - source_urls
+        - visibility
+        - tombstone
+    ProjectionStageEvidence:
+      type: object
+      description: One accepted roster mention behind a credit.
+      properties:
+        mention_id:
+          type: string
+          format: uuid
+        literal_name:
+          type: string
+        literal_role:
+          type: string
+        source:
+          type: string
+          description: '`pilot_submission`, `playbill`, `ibdb`…'
+        quote:
+          type: string
+        identity_revision:
+          type: integer
+        accepted_at:
+          type: string
+          format: date-time
+      required:
+        - mention_id
+        - literal_name
+        - literal_role
+        - source
+        - quote
+        - identity_revision
+        - accepted_at
+    ProjectionStageCredit:
+      type: object
+      description: One producer/production pair as the credit ledger holds it.
+      properties:
+        credit_id:
+          type: string
+          format: uuid
+        universe_producer_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the producing person or company.
+        producer_type:
+          type: string
+          enum:
+            - person
+            - company
+        producer_name:
+          type:
+            - string
+            - 'null'
+        billing_tier:
+          type: string
+          enum:
+            - lead_producer
+            - producer
+            - co_producer
+            - associate_producer
+            - executive_producer
+            - in_association
+            - unclassified
+        source_role:
+          type: string
+          description: The billing heading as the source printed it.
+        description:
+          type: string
+        identity_confidence:
+          type: number
+        active:
+          type: boolean
+          description: False is a withdrawn credit; retire what you hold.
+        version:
+          type: integer
+          description: The ledger's desired version; matches the edge's `stage_credit_version` once written.
+        graph_status:
+          type: string
+          enum:
+            - written
+            - pending
+            - retracted
+        updated_at:
+          type: string
+          format: date-time
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectionStageEvidence'
+      required:
+        - credit_id
+        - universe_producer_uuid
+        - producer_type
+        - producer_name
+        - billing_tier
+        - source_role
+        - description
+        - identity_confidence
+        - active
+        - version
+        - graph_status
+        - updated_at
+        - evidence
+    ProjectionStageCoverage:
+      type: object
+      description: What a consumer must show as incomplete.
+      properties:
+        credit_coverage:
+          type: string
+          description: '`full`, `partial` or `unknown`.'
+        credit_finality:
+          type: string
+          description: '`provisional` until the roster is final.'
+        input_revision:
+          type:
+            - string
+            - 'null'
+        extraction_revision:
+          type:
+            - string
+            - 'null'
+        accepted_mentions:
+          type: integer
+        needs_review_mentions:
+          type: integer
+        unresolved_mentions:
+          type: integer
+        rejected_mentions:
+          type: integer
+        graph_ready:
+          type: boolean
+          description: True only when every active credit's edge is written at its desired version.
+        pending_credits:
+          type: integer
+      required:
+        - credit_coverage
+        - credit_finality
+        - input_revision
+        - extraction_revision
+        - accepted_mentions
+        - needs_review_mentions
+        - unresolved_mentions
+        - rejected_mentions
+        - graph_ready
+        - pending_credits
+    ProjectionStageDerivativeWork:
+      type: object
+      description: One work based on the production, per Wikidata P144 / P4969.
+      properties:
+        adaptation_id:
+          type: string
+          format: uuid
+        universe_derivative_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the derivative (a film today).
+        derivative_type:
+          type: string
+          enum:
+            - film_tv
+            - stage_production
+        derivative_name:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        derivation_type:
+          type: string
+          enum:
+            - adaptation
+            - remake
+            - sequel
+            - retelling
+            - translation
+        fidelity:
+          type:
+            - string
+            - 'null'
+          enum:
+            - faithful
+            - loose
+            - substantially_reworked
+            - null
+        description:
+          type: string
+          description: The edge sentence; empty until the edge is drawn.
+        source_property:
+          type: string
+          description: The authority the fact was read from, `wikidata:P144` today.
+        derivative_qid:
+          type: string
+        work_qid:
+          type: string
+          description: The Wikidata work item the production was matched to.
+        source_year:
+          type:
+            - integer
+            - 'null'
+        derivative_year:
+          type:
+            - integer
+            - 'null'
+        graph_status:
+          type: string
+          enum:
+            - pending
+            - written
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - adaptation_id
+        - universe_derivative_uuid
+        - derivative_type
+        - derivative_name
+        - imdb_id
+        - derivation_type
+        - fidelity
+        - description
+        - source_property
+        - derivative_qid
+        - work_qid
+        - source_year
+        - derivative_year
+        - graph_status
+        - updated_at
+    ProjectionStageSourceWork:
+      type: object
+      description: One work the production is based on.
+      properties:
+        adaptation_id:
+          type: string
+          format: uuid
+        universe_source_uuid:
+          type: string
+          format: uuid
+          description: Canonical id of the source work (a film today).
+        source_type:
+          type: string
+          enum:
+            - film_tv
+            - stage_production
+        source_name:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        derivation_type:
+          type: string
+          enum:
+            - adaptation
+            - remake
+            - sequel
+            - retelling
+            - translation
+        fidelity:
+          type:
+            - string
+            - 'null'
+          enum:
+            - faithful
+            - loose
+            - substantially_reworked
+            - null
+        description:
+          type: string
+        source_property:
+          type: string
+        derivative_qid:
+          type: string
+          description: The production's Wikidata work item.
+        work_qid:
+          type: string
+          description: The source's Wikidata item.
+        source_year:
+          type:
+            - integer
+            - 'null'
+        derivative_year:
+          type:
+            - integer
+            - 'null'
+        graph_status:
+          type: string
+          enum:
+            - pending
+            - written
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - adaptation_id
+        - universe_source_uuid
+        - source_type
+        - source_name
+        - imdb_id
+        - derivation_type
+        - fidelity
+        - description
+        - source_property
+        - derivative_qid
+        - work_qid
+        - source_year
+        - derivative_year
+        - graph_status
+        - updated_at
+    StageProductionProjection:
+      type: object
+      description: |
+        `stage_production_projection.v1` — a Broadway / West End production and its producing credits, served from the credit and evidence ledgers. Every credit the ledger holds is listed, withdrawn ones with `active: false` so a consumer can retire what it stored; a credit's `graph_status` says whether its `PRODUCED` edge is drawn. The `coverage` block is the honesty contract: `credit_coverage` and `credit_finality` name what the roster is, and `graph_ready` is false while any active credit is short of the graph. Breaking changes require a new schema_version, never an edit.
+      properties:
+        schema_version:
+          type: string
+          enum:
+            - stage_production_projection.v1
+        run_id:
+          type: string
+          description: Deterministic per (production, source state).
+        universe_production_uuid:
+          type: string
+          format: uuid
+          description: Canonical id; also the graph node id.
+        universe_node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source_updated_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        projection_generated_at:
+          type: string
+          format: date-time
+        production:
+          $ref: '#/components/schemas/ProjectionStageProduction'
+        credits:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectionStageCredit'
+        coverage:
+          $ref: '#/components/schemas/ProjectionStageCoverage'
+        derivative_works:
+          type: array
+          description: |
+            The films and shows based on this production as Wikidata ties them (stage D52), drawn or not; additive to v1. `graph_status` says whether the `BASED_ON` edge (derivative → this production) is in the graph.
+          items:
+            $ref: '#/components/schemas/ProjectionStageDerivativeWork'
+        based_on:
+          type: array
+          description: |
+            The works this production is based on, per Wikidata P144 on its work item (a film today, D53); additive to v1. `graph_status` says whether the `BASED_ON` edge (this production → source) is in the graph.
+          items:
+            $ref: '#/components/schemas/ProjectionStageSourceWork'
+      required:
+        - schema_version
+        - run_id
+        - universe_production_uuid
+        - universe_node_uuid
+        - source_updated_at
+        - projection_generated_at
+        - production
+        - credits
+        - coverage
+        - derivative_works
+        - based_on
+    StageProductionProjectionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageProductionProjection'
         error:
           type: 'null'
         meta:
@@ -3920,6 +5245,1076 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    FilingsEnqueueOrgRequest:
+      type: object
+      additionalProperties: false
+      description: Exactly one of `ein` or `name`.
+      properties:
+        ein:
+          type: string
+          minLength: 9
+          maxLength: 11
+          example: 13-1684331
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+          example: Ford Foundation
+        priority_tier:
+          type: integer
+          minimum: 0
+          maximum: 4
+        years_window:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 4
+      oneOf:
+        - required:
+            - ein
+        - required:
+            - name
+    FilingsEnqueueOrgEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+            - queue_id
+            - ein
+            - count
+          properties:
+            queue_id:
+              type: string
+              format: uuid
+            ein:
+              type: string
+              example: '131684331'
+            count:
+              type: integer
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            attribution:
+              type: string
+      required:
+        - data
+        - error
+        - meta
+    FilingsOrgStatusEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          required:
+            - ein
+            - queue
+            - filings
+            - mentions_by_state
+            - grants
+            - edges
+          properties:
+            ein:
+              type: string
+            queue:
+              type:
+                - object
+                - 'null'
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                org_entity_id:
+                  type:
+                    - string
+                    - 'null'
+                  format: uuid
+                priority_tier:
+                  type: integer
+                years_window:
+                  type: integer
+                count:
+                  type: integer
+                attempts:
+                  type: integer
+                last_error:
+                  type:
+                    - string
+                    - 'null'
+                locked_at:
+                  type:
+                    - string
+                    - 'null'
+                  format: date-time
+                next_attempt_at:
+                  type:
+                    - string
+                    - 'null'
+                  format: date-time
+            filings:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  object_id:
+                    type: string
+                  return_type:
+                    type: string
+                    enum:
+                      - '990'
+                      - 990EZ
+                      - 990PF
+                  tax_period:
+                    type: string
+                    example: '202412'
+                  return_version:
+                    type:
+                      - string
+                      - 'null'
+                  filer_name:
+                    type:
+                      - string
+                      - 'null'
+                  website_url:
+                    type:
+                      - string
+                      - 'null'
+                  parse_state:
+                    type: string
+                    enum:
+                      - fetched
+                      - parsed
+                      - failed
+                  parse_error:
+                    type:
+                      - string
+                      - 'null'
+                  governance_count:
+                    type: integer
+                  grant_count:
+                    type: integer
+                  xml_storage_key:
+                    type: string
+                  xml_sha256:
+                    type: string
+                  payload_id:
+                    type:
+                      - string
+                      - 'null'
+                    format: uuid
+            mentions_by_state:
+              type: object
+              additionalProperties:
+                type: integer
+            grants:
+              type: integer
+            edges:
+              type: object
+              description: The governance edge ledger for the org, split by whether the graph holds the edge.
+              required:
+                - pending
+                - written
+              properties:
+                pending:
+                  type: integer
+                written:
+                  type: integer
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            attribution:
+              type: string
+      required:
+        - data
+        - error
+        - meta
+    FilingsDrainRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        ein:
+          type: string
+          minLength: 9
+          maxLength: 11
+        max_rows:
+          type: integer
+          minimum: 1
+          maximum: 50
+    FilingsResolutionCounts:
+      type: object
+      description: What the Stage B person ladder did in this run.
+      required:
+        - considered
+        - auto_linked
+        - needs_review
+        - deferred
+        - cap_deferred
+        - unresolved
+        - persons_created
+        - searches
+        - adjudications
+      properties:
+        considered:
+          type: integer
+          description: Unresolved person mentions the ladder was offered.
+        auto_linked:
+          type: integer
+        needs_review:
+          type: integer
+          description: Filed for a human (reason ambiguous_soft_match).
+        deferred:
+          type: integer
+          description: A step whose provider is not wired yet (bake-off pending); the sweep retries.
+        cap_deferred:
+          type: integer
+          description: Search skipped because ENRICHMENT_FILINGS_990_MAX_NEW_PERSONS_PER_RUN was reached.
+        unresolved:
+          type: integer
+        persons_created:
+          type: integer
+          description: Leaves minted on a LinkedIn key (tier-4 queue row, no dispatch).
+        searches:
+          type: integer
+        adjudications:
+          type: integer
+    FilingsGovernanceCounts:
+      type: object
+      description: What Stage C did in this run. Edges are written only while ENRICHMENT_FILINGS_990_EDGE_WRITES_ENABLED is true.
+      required:
+        - persons_claimed
+        - ledger_rows
+        - edges_written
+        - edges_pending
+      properties:
+        persons_claimed:
+          type: integer
+          description: People whose board_member_of / officer_of relation facts were (re)claimed.
+        ledger_rows:
+          type: integer
+          description: filing_990_governance_edge rows upserted with a recomputed tenure span.
+        edges_written:
+          type: integer
+        edges_pending:
+          type: integer
+          description: Ledger rows the sweep could not draw yet (fact not elected, node missing).
+    FilingsOrgRun:
+      type: object
+      required:
+        - ein
+        - filings_landed
+        - filings_skipped
+        - filings_missing
+        - filings_failed
+        - mentions
+        - grants
+        - fetches_from_irs
+        - resolution
+        - governance
+      properties:
+        ein:
+          type: string
+        run_id:
+          type: string
+          format: uuid
+          description: The attempt; its step receipts live in enrichment_stages once the org entity is known.
+        outcome:
+          type: string
+          description: '`completed`, a park code (`ein_not_found`, `no_filings`), or `failed`.'
+        failed_step:
+          type: string
+          description: The step that failed, when it did.
+        failure_code:
+          type: string
+          enum:
+            - provider_retryable
+            - provider_terminal
+            - internal_retryable
+            - internal_terminal
+            - internal_panic
+            - input_invalid
+            - budget_exhausted
+          description: The classified cause, when the run failed.
+        org_entity_id:
+          type: string
+          format: uuid
+        org_method:
+          type: string
+          enum:
+            - ein
+            - domain_corroboration
+            - ein_preseeded
+            - created
+          description: How the nonprofit's company entity was found (Q6 domain corroboration) or that it was created.
+        filings_landed:
+          type: integer
+        filings_skipped:
+          type: integer
+          description: Already held by OBJECT_ID.
+        filings_missing:
+          type: integer
+          description: Listed in the IRS index but in no batch zip.
+        filings_failed:
+          type: integer
+        mentions:
+          type: integer
+        grants:
+          type: integer
+        fetches_from_irs:
+          type: integer
+        resolution:
+          $ref: '#/components/schemas/FilingsResolutionCounts'
+        governance:
+          $ref: '#/components/schemas/FilingsGovernanceCounts'
+    FilingsDrainEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FilingsOrgRun'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    FilingsMention:
+      type: object
+      required:
+        - id
+        - filing_id
+        - ein
+        - tax_period
+        - name_as_filed
+        - roles
+        - is_former
+        - resolution_state
+      properties:
+        id:
+          type: string
+          format: uuid
+        filing_id:
+          type: string
+          format: uuid
+        ein:
+          type: string
+        org_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        tax_period:
+          type: string
+          example: '202512'
+        name_as_filed:
+          type: string
+        title_as_filed:
+          type:
+            - string
+            - 'null'
+        roles:
+          type: array
+          items:
+            type: string
+            enum:
+              - trustee
+              - director
+              - officer
+              - key_employee
+        is_former:
+          type: boolean
+        resolution_state:
+          type: string
+          enum:
+            - unresolved
+            - auto_linked
+            - needs_review
+            - rejected
+            - not_applicable
+        person_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        resolution_method:
+          type:
+            - string
+            - 'null'
+          enum:
+            - prior_filing
+            - affiliation
+            - linkedin_strong
+            - adjudicated
+            - null
+        resolution_confidence:
+          type:
+            - number
+            - 'null'
+    FilingsMentionsEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FilingsMention'
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            state:
+              type: string
+            limit:
+              type: integer
+            next_before:
+              type: string
+              format: uuid
+              description: Present when the page was full.
+      required:
+        - data
+        - error
+        - meta
+    DonorsJob:
+      type: object
+      required:
+        - id
+        - kind
+        - key
+        - state
+        - priority_tier
+        - count
+        - attempts
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - grantor_request
+            - recipient_sweep
+            - filing_replay
+            - feed_scan
+        key:
+          type: string
+          example: grantor:131684331
+        state:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+            - parked
+        outcome:
+          type:
+            - string
+            - 'null'
+          description: What the last run answered — `completed`, `partial` (yielded at the per-run bound, resumes next tick), `requested`, `awaiting_filings_enabled`, `filing_not_parsed`, `superseded`, `no_matching_grants_in_loaded_corpus`, ….
+        subject_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        ein:
+          type:
+            - string
+            - 'null'
+        filing_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source_object_id:
+          type:
+            - string
+            - 'null'
+          description: The IRS object id a filing replay walks.
+        input_revision:
+          type:
+            - string
+            - 'null'
+          description: <xml_sha256>@p<parser>@c<consumer>
+        cursor:
+          type:
+            - object
+            - 'null'
+          description: The resumable checkpoint.
+        high_water_mark:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        priority_tier:
+          type: integer
+        count:
+          type: integer
+        attempts:
+          type: integer
+        last_error:
+          type:
+            - string
+            - 'null'
+        locked_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        next_attempt_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        result:
+          type:
+            - object
+            - 'null'
+          description: The last run's counts.
+        source_function:
+          type:
+            - string
+            - 'null'
+        source_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source_entity_type:
+          type:
+            - string
+            - 'null'
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DonorsJobsEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DonorsJob'
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            state:
+              type: string
+            limit:
+              type: integer
+            next_before:
+              type: string
+              format: uuid
+              description: Present when the page was full.
+      required:
+        - data
+        - error
+        - meta
+    DonorsRequestJobRequest:
+      type: object
+      additionalProperties: false
+      description: The subject is typed by `kind`.
+      required:
+        - kind
+      properties:
+        kind:
+          type: string
+          enum:
+            - grantor_request
+            - recipient_sweep
+            - filing_replay
+            - feed_scan
+        ein:
+          type: string
+          minLength: 9
+          maxLength: 11
+          example: 13-1684331
+        subject_entity_id:
+          type: string
+          format: uuid
+        filing_id:
+          type: string
+          format: uuid
+        priority_tier:
+          type: integer
+          minimum: 0
+          maximum: 4
+      oneOf:
+        - properties:
+            kind:
+              const: grantor_request
+          required:
+            - kind
+            - ein
+        - properties:
+            kind:
+              const: recipient_sweep
+          required:
+            - kind
+            - subject_entity_id
+        - properties:
+            kind:
+              const: filing_replay
+          required:
+            - kind
+            - filing_id
+        - properties:
+            kind:
+              const: feed_scan
+          required:
+            - kind
+    DonorsJobEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/DonorsJob'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    DonorsDrainRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        max_rows:
+          type: integer
+          minimum: 1
+          maximum: 50
+    DonorsJobResult:
+      type: object
+      required:
+        - outcome
+      properties:
+        outcome:
+          type: string
+        filings_scanned:
+          type: integer
+        jobs_created:
+          type: integer
+          description: Replays the feed scan created.
+        grants_scanned:
+          type: integer
+        inserted:
+          type: integer
+          description: New mention rows.
+        reused:
+          type: integer
+          description: Mentions this revision had already written.
+        resolved:
+          type: integer
+          description: Recipients auto-linked (EIN or reviewed alias).
+        gifts:
+          type: integer
+        edges:
+          type: integer
+          description: DONOR_TO edges the run's own projection wrote (gate open).
+        blocked:
+          type: object
+          description: Lines that produced no gift, by reason — `unresolved`, `needs_review`, `rejected`, `out_of_scope` (resolved to an entity outside the allowlist).
+          additionalProperties:
+            type: integer
+    DonorsJobRun:
+      type: object
+      required:
+        - job
+        - result
+        - error
+      properties:
+        job:
+          $ref: '#/components/schemas/DonorsJob'
+        result:
+          $ref: '#/components/schemas/DonorsJobResult'
+        error:
+          type:
+            - string
+            - 'null'
+    DonorsDrainEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DonorsJobRun'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    DonorsMention:
+      type: object
+      required:
+        - id
+        - source_key
+        - source_object_id
+        - input_revision
+        - recipient_resolution_state
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_key:
+          type: string
+          example: irs_990:202513219349106006:2557:<sha>@p1@c1
+        source_object_id:
+          type: string
+          description: The IRS object id.
+        source_ordinal:
+          type:
+            - integer
+            - 'null'
+        input_revision:
+          type: string
+        tax_period:
+          type:
+            - string
+            - 'null'
+          example: '202412'
+        donor_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The filing's canonical grantor.
+        recipient_name_as_filed:
+          type:
+            - string
+            - 'null'
+        recipient_ein:
+          type:
+            - string
+            - 'null'
+        recipient_city:
+          type:
+            - string
+            - 'null'
+        recipient_region:
+          type:
+            - string
+            - 'null'
+        recipient_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        recipient_resolution_state:
+          type: string
+          enum:
+            - unresolved
+            - auto_linked
+            - needs_review
+            - rejected
+            - anonymous
+        recipient_resolution_method:
+          type:
+            - string
+            - 'null'
+          enum:
+            - ein_strong
+            - reviewed_alias
+            - exact_legal_name
+            - adjudicated
+            - null
+        recipient_confidence:
+          type:
+            - number
+            - 'null'
+        cash_amount_usd:
+          type:
+            - integer
+            - 'null'
+          description: NULL is unknown; 0 is a stated zero.
+        noncash_amount_usd:
+          type:
+            - integer
+            - 'null'
+        purpose:
+          type:
+            - string
+            - 'null'
+        evidence:
+          type:
+            - object
+            - 'null'
+    DonorsMentionsEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DonorsMention'
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            state:
+              type: string
+            limit:
+              type: integer
+            next_before:
+              type: string
+              format: uuid
+              description: Present when the page was full.
+      required:
+        - data
+        - error
+        - meta
+    DonorsEdge:
+      type: object
+      required:
+        - id
+        - donor_entity_id
+        - recipient_entity_id
+        - donor_type
+        - weight
+        - gift_count
+        - revision
+        - graph_state
+      properties:
+        id:
+          type: string
+          format: uuid
+        donor_entity_id:
+          type: string
+          format: uuid
+        recipient_entity_id:
+          type: string
+          format: uuid
+        donor_type:
+          type: string
+          enum:
+            - foundation
+            - company
+            - person
+            - trustee_derived
+            - unsupported
+        weight:
+          type: integer
+          description: 0 while blocked.
+        gift_count:
+          type: integer
+        total_usd:
+          type:
+            - integer
+            - 'null'
+          description: Stated components only; null when none is known.
+        largest_gift_usd:
+          type:
+            - integer
+            - 'null'
+        first_year:
+          type:
+            - integer
+            - 'null'
+        last_year:
+          type:
+            - integer
+            - 'null'
+        purposes:
+          type: array
+          items:
+            type: string
+          description: The representative gift's stated purpose.
+        gift_types:
+          type: array
+          items:
+            type: string
+        mention_ref:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The representative mention (largest, then oldest gift).
+        source_urls:
+          type: array
+          items:
+            type: string
+        confidence:
+          type:
+            - number
+            - 'null'
+          description: The weakest recipient resolution among the pair's gifts.
+        fact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The CHOSEN donor_to fact that licensed the edge.
+        revision:
+          type: integer
+        written_revision:
+          type:
+            - integer
+            - 'null'
+        graph_edge_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        graph_written_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        graph_state:
+          type: string
+          enum:
+            - pending
+            - written
+            - blocked
+        block_reason:
+          type:
+            - string
+            - 'null'
+          enum:
+            - donor_class_unsupported
+            - no_eligible_gifts
+            - below_floor
+            - bridge_gate_closed
+            - mixed_routes_unsettled
+            - null
+        updated_at:
+          type: string
+          format: date-time
+    DonorsEdgesEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DonorsEdge'
+        error:
+          type: 'null'
+        meta:
+          type: object
+          properties:
+            state:
+              type: string
+            limit:
+              type: integer
+            next_before:
+              type: string
+              format: uuid
+              description: Present when the page was full.
+      required:
+        - data
+        - error
+        - meta
+    DonorsEdgeEvidence:
+      type: object
+      required:
+        - id
+        - gift_id
+        - route
+        - valid
+      properties:
+        id:
+          type: string
+          format: uuid
+        gift_id:
+          type: string
+          format: uuid
+        route:
+          type: string
+          enum:
+            - direct
+            - trustee_derived
+        via_foundation_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        governance_mention_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        governance_edge_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        governance_fact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        governance_graph_edge_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        grant_period_begin:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        grant_period_end:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        valid:
+          type: boolean
+        invalidated_reason:
+          type:
+            - string
+            - 'null'
+          enum:
+            - person_unresolved
+            - not_board_seat
+            - trustee_former
+            - period_not_covered
+            - fact_not_chosen
+            - canonical_edge_unwritten
+            - gift_ineligible
+            - null
+    DonorsEdgeDetail:
+      allOf:
+        - $ref: '#/components/schemas/DonorsEdge'
+        - type: object
+          required:
+            - evidence
+          properties:
+            evidence:
+              type: array
+              items:
+                $ref: '#/components/schemas/DonorsEdgeEvidence'
     SeedFailure:
       type: object
       properties:
@@ -4099,6 +6494,58 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/Instance'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    ReviewMergeEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            merge_id:
+              type: string
+              format: uuid
+            survivor_id:
+              type: string
+              format: uuid
+            loser_id:
+              type: string
+              format: uuid
+            review_item_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum:
+                - applied
+            moved:
+              type: object
+              description: Rows repointed to the survivor, by table.
+              additionalProperties:
+                type: integer
+            dropped:
+              type: object
+              description: Rows the survivor already held, by table.
+              additionalProperties:
+                type: integer
+            created_at:
+              type: string
+              format: date-time
+          required:
+            - merge_id
+            - survivor_id
+            - loser_id
+            - review_item_id
+            - status
+            - moved
+            - dropped
+            - created_at
         error:
           type: 'null'
         meta:
@@ -4360,6 +6807,12 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     NotFound:
       description: The resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: The request conflicts with the resource's current state.
       content:
         application/json:
           schema:
