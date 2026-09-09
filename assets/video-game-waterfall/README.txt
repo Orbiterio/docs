@@ -1,4 +1,5 @@
 Design fixtures only. No production writes.
+tagline-qa.json records live OpenRouter tagline QA on 2026-09-09: supplied hand-drafted descriptions, exact requests, accepted outputs and stage telemetry. The production description/tagline stages remain pending. These receipts are not node properties or runtime configuration.
 Graph simulation contains proposed system output using real selected source records.
 source-evidence.json retains statement IDs, revisions, qualifiers and source references.
 Internal UUIDs, fact-election status, graph timestamps and descriptions are simulated.
