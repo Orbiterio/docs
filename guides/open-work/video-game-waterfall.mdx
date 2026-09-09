@@ -736,7 +736,7 @@ Preserve candidate `source`, `source_game_id`, `source_page_url`, `source_image_
 | Order | Property | Source | Rule |
 | :-: | --- | --- | --- |
 | 1 | `description` | Generated from elected facts | One neutral sentence, ≤127 characters, following the music `create-node-description` (#13112) pattern: name, first release year, genre, developer, publisher, series or predecessor. **Store copy is never the description.** Steam `short_description` is retained as `store_description` with `store_description_rights: publisher_marketing_copy` — evidence only, never embedded. Elden Ring's store copy is `THE CRITICALLY ACCLAIMED FANTASY ACTION RPG. Rise, Tarnished…`; embedding that retrieves on hype, not on what the game is. |
-| 2 | `tagline` | `z-ai/glm-5.3-flash` over the description | `reasoning.effort: low` — a bounded level; never `enabled: true` (unbounded thinking blows the budget) or `enabled: false` (400, reasoning is mandatory for this model). `provider.sort: throughput`; `moonshotai/kimi-k3` pinned failover on empty content. Prompt targets **10–14 words**, not a character count (models ignore character counts); **≤112 characters enforced in code** at a word boundary. Model, effort, character count, trim flag and timestamp are stage telemetry — `log_crash.phase = tagline`, already in the enum — not node properties. ≈\$0.00013 per game. |
+| 2 | `tagline` | `z-ai/glm-5.3-flash` over the description | `reasoning.effort: low` — a bounded level; never `enabled: true` (unbounded thinking blows the budget) or `enabled: false` (400, reasoning is mandatory for this model). `provider.sort: throughput`; `moonshotai/kimi-k3` pinned failover on empty content. Prompt targets **10–14 words**, not a character count (models ignore character counts); **≤112 characters enforced in code** at a word boundary. **Do not restate the release year** — the card renders `first_release_year` as its own badge, so a year in the tagline reads twice. Model, effort, character count, trim flag and timestamp are stage telemetry — `log_crash.phase = tagline`, already in the enum — not node properties. ≈\$0.00013 per game. |
 | 3 | `tags` | Steam store page, `InitAppTagModal` block | Exact app, one request; `appdetails` does **not** return user tags — its `genres`/`categories` are storefront facets. Top **10** tag names by vote count on the node; all 20 as `{tagid, name, count, observed_at}` in the scoped evidence record so the cut is reproducible. `tagid` is a Steam-wide controlled vocabulary (`Multiplayer` = `3859`, `Online Co-Op` = `3843` on every game), so tags are a filterable facet across the catalog — consistent with the no-genre-hub rule. SteamSpy is a cross-check only: it lags the store and still names app `730` "Counter-Strike: Global Offensive". |
 | 4 | `embeddings` | `"{name}: {description} Tags: {tags, comma-joined}"` | Gemini `gemini-embedding-001`. **3072** in AlloyDB per the locked vector standard; prefix-truncated and renormalized to **1536** if projected into FalkorDB `Entity.embeddings`, the shape of the 2026-07-06 migration. Appending the tags is deliberate: it makes "competitive esports shooter"-style queries land on the right games where the description alone would not. |
 
@@ -751,13 +751,70 @@ Genre stays `wikidata:P136`, not Steam: Steam returns storefront facets such as 
   "description_source": "generated_from_elected_facts",
   "store_description": "For over two decades, Counter-Strike has offered an elite competitive experience, one shaped by millions of players from across the globe. And now the next chapter in the CS story is about to begin. This is Counter-Strike 2.",
   "store_description_rights": "publisher_marketing_copy",
-  "tagline": "Valve's free-to-play first-person shooter and 2023 successor to Counter-Strike: Global Offensive",
+  "tagline": "Valve's free-to-play first-person shooter and successor to Counter-Strike: Global Offensive",
   "tags": ["FPS", "Shooter", "Multiplayer", "Competitive", "Action", "Team-Based", "eSports", "Tactical", "First-Person", "PvP"],
   "embeddings": "<vecf32 — from \"Counter-Strike 2: Counter-Strike 2 is a 2023 free-to-play … Tags: FPS, Shooter, Multiplayer, …\">"
 }
 ```
 
 Tag vote counts on app `730` are inherited from CS:GO (92,683 votes on `FPS` accumulated since 2012). The tag identities still describe CS2 accurately; the counts and ranking are the predecessor's — one more consequence of the shared storefront ID recorded in the [identity fixture](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples).
+
+#### Card rendering
+
+The card is the consumer these four properties are prepared for. Every element maps to one locked property — nothing on the card is derived at render time.
+
+<div style={{display:'flex', gap:'16px', flexWrap:'wrap', margin:'16px 0'}}>
+  <div style={{display:'flex', gap:'14px', width:'384px', padding:'12px', borderRadius:'12px', background:'#1c1c1e', color:'#f2f2f2', fontFamily:'system-ui, -apple-system, sans-serif', boxSizing:'border-box'}}>
+    <img src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/library_600x900.jpg" alt="Elden Ring — Steam library portrait, 300×450" style={{width:'90px', height:'135px', objectFit:'cover', borderRadius:'6px', flexShrink:0}} />
+    <div style={{flex:1, minWidth:0, display:'flex', flexDirection:'column'}}>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:'8px'}}>
+        <span style={{fontSize:'15px', fontWeight:700}}>Elden Ring</span>
+        <span style={{fontSize:'11px', opacity:0.6}}>2022</span>
+      </div>
+      <p style={{margin:'4px 0 8px', fontSize:'13px', lineHeight:1.35}}>FromSoftware's action role-playing game, published by Bandai Namco Entertainment.</p>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'6px', marginBottom:'8px'}}>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>Souls-like</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>Open World</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>Dark Fantasy</span>
+      </div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:'auto'}}>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>+7 more</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', border:'1px solid #8b5cf6', color:'#d8ccff'}}>FromSoftware</span>
+      </div>
+    </div>
+  </div>
+  <div style={{display:'flex', gap:'14px', width:'384px', padding:'12px', borderRadius:'12px', background:'#1c1c1e', color:'#f2f2f2', fontFamily:'system-ui, -apple-system, sans-serif', boxSizing:'border-box'}}>
+    <img src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/library_600x900.jpg" alt="Counter-Strike 2 — Steam library portrait, 300×450" style={{width:'90px', height:'135px', objectFit:'cover', borderRadius:'6px', flexShrink:0}} />
+    <div style={{flex:1, minWidth:0, display:'flex', flexDirection:'column'}}>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:'8px'}}>
+        <span style={{fontSize:'15px', fontWeight:700}}>Counter-Strike 2</span>
+        <span style={{fontSize:'11px', opacity:0.6}}>2023</span>
+      </div>
+      <p style={{margin:'4px 0 8px', fontSize:'13px', lineHeight:1.35}}>Valve's free-to-play first-person shooter and successor to Counter-Strike: Global Offensive.</p>
+      <div style={{display:'flex', flexWrap:'wrap', gap:'6px', marginBottom:'8px'}}>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>FPS</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>Shooter</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>Multiplayer</span>
+      </div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:'auto'}}>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', background:'#2c2c2e'}}>+7 more</span>
+        <span style={{fontSize:'11px', padding:'3px 8px', borderRadius:'6px', border:'1px solid #8b5cf6', color:'#d8ccff'}}>Valve</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+| Card element | Property | Rule it exercises |
+| --- | --- | --- |
+| Portrait | `thumbnail_image_url` | Locked 2:3 Steam library asset, rendered at 90×135 — the same frame as a movie-poster card |
+| Title | `name` | |
+| Year badge | `first_release_year` | Sourced from Wikidata `P577`, never the storefront — the CS2 card would otherwise say 2012 |
+| Body text | `tagline` | ≤112 chars, no release year (the badge carries it); a trailing period is added at render |
+| Three chips | `tags[0..2]` | Top three by Steam vote count |
+| "+7 more" | `tags[3..9]` | The top-10 lock: three shown, seven behind the disclosure |
+| Outlined badge | `developer` | Display name resolved through the `enwiki` sitelink fallback for entities without an English label (Valve) |
+
+The taglines shown are the simulated placeholders pending a live GLM run; the portraits are the real Steam assets loaded directly from the CDN, so this block renders the same source files the pipeline will ingest.
 
 ## AlloyDB and Go ownership
 
