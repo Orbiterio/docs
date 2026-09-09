@@ -144,7 +144,51 @@
       ],
       "identity_rule": "Existing canonical game UUID with verified game/edition aliases; artwork and display publication gate.",
       "standalone_card": true,
-      "may_start_discovery": false
+      "may_start_discovery": false,
+      "build_eval_case_ids": [
+        "P2-01",
+        "P2-02",
+        "P2-03",
+        "P3-06"
+      ],
+      "property_authority": "/guides/ontology/nodes#video-game-properties",
+      "display_contract": {
+        "description_max_unicode_code_points": 127,
+        "tagline_max_characters": 112,
+        "tagline_omit_release_year": true,
+        "tags_limit": 10,
+        "missing_tags": [],
+        "first_release_year": "elected release fact only",
+        "developer": "elected relationship display projection only",
+        "store_description": "evidence only; never verbatim generated description or embedded marketing copy",
+        "stage_order": [
+          "description",
+          "tagline",
+          "tags_finalization",
+          "embedding"
+        ],
+        "embedding": {
+          "provider": "shared Universe embedder",
+          "observed_model": "google/gemini-embedding-2",
+          "dimensions": 1536,
+          "l2_normalized": true,
+          "query_model_must_match": true,
+          "input": "final name: description; append Tags: joined tags only when non-empty",
+          "baseline_universe_sha": "f41366660b302540b67ec0d5f8435ff024ecb80b"
+        }
+      },
+      "image_contract": {
+        "aspect_ratio": "2:3",
+        "shared_converter": "ConvertPoster for matching portraits; shared centered white containment option before encoding for other approved shapes",
+        "output_width": "even integer no greater than 500 or decoded source width",
+        "output_height": "output width * 3 / 2",
+        "format": "webp",
+        "prefix": "game-thumbnail/<canonical-game-uuid>/",
+        "filename": "first 12 hex chars of SHA-256 exact source URL plus .webp",
+        "receipt_required": true,
+        "no_imdb_artwork": true,
+        "fallback_without_verified_containment": "skip non-2:3 candidates; do not publish wrong ratio"
+      }
     },
     {
       "label": "Game_Series",
@@ -153,9 +197,90 @@
       "specific_fields": [
         "series_kind"
       ],
+      "optional_fields": [
+        "description",
+        "developers",
+        "official_website",
+        "image_url"
+      ],
+      "developers_contract": "Sorted optional display-name array projected from eligible Game_Series -> DEVELOPED_BY -> Company associations. Elected direct-series developer evidence or an elected admitted member development credit plus membership requires canonical Company creation/reuse and queued edge replay. Names alone are not evidence. Preserve direct/member scope and public readiness; no blanket member credits, company enrichment or series enumeration. Pending/deferred identity or budget work cannot be marked complete after storing names.",
+      "card_text_field": "description",
+      "excluded_fields": [
+        "tagline"
+      ],
+      "card_parameters_reviewed_on": "2026-09-09",
+      "image_presentation": {
+        "decision": "locked",
+        "decision_date": "2026-09-09",
+        "aspect_ratio": "3:2",
+        "output_width_px": 400,
+        "output_height_px": 267,
+        "pixel_rounding": "height = round(width * 2 / 3); validate exact 400x267 output",
+        "output_format": "webp",
+        "background": "#FFFFFF",
+        "padding_px": 32,
+        "fit": "contain",
+        "position": "center",
+        "logo_proportions_preserved": true,
+        "transform_version": "series-3x2-v1",
+        "scope": "Stored file normalization; not extra node properties",
+        "implementation_status": "Requires a new option in the shared image package; current ConvertPoster preserves aspect ratio with a 500px width cap"
+      },
+      "image_source_order": [
+        "exact-series Wikidata P154 / approved P18 with Commons file metadata and supported raster rendition",
+        "verified official series hub artwork with explicit series-to-asset evidence",
+        "enabled catalog artwork explicitly linked to the crosswalked series",
+        "omit image_url and render common 3:2 UI placeholder"
+      ],
+      "image_candidate_limit": 3,
+      "image_contract": "Approved series artwork through the existing avatar/movie-poster pipeline: same configured GCS bucket, ObjectKey, uploader, media ledger/retries, shared logging and renderer. Add shared series-3x2-v1 normalization: store 400x267 WebP (3:2 height rounded to whole pixels) with white canvas, 32px padding and centered proportional containment. Scope the key namespace to canonical series identity and transform version, preserving the source-URL hash. image_url requires a matching successful upload/output receipt. SVG originals require verified source-provided raster renditions. Source, rights, transform and storage receipts remain in shared media/evidence records. Maximum three candidates and one output within original root budgets; missing artwork does not block series identity or trigger discovery.",
       "identity_rule": "Typed video-game series; generic franchise/group excluded.",
-      "standalone_card": false,
-      "may_start_discovery": false
+      "standalone_card": true,
+      "may_start_discovery": false,
+      "description_contract": {
+        "required_quality_gate": true,
+        "reject": [
+          "blank",
+          "name only",
+          "generic type only",
+          "name plus generic type only"
+        ],
+        "max_characters": 127,
+        "length_unit": "Unicode code points",
+        "target_characters": [
+          60,
+          127
+        ],
+        "source_order": [
+          "still-supported useful accepted description",
+          "elected exact-series facts and retained official series text",
+          "at most one additional verified official series/about page; retained enabled catalog summary may supplement"
+        ],
+        "extra_official_pages_max": 1,
+        "job_kind": "series_description",
+        "model_attempts_total_max": 2,
+        "provider": "shared movie/music description registry and telemetry",
+        "output": "one neutral evidence-backed sentence; distinguishing detail beyond name/type; no promotional copying, separate tagline or unsupported detail",
+        "failure": "keep prior supported useful description or omit property; retain raw source text and coverage/pending/failure evidence outside node",
+        "public_readiness": "only public-eligible facts; preserve member-publication dependencies",
+        "new_root_or_budget": false,
+        "recursive_discovery": false,
+        "runtime_status": "build_requirement_not_wired",
+        "worked_example": {
+          "wikidata_qid": "Q12393",
+          "raw_description": "video game series",
+          "source_url": "https://www.nintendo.com/jp/character/zelda/en/index.html",
+          "reviewed_on": "2026-09-09",
+          "description": "Action-adventure game series from Nintendo, following Link's quests through Hyrule's fields and dungeons.",
+          "character_count": 105,
+          "status": "editorial_source_based_preview_not_model_receipt"
+        }
+      },
+      "build_eval_case_ids": [
+        "P4-03",
+        "P4-04",
+        "P4-05"
+      ]
     },
     {
       "label": "Game_Platform",
@@ -163,22 +288,153 @@
       "admission": "when_evidenced",
       "specific_fields": [
         "platform_code",
-        "platform_kind"
+        "platform_kind",
+        "description"
       ],
       "identity_rule": "Exact console/hardware/operating-system identity; storefront excluded.",
       "standalone_card": false,
-      "may_start_discovery": false
+      "may_start_discovery": false,
+      "authority": "/guides/ontology/nodes#game-platform-properties",
+      "parameters_locked_on": "2026-09-09",
+      "optional_fields": [
+        "official_website",
+        "wikidata_qid"
+      ],
+      "platform_kinds": [
+        "console",
+        "hardware_platform",
+        "operating_system",
+        "operating_system_family"
+      ],
+      "excluded_fields": [
+        "tagline",
+        "image_url"
+      ],
+      "media_job": false,
+      "description_contract": {
+        "required_for_public_readiness": true,
+        "max_characters": 127,
+        "character_count": "Unicode code points",
+        "style": "one short factual sentence; useful distinguishing detail, no padding or marketing copy",
+        "reject": [
+          "blank",
+          "name_only",
+          "generic_type_only",
+          "unsupported_claims"
+        ],
+        "reuse": "still-supported useful existing/source description",
+        "model_if_needed": "z-ai/glm-5.3-flash",
+        "reasoning": {
+          "effort": "low"
+        },
+        "job_kind": "platform_description",
+        "maximum_model_attempts": 2,
+        "input": "retained elected exact-platform facts only",
+        "failure": "preserve supported prior text or keep identity/link internally pending; do not block an independently valid game",
+        "provenance": "shared field-level source and description ledger; actual model/prompt/input/outcome"
+      },
+      "official_website_contract": {
+        "required": false,
+        "type": "absolute HTTPS URL",
+        "source_order": [
+          "verified official exact-platform product/family hub",
+          "verified exact-platform official support page"
+        ],
+        "candidate_sources": [
+          "admitted exact-item P856 metadata",
+          "enabled exact-platform catalog record",
+          "already-retained official page"
+        ],
+        "verify": "official authority and exact subject including final redirect; family hub allowed only for a family node",
+        "missing": "omit with coverage reason"
+      },
+      "metadata_queue": {
+        "owner": "original root coordinator",
+        "stages": [
+          "identity_only",
+          "platform_metadata",
+          "facts_replay",
+          "platform_description_if_needed",
+          "graph_replay"
+        ],
+        "deduplication": "canonical platform per root",
+        "maximum_additional_official_pages": 1,
+        "budgets": "unchanged original root job/network/byte/LLM/retry limits",
+        "may_start_discovery": false
+      },
+      "example": "/assets/video-game-waterfall/game-platform-examples.json",
+      "build_eval_case_ids": [
+        "P4-06"
+      ]
     },
     {
       "label": "Game_Engine",
       "entity_type": "game_engine",
       "admission": "when_evidenced",
       "specific_fields": [
-        "engine_kind"
+        "engine_kind",
+        "description"
       ],
       "identity_rule": "Engine-family identity; version is engine-use scope.",
       "standalone_card": false,
-      "may_start_discovery": false
+      "may_start_discovery": false,
+      "authority": "/guides/ontology/nodes#game-engine-properties",
+      "description_locked_on": "2026-09-09",
+      "description_contract": {
+        "required_for_public_readiness": true,
+        "max_characters": 127,
+        "character_count": "Unicode code points",
+        "style": "one short factual engine-family sentence; reject blank, name-only, generic type-only and unsupported version-wide claims",
+        "reuse": "still-supported existing description or suitable retained exact-engine source text",
+        "model_if_needed": "z-ai/glm-5.3-flash",
+        "reasoning": {
+          "effort": "low"
+        },
+        "job_kind": "engine_description",
+        "maximum_model_attempts": 2,
+        "input": "retained elected engine-family facts from bounded identity metadata or cached official engine overview",
+        "queue": "original coordinator predeclares job after fact election and before public engine projection; deduplicate canonical engine per root",
+        "budgets": "original shared root job, LLM, retry and lifetime limits; no additional budget",
+        "failure": "preserve useful supported prior text or keep optional engine/link internally pending; independently valid game may publish",
+        "provenance": "actual field-level source, prompt/model/input hash and outcome in shared evidence/description ledger",
+        "may_browse": false,
+        "may_create_endpoints_or_edges": false,
+        "may_start_discovery": false,
+        "example": {
+          "name": "Unreal Engine",
+          "description": "Real-time 3D engine for building video games and interactive experiences.",
+          "source_url": "https://www.unrealengine.com/",
+          "text_kind": "editorial expected output; no model call"
+        }
+      },
+      "parameters_locked_on": "2026-09-09",
+      "required_properties": [
+        "uuid",
+        "name",
+        "engine_kind",
+        "source",
+        "source_urls",
+        "created_at",
+        "updated_at"
+      ],
+      "required_for_public_readiness": [
+        "description"
+      ],
+      "property_types": {
+        "uuid": "UUID string",
+        "name": "string",
+        "engine_kind": "string",
+        "description": "string",
+        "source": "string",
+        "source_urls": "string[]",
+        "created_at": "epoch-ms integer",
+        "updated_at": "epoch-ms integer"
+      },
+      "version_storage": "engine_versions summary on USES_ENGINE, correlated exact versions/build/platform/time in engine-use records; no versioned engine-family node",
+      "edge_authority": "/guides/ontology/edges#uses-engine",
+      "build_eval_case_ids": [
+        "P4-07"
+      ]
     },
     {
       "label": "Game_Release",
@@ -188,11 +444,59 @@
         "release_scope_key",
         "game_entity_id",
         "platform_entity_id",
-        "territory_key"
+        "territory_key",
+        "description"
       ],
       "identity_rule": "Opaque registry identity for resolved platform release; dates/status mutable; source-unspecified scope remains source-local.",
       "standalone_card": false,
-      "may_start_discovery": false
+      "may_start_discovery": false,
+      "description_authority": "/guides/ontology/nodes#game-release-description",
+      "description_added_on": "2026-09-09",
+      "required_for_public_readiness": [
+        "description"
+      ],
+      "description_contract": {
+        "required_for_public_readiness": true,
+        "property_type": "string",
+        "max_characters": 127,
+        "character_count": "Unicode code points",
+        "style": "one short factual sentence about the exact release, preserving date precision and status",
+        "reuse": "suitable still-supported source/existing text for the same release scope and elected facts",
+        "model_if_needed": "z-ai/glm-5.3-flash",
+        "reasoning": {
+          "effort": "low"
+        },
+        "job_kind": "release_description",
+        "entity_type": "game_release",
+        "maximum_model_attempts": 2,
+        "input": "retained elected exact release scope: game/platform identity, supported territory/edition, release date and precision, release status",
+        "reject": [
+          "blank",
+          "name_only",
+          "generic_type_only",
+          "unsupported_claims",
+          "invented_date_precision",
+          "unknown_territory_as_worldwide",
+          "announced_delayed_cancelled_or_unknown_as_released"
+        ],
+        "queue": "original root coordinator predeclares after scope resolution/fact election and before public projection; deduplicate by root, canonical release UUID and input fact revision; distinct from music release dispatch",
+        "budgets": "unchanged original root job, LLM, retry and lifetime limits; no new budget on retry",
+        "corrections": "date/status/scope correction refreshes text on the same release identity; current input revision required before acceptance; stale results cannot overwrite correction; retractions do not wait for generation",
+        "failure": "preserve only supported prior text or keep release/all incident public links pending internally; independently valid parent game may publish",
+        "provenance": "actual model/effort/prompt/input hash/fact IDs/outcome in shared evidence and description ledger with movie/music stage/attempt logging",
+        "may_browse": false,
+        "may_create_endpoints_or_edges": false,
+        "may_start_discovery": false,
+        "example": {
+          "name": "The Last of Us \u2014 PS3 \u2014 worldwide release assertion",
+          "description": "PlayStation 3 release of The Last of Us, released on June 14, 2013.",
+          "text_kind": "editorial expected output from retained release evidence; no model call"
+        }
+      },
+      "public_readiness": "valid release description and associated game published; all incident public links inherit this readiness",
+      "build_eval_case_ids": [
+        "P4-08"
+      ]
     },
     {
       "label": "Game_Award",
@@ -205,11 +509,121 @@
         "category_key",
         "award_year",
         "subject_kind",
-        "game_entity_id"
+        "game_entity_id",
+        "description",
+        "result"
       ],
       "identity_rule": "One nominee entry; named/joint recipient scope distinguishes results; outcome excluded from identity.",
-      "standalone_card": false,
-      "may_start_discovery": false
+      "standalone_card": true,
+      "card_artwork_locked_on": "2026-09-09",
+      "card_contract_status": "reviewed node fields, HAS_AWARD edge and artwork locked; visual layout and runtime/UI implementation pending",
+      "card_artwork_authority": "/guides/ontology/nodes#game-award-card-artwork",
+      "card_artwork": {
+        "mode": "reuse_associated_game",
+        "game_reference_field": "game_entity_id",
+        "source_entity_type": "video_game",
+        "source_field": "image_url",
+        "display_projection_field": "image_url",
+        "persist_image_on_award_node": false,
+        "aspect_ratio": "2:3",
+        "storage": "reuse the game's existing game-thumbnail/ object, successful media receipt and shared renderer",
+        "new_media_jobs": 0,
+        "new_uploads": 0,
+        "publication_gate": "award elected public readiness plus associated canonical game matching published revision and valid media receipt; hide pending-game awards and all incident public links",
+        "refresh_rule": "resolve current canonical game; refresh or invalidate display projection/cache on game publication/media revision change, withdrawal or alias reconciliation",
+        "display_failure": "shared 2:3 UI placeholder for otherwise eligible cards; no source URL fallback or enrichment dispatch",
+        "applies_to_subject_kinds": [
+          "game",
+          "person_game",
+          "recipient_group_game"
+        ]
+      },
+      "may_start_discovery": false,
+      "contract_locked_on": "2026-09-09",
+      "property_authority": "/guides/ontology/nodes#game-award-properties",
+      "optional_fields": [
+        "ceremony_qid",
+        "category_qid"
+      ],
+      "locked_example_property_names": [
+        "uuid",
+        "name",
+        "ceremony_qid",
+        "category_qid",
+        "award_year",
+        "result",
+        "created_at",
+        "updated_at",
+        "source",
+        "description",
+        "award_body_key",
+        "ceremony_key",
+        "category_key",
+        "award_entry_key",
+        "subject_kind",
+        "game_entity_id",
+        "visibility"
+      ],
+      "result_values": [
+        "nominee",
+        "winner"
+      ],
+      "unresolved_result": "absent while pending internally; do not publish or infer nominee",
+      "excluded_stored_fields": [
+        "award_body_name",
+        "category_label",
+        "game_name",
+        "official_website",
+        "tagline",
+        "image_url"
+      ],
+      "required_for_public_readiness": [
+        "description",
+        "result"
+      ],
+      "public_readiness": "supported elected outcome and short description; consistent node/edge/recipient recognition revision; associated canonical game published with valid media receipt; all incident public links inherit readiness",
+      "description_contract": {
+        "required_for_public_readiness": true,
+        "max_characters": 127,
+        "character_count": "Unicode code points",
+        "style": "one factual sentence about the exact nominee entry and elected outcome; preserve named/joint recipient scope",
+        "reuse": "suitable still-supported source/existing text for the same entry and outcome",
+        "model_if_needed": "z-ai/glm-5.3-flash",
+        "reasoning": {
+          "effort": "low"
+        },
+        "entity_type": "game_award",
+        "job_kind": "award_description",
+        "maximum_model_attempts": 2,
+        "input": "retained elected exact game, authority, ceremony/year, category, nominee/recipient scope and result",
+        "reject": [
+          "blank",
+          "name_only",
+          "generic_type_only",
+          "unsupported_claims",
+          "invented_recipients",
+          "wrong_ceremony_or_category",
+          "nominee_promoted_to_winner",
+          "named_recipient_outcome_as_game_only_win"
+        ],
+        "queue": "original coordinator reserves after entry resolution/fact election and before publication; deduplicate by root, canonical award UUID and input fact revision",
+        "budgets": "unchanged original root job, LLM, retry and lifetime limits, including repair attempts",
+        "corrections": "preserve award UUID/key; refresh affected text, result/modifier, HAS_AWARD.award_result and explicit recipient edges under one fenced recognition revision; hide inconsistent or unsupported old text; retractions do not wait for generation",
+        "failure": "keep only still-supported prior text; otherwise optional award and all public incident links stay pending while an independently valid game may publish",
+        "provenance": "actual model/effort/prompt/input hash/fact IDs/outcome in the shared description ledger with movie/music stage/attempt logging",
+        "may_browse": false,
+        "may_create_endpoints_or_edges": false,
+        "may_start_discovery": false,
+        "example": {
+          "description": "Elden Ring won Best Game Direction at The Game Awards 2022.",
+          "text_kind": "editorial expected output; no model receipt"
+        }
+      },
+      "build_eval_case_ids": [
+        "P5-04",
+        "P5-05",
+        "P5-07"
+      ]
     }
   ],
   "edges": [
@@ -229,25 +643,128 @@
         "credit_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P4-01",
+        "P6-01"
+      ]
     },
     {
       "type": "DEVELOPED_BY",
       "from_types": [
-        "Video_Game"
+        "Video_Game",
+        "Game_Series"
       ],
       "to_types": [
         "Company"
       ],
       "weight": 35,
       "owner": "game_company",
-      "evidence_requirement": "explicit development role",
+      "evidence_requirement": "Video_Game: explicit exact development role. Game_Series: elected exact-series developer claim or elected development credit plus elected series membership of the same admitted member. Required Company creation/reuse and edge replay; a display string, publisher or parent ownership is insufficient.",
       "specific_properties": [
         "development_role",
-        "company_role_record_ids"
+        "company_role_record_ids",
+        "development_scopes",
+        "series_developer_record_ids",
+        "supporting_game_ids",
+        "membership_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "series_extension_locked_on": "2026-09-09",
+      "series_rules": {
+        "required_output": "canonical Company identity creation/reuse and one semantic series/company edge per elected admitted association",
+        "evidence_scopes": [
+          "series_explicit",
+          "member_credit"
+        ],
+        "correlation": "member_credit retains the exact same member, its development records and its membership records; do not cross-join members",
+        "public_readiness": "both endpoints ready; member support additionally requires that member published; omit hidden member facts/IDs/descriptions even when direct series support exists",
+        "retraction": "retire edge and developer display name when last eligible support disappears; preserve Company identity and other relations",
+        "completion": "unresolved/rejected/over-budget work remains explicitly pending/deferred; names-only writes cannot satisfy completion",
+        "recursive_discovery": false
+      },
+      "authority": "/guides/ontology/edges#developed-by",
+      "properties_locked_on": "2026-09-09",
+      "source_lane": "video_game",
+      "layer": "evidence",
+      "required_properties": [
+        "uuid",
+        "created_at",
+        "updated_at",
+        "source",
+        "source_urls",
+        "evidence_ids",
+        "chosen_fact_ids",
+        "projection_revision",
+        "policy_version",
+        "active",
+        "weight",
+        "layer",
+        "excluded_from_scoring",
+        "description",
+        "description_generated_at"
+      ],
+      "conditional_properties": {
+        "Video_Game": [
+          "company_role_record_ids"
+        ],
+        "Game_Series": [
+          "development_scopes",
+          "series_developer_record_ids"
+        ],
+        "Game_Series_with_member_credit": [
+          "supporting_game_ids",
+          "company_role_record_ids",
+          "membership_record_ids"
+        ]
+      },
+      "property_types": {
+        "uuid": "string",
+        "source": "string",
+        "policy_version": "string",
+        "layer": "string",
+        "description": "string",
+        "development_role": "string",
+        "created_at": "integer",
+        "updated_at": "integer",
+        "projection_revision": "integer",
+        "weight": "integer",
+        "description_generated_at": "integer",
+        "active": "boolean",
+        "excluded_from_scoring": "boolean",
+        "source_urls": "string[]",
+        "evidence_ids": "string[]",
+        "chosen_fact_ids": "string[]",
+        "company_role_record_ids": "string[]",
+        "development_scopes": "string[]",
+        "series_developer_record_ids": "string[]",
+        "supporting_game_ids": "string[]",
+        "membership_record_ids": "string[]"
+      },
+      "property_rules": {
+        "timestamps": "epoch milliseconds; preserve creation time and unchanged timestamps on no-op replay",
+        "development_role": "optional lossless role summary; P178 supports developer only; omit scalar when surviving records have different roles",
+        "list_values": "sorted unique primitive strings; required arrays non-empty for active edges; omit empty optional arrays; never cross-join arrays into evidence",
+        "series_only_fields": "omit development_scopes, series_developer_record_ids, supporting_game_ids and membership_record_ids on Video_Game edges",
+        "direct_only_series": "requires series_explicit and series_developer_record_ids; omit unsupported member/game-role arrays",
+        "description": "non-empty evidence-grounded text required before first edge materialization; reuse suitable text or generate through edge_description_contract",
+        "retirement": "final support withdrawal can set active=false without generation; invalidated text cannot remain publicly eligible",
+        "provenance": "source names the video_game lane; retain actual evidence provider, qualifiers and description model/prompt/input/receipt metadata in AlloyDB"
+      },
+      "example": "/assets/video-game-waterfall/developed-by-example.json",
+      "creation_stages": [
+        "retained_source_evidence",
+        "identity_only",
+        "facts_replay",
+        "describe_if_needed",
+        "graph_replay",
+        "publish"
+      ],
+      "build_eval_case_ids": [
+        "P4-02",
+        "P4-03"
+      ]
     },
     {
       "type": "PUBLISHED_BY",
@@ -264,7 +781,10 @@
         "publishing_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P4-02"
+      ]
     },
     {
       "type": "BASED_ON",
@@ -288,7 +808,10 @@
         "relation_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-01"
+      ]
     },
     {
       "type": "SOUNDTRACK_FOR",
@@ -306,7 +829,10 @@
         "music_game_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-03"
+      ]
     },
     {
       "type": "USED_IN",
@@ -323,7 +849,10 @@
         "music_game_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-03"
+      ]
     },
     {
       "type": "IN_GAME_SERIES",
@@ -340,7 +869,10 @@
         "membership_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P4-04"
+      ]
     },
     {
       "type": "EDITION_OF",
@@ -358,7 +890,10 @@
         "relation_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-02"
+      ]
     },
     {
       "type": "EXPANSION_OF",
@@ -376,7 +911,10 @@
         "relation_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-02"
+      ]
     },
     {
       "type": "RELEASE_OF",
@@ -393,7 +931,10 @@
         "release_scope_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P4-08"
+      ]
     },
     {
       "type": "AVAILABLE_ON",
@@ -406,12 +947,54 @@
       ],
       "weight": 80,
       "owner": "game_release_context",
-      "evidence_requirement": "released exact-platform scope; summary deduplicated",
+      "evidence_requirement": "exact platform identity plus elected released/availability scope; P400 identity alone, announcement or unscoped past date is insufficient",
       "specific_properties": [
-        "availability_record_ids"
+        "availability_record_ids",
+        "release_entity_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "authority": "/guides/ontology/edges#available-on",
+      "properties_locked_on": "2026-09-09",
+      "source_lane": "video_game",
+      "layer": "evidence",
+      "required_properties": [
+        "uuid",
+        "created_at",
+        "updated_at",
+        "source",
+        "source_urls",
+        "evidence_ids",
+        "chosen_fact_ids",
+        "projection_revision",
+        "policy_version",
+        "active",
+        "weight",
+        "layer",
+        "excluded_from_scoring",
+        "description",
+        "description_generated_at",
+        "availability_record_ids"
+      ],
+      "conditional_properties": {
+        "Video_Game_summary_with_separate_releases": [
+          "release_entity_ids"
+        ]
+      },
+      "property_types": {
+        "availability_record_ids": "string[]",
+        "release_entity_ids": "UUID string[]"
+      },
+      "scope_records": "correlate exact game/platform and optional release, territory, date precision, edition and channel in AlloyDB; no array cross-product",
+      "release_cardinality": "Game_Release targets exactly its canonical platform; no second active platform target",
+      "public_readiness": "active edge; ready platform including short node description; published game inherited through Game_Release; non-empty edge description; optional website absence does not block",
+      "description": "reuse suitable evidence-grounded text or generate with GLM 5.3 FLASH at low effort before edge creation; historical release wording does not promise current store sale",
+      "corrections": "retain other source support; no retraction on partial coverage or delisting alone; retire after final eligible support withdrawal with generation fencing",
+      "recursive_discovery": false,
+      "build_eval_case_ids": [
+        "P4-06",
+        "P4-08"
+      ]
     },
     {
       "type": "USES_ENGINE",
@@ -423,12 +1006,59 @@
       ],
       "weight": 80,
       "owner": "game_context",
-      "evidence_requirement": "explicit exact-game engine use",
+      "evidence_requirement": "elected exact-game engine use with both canonical endpoint identities resolved; engine product pages, studio tools, trailer-only or middleware evidence are insufficient",
       "specific_properties": [
-        "engine_use_record_ids"
+        "engine_use_record_ids",
+        "engine_versions"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "authority": "/guides/ontology/edges#uses-engine",
+      "properties_locked_on": "2026-09-09",
+      "source_lane": "video_game",
+      "layer": "evidence",
+      "required_properties": [
+        "uuid",
+        "created_at",
+        "updated_at",
+        "source",
+        "source_urls",
+        "evidence_ids",
+        "chosen_fact_ids",
+        "projection_revision",
+        "policy_version",
+        "active",
+        "weight",
+        "layer",
+        "excluded_from_scoring",
+        "description",
+        "description_generated_at",
+        "engine_use_record_ids"
+      ],
+      "optional_properties": [
+        "engine_versions"
+      ],
+      "property_types": {
+        "engine_use_record_ids": "string[]",
+        "engine_versions": "string[]"
+      },
+      "version_contract": "optional literal strings from surviving eligible use records; sorted unique summary; omit unknown values; no invented minor/latest version and no version-by-platform cross-product",
+      "scope_records": "bind exact game and engine, evidence locator/revision, elected facts and only supported version/build/release/platform/time qualifiers; unknown stays unknown",
+      "description": "non-empty evidence-grounded description required before first edge write; reuse suitable text or shared GLM 5.3 FLASH at low effort using retained facts only",
+      "creation": "original coordinator reserves identity, facts, node/edge descriptions and graph replay dependencies within the unchanged root manifest/budgets; game_context is the sole replay owner",
+      "public_readiness": "active edge, published game and ready engine with its short description; optional unresolved engine/link does not block an otherwise valid game",
+      "corrections": "re-elect same-scope evidence; recompute version summaries; preserve semantic edge UUID and unrelated support; retire only after final eligible support withdrawal; stale replay and partial omission cannot resurrect/retract facts; retraction does not wait for generation",
+      "multiple_engines": "separate evidenced game/engine pairs may coexist; no assumed single-engine constraint or automatic current-engine overwrite",
+      "recursive_discovery": false,
+      "example": {
+        "artifact": "/assets/video-game-waterfall/support-type-examples.json",
+        "edge_uuid": "c8a56cd0-e6f0-5379-b0e9-61773c43a866",
+        "engine_use_record_id": "example:hellblade-ii-unreal-5",
+        "evidence_id": "example:evidence:hellblade-ii-unreal-5"
+      },
+      "build_eval_case_ids": [
+        "P4-07"
+      ]
     },
     {
       "type": "HAS_AWARD",
@@ -442,10 +1072,58 @@
       "owner": "game_recognition",
       "evidence_requirement": "game context for exact nominee entry",
       "specific_properties": [
-        "award_evidence_record_ids"
+        "award_evidence_record_ids",
+        "award_result"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "contract_locked_on": "2026-09-09",
+      "property_authority": "/guides/ontology/edges#game-has-award",
+      "required_properties": [
+        "uuid",
+        "created_at",
+        "updated_at",
+        "source",
+        "source_urls",
+        "evidence_ids",
+        "chosen_fact_ids",
+        "projection_revision",
+        "policy_version",
+        "active",
+        "weight",
+        "layer",
+        "excluded_from_scoring",
+        "description",
+        "description_generated_at",
+        "award_result",
+        "award_evidence_record_ids"
+      ],
+      "source_lane": "video_game",
+      "layer": "evidence",
+      "award_result_values": [
+        "nominee",
+        "winner"
+      ],
+      "award_result_contract": "current target result and modifier in the same elected recognition revision; mutable and excluded from identity",
+      "evidence_record_contract": "non-empty correlated SQL references binding exact game, award entry, authority, ceremony/year, category, nominee/recipient scope, outcome, source statement/qualifiers and chosen fact",
+      "creation_sequence": [
+        "bounded award_evidence",
+        "canonical entry and endpoint resolution",
+        "fact election",
+        "queued award_description and edge describe when needed",
+        "game_recognition replay",
+        "matching public publication"
+      ],
+      "description_contract": "required non-empty supported text before first materialization; shared z-ai/glm-5.3-flash with nested effort low when missing; named-recipient entry context cannot imply all game contributors won",
+      "publication_gate": "supported elected outcome and short description; consistent node/edge/recipient recognition revision; associated canonical game published with valid media receipt; all incident public links inherit readiness",
+      "corrections": "preserve node/edge UUIDs and creation times; synchronize target result/modifier/descriptions, award_result and explicit recipient edges under one fenced revision or withhold public reads; partial/winners-only coverage cannot retract nominees; only final eligible support withdrawal retires the edge; retraction does not wait for generation",
+      "may_start_discovery": false,
+      "new_media_jobs": 0,
+      "execution_boundary": "shared Go/GCP queue, original root budgets, movie/music structured stage/attempt logging; no recursive dispatch",
+      "build_eval_case_ids": [
+        "P5-04",
+        "P5-05"
+      ]
     },
     {
       "type": "WON_AWARD",
@@ -463,7 +1141,11 @@
         "award_recipient_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-04",
+        "P5-05"
+      ]
     },
     {
       "type": "NOMINATED_FOR",
@@ -481,7 +1163,11 @@
         "award_recipient_record_ids"
       ],
       "excluded_from_scoring": true,
-      "identity": "edge family + canonical ordered endpoint pair"
+      "identity": "edge family + canonical ordered endpoint pair",
+      "build_eval_case_ids": [
+        "P5-04",
+        "P5-05"
+      ]
     }
   ],
   "root_limits": {
@@ -492,7 +1178,13 @@
     "new_leaf_identities": 60,
     "new_leaf_identities_per_game": 20,
     "non_replay_jobs": 100,
-    "network_attempts": 100
+    "network_attempts": 100,
+    "llm_attempts": 10,
+    "retained_relation_mentions": 2000,
+    "downloaded_source_body_bytes": 10485760,
+    "graph_replay_relations_per_tick": 50,
+    "job_attempts": 5,
+    "active_root_lifetime_hours": 24
   },
   "common_rules": [
     "No provider availability or production activation is implied by this design manifest.",
@@ -501,7 +1193,8 @@
     "Publication requires game-owned parameters, required stage receipts and approved game artwork in game-thumbnail/.",
     "SQL retains correlated qualifiers and history; graph properties are primitive values and ledger references.",
     "Retries and handoffs preserve the same root budgets.",
-    "Game_Release and Game_Award public readiness inherits the associated game publication revision, including their non-game incident edges."
+    "Game_Release and Game_Award public readiness inherits the associated game publication revision, including their non-game incident edges.",
+    "Elected series developer evidence requires Company seeding/reuse and series DEVELOPED_BY replay; member-supported public projections inherit member publication readiness and cannot reveal hidden support."
   ],
   "deferred_semantics": [
     "generic franchise/fictional-universe membership",
@@ -557,5 +1250,74 @@
     "game_origin_music_may_probe": false,
     "deduplication": "one probe per canonical music anchor and original root; shared game admission across all source origins",
     "public_contract": "/guides/open-work/video-game-waterfall#music-waterfall-entry"
+  },
+  "series_developer_queue": {
+    "status": "required_when_evidenced_runtime_not_implemented",
+    "locked_on": "2026-09-09",
+    "stages": [
+      "game_snapshot",
+      "series_evidence",
+      "identity_only",
+      "facts_replay",
+      "describe_if_needed",
+      "graph_replay",
+      "publish"
+    ],
+    "admission_owner": "original root coordinator only",
+    "series_evidence": "one admitted exact series record plus retained member facts; description fallback may reuse official text or fetch at most one additional verified official series/about page within original budgets; emit claims only, no catalog/member-game enumeration",
+    "manifest": "predeclare stage capability; coordinator freezes and reserves combined Company endpoints before identity creation; deterministic originating-game attribution",
+    "company_resolution": "reuse canonical Company UUID or create minimal Entity:Company; deduplicate jobs across game/series references",
+    "new_budget": false,
+    "company_waterfall_allowed": false,
+    "company_catalog_allowed": false,
+    "member_enumeration_allowed": false,
+    "limits": "all original root/per-game identity, job, network, byte, retry and lifetime limits remain enforced",
+    "description": "validated non-empty text required before graph replay; suitable source/existing text or bounded GLM 5.3 FLASH at low effort"
+  },
+  "edge_description_contract": {
+    "authority": "/guides/ontology/edges#required-description-and-queued-creation",
+    "required_for": "every game edge; mandatory global edge rule also recorded in mark-graph-skills",
+    "locked_on": "2026-09-09",
+    "description_required_before_new_edge_write": true,
+    "reuse": "existing/source text only if non-empty and still grounded in elected endpoints, facts and scope",
+    "missing_description_model": "z-ai/glm-5.3-flash",
+    "reasoning_effort": "low",
+    "go_configuration_field": "ReasoningEffortNested",
+    "request_reasoning": {
+      "effort": "low"
+    },
+    "job_kind": "describe",
+    "input": "retained eligible evidence only; no browsing, new endpoints or inference that establishes a relation",
+    "provenance": "actual model, effort, prompt version, input hash, evidence revision and successful output receipt in shared description ledger; no invented receipts",
+    "failure": "pending with actual reason; no first edge materialization with blank text, silent model substitution or false success",
+    "budgets": "existing root job, LLM, network, byte, retry and lifetime limits; no new budget",
+    "corrections": "reuse only still-supported text; gate invalidated descriptions until repair; retraction never waits for model generation",
+    "runtime_gap": "inspected shared edgeDescriptionConfig uses the same model at max effort; low effort and pre-write description gating need implementation and QA",
+    "recursive_discovery": false
+  },
+  "build_handoff": {
+    "reviewed_on": "2026-09-09",
+    "guide": "/guides/open-work/video-game-waterfall-build-guide",
+    "eval_catalog": "/assets/video-game-waterfall/build-evals.json",
+    "freeze_inventory": "/assets/video-game-waterfall/build-freeze.json",
+    "phase_count": 9,
+    "required_eval_cases": 55,
+    "phase_advance": "all required cases passing with actual current receipts; no skipped/missing required cases",
+    "runtime_status": "not_implemented_or_evaluated_by_documentation",
+    "baseline_universe_sha": "f41366660b302540b67ec0d5f8435ff024ecb80b"
+  },
+  "fixture_use_contract": {
+    "kind": "design_examples_not_runtime_golden_receipts",
+    "core_counts": {
+      "nodes": 29,
+      "edges": 30
+    },
+    "companion_counts": {
+      "nodes": 4,
+      "edges": 3
+    },
+    "qualification_phase": 0,
+    "rule": "fill required record references from retained exact evidence; add clearly synthetic controls where source data is absent; enforce endpoint-conditional properties; never import all context into one root or fabricate provider evidence",
+    "all_edge_families_need_create_reject_replay_correction_tests": true
   }
 }

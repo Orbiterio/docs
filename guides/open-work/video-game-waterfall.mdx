@@ -6,12 +6,28 @@ icon: "gamepad"
 ---
 
 <Info>
-**Build plan — revised September 8, 2026.** Implementation target: **Go in Orbiter Universe on GCP**, with AlloyDB, Pub/Sub, Cloud Run, GCS and the Universe FalkorDB graph. This page specifies proposed work; it does not claim the dedicated game migrations, workers or graph writers are built. Existing IMDb/Film-TV writers can already create video game subtype nodes. **No Xano implementation or dependency.**
+**Build plan — build-agent handoff revised September 9, 2026.** Implementation target: **Go in Orbiter Universe on GCP**, with AlloyDB, Pub/Sub, Cloud Run, GCS and the Universe FalkorDB graph. This page specifies proposed work; it does not claim the dedicated game migrations, workers or graph writers are built. Existing IMDb/Film-TV writers can already create video game subtype nodes. **No Xano implementation or dependency.**
 
 The user constraint is stronger than a depth cap: **no recursive waterfall execution**. A root owns a finite staged plan. Every fan-out is queued, every job has a fixed capability, and discovered people, companies, games and works cannot restart discovery.
 </Info>
 
+## Build agent: start here
+
+Follow the [phased implementation guide](/guides/open-work/video-game-waterfall-build-guide) before changing runtime code. It defines **nine ordered phases (0–8)**, explicit dependencies, executable-eval requirements and a receipt that must pass before moving forward. The [machine-readable phase/eval catalog](/assets/video-game-waterfall/build-evals.json) is the checklist; its `not_run` state must never be presented as runtime validation.
+
+Read this page for behavior, Graphs → [Node Types](/guides/ontology/nodes#game-type-contract-v1) and [Edge Types](/guides/ontology/edges#game-edge-contract-v1) for graph contracts, and the [sources page](/guides/open-work/video-game-waterfall-sources) for source admission. The build guide resolves stale examples and fixes the implementation order; it does not grant permission to alter locked graph semantics, buy providers or deploy. Preserve existing local edits. Normal engineering choices may proceed within the contract; missing credentials block only the dependent live-source gate.
+
+The deliverable includes all **six game-specific node families and fifteen game-domain edge families** in the output manifest, plus all four primary entry adapters. Related Person/Company/music/movie/theatre identities reuse existing contracts. No extra node/edge family is admitted by discovery. Optional evidence may be absent; silently omitting a required writer, registration, correction path or eval is not optional coverage.
+
 **Locked source/type review:** [Sources & Graph Contract](/guides/open-work/video-game-waterfall-sources) maps every proposed source to the six entity families. Graphs → [Node Types](/guides/ontology/nodes#game-type-contract-v1) and [Edge Types](/guides/ontology/edges#game-edge-contract-v1) hold the `games-v1` identity, property and replay rules. All six types are in the intended build; supporting nodes are created only when evidenced.
+
+**Game series card contract — locked September 9:** `description`, `developers`, `official_website` and `image_url`; no tagline. Store a **400 × 267 WebP**, using a 3:2 frame with whole-pixel height rounding, white canvas and 32 px padding through the shared image pipeline. [Final parameters, image sources/fallbacks and three design node JSONs](#game-series-card-contract).
+
+**Game platform parameters — locked September 9:** short `description` (≤127 characters) and optional verified `official_website`, alongside the existing platform identity/code/kind. **No standalone card or image pipeline for platforms.** [Parameters and PlayStation 4 / Windows JSON](#game-platform-parameters).
+
+**Game engine node and edge — locked September 9:** `Game_Engine` has a short description and no standalone card; `Video_Game → USES_ENGINE → Game_Engine` uses weight 80, mandatory edge description/provenance and scoped version records. [Node and execution details](#game-engine-description) · [Authoritative Edge Types contract](/guides/ontology/edges#uses-engine).
+
+**Game award node and edge — locked September 9:** the reviewed `Game_Award` properties, short description, outcome and card are fixed. `HAS_AWARD` uses weight 40, the full description/provenance envelope, required award-evidence record IDs and a synchronized `award_result`. Its card reuses the game's stored 2:3 artwork. [Build sequence](#game-award-node-and-edge-contract) · [Node Types](/guides/ontology/nodes#game-award-properties) · [Edge Types](/guides/ontology/edges#game-has-award).
 
 ## Entry points
 
@@ -478,6 +494,8 @@ Use the [IMDb Go rebuild specification](/guides/enrichment/waterfall/imdb-go-reb
 
 Code inspection on September 8 used a clean local Universe checkout at **`31a2fa5da41f8d07b4999bb26eb7a6baddf34fa7`**. This is an inspected revision, not a deployment assertion. Recheck the implementation branch before coding.
 
+**Final handoff check — September 9:** the local Go checkout is clean at `f41366660b302540b67ec0d5f8435ff024ecb80b`. Its generic queue rejects unknown runners, but no dedicated game runner was found. The shared edge-description config still uses GLM Flash at `max`; game work targets `low` and must pass the injection/regression gate. The shared embedder now uses `google/gemini-embedding-2`, 1536 dimensions. Older July rebuild/vector notes are historical integration context; [phase 0](/guides/open-work/video-game-waterfall-build-guide#phase-0-freeze-contracts-and-build-the-eval-harness) pins actual code and the current game contract before building. No Xano extraction is needed for this new Go feature.
+
 | Existing seam | Reuse / required extension |
 | --- | --- |
 | `internal/features/entities/entitiespub` | Identifier-first canonical person/company/film/music/stage identities. Register `video_game` explicitly; no second game-person identity system. |
@@ -542,9 +560,13 @@ flowchart TD
   A --> D[Bounded root discovery and immutable game manifest]
   D --> Q[Queued exact-game snapshot jobs]
   Q --> M[Durable claims and bounded endpoint manifest]
-  M --> L[Queued identity-only leaf jobs]
+  M --> S[Queued exact-series evidence if admitted]
+  S --> B[Coordinator freezes combined endpoint manifest]
+  M --> B
+  B --> L[Queued identity-only leaf jobs]
   L --> F[Fact election]
-  F --> R[Queued relation replay]
+  F --> H[Validate description or queue GLM Flash low]
+  H --> R[Queued relation replay with required description]
   R --> P[Display publication and completion receipt]
   M --> I[Queued required artwork stage]
   I --> P
@@ -556,11 +578,18 @@ Only the root coordinator can admit the game manifest. The person-role adapter i
 | --- | --- | --- |
 | `root_discovery` | One bounded company, person-credit, IMDb, music, adaptation or reviewed award-seed enumeration; freeze selected game references | Follow a discovered studio's catalog, game sequels or another work's derivatives |
 | `game_snapshot` | Fetch one selected game and bounded permitted source details; extract its direct relationships | Start another root or fetch another game's detail as a discovered child |
+| `series_evidence` | Fetch one admitted exact series record once; extract permitted display/developer facts; for insufficient description, reuse cached official text or fetch at most one additional verified series/about page; reuse retained elected member facts | Enumerate members, fetch unselected games, schedule jobs itself or call full company enrichment |
 | `identity_only` | Resolve/create the named endpoint through a non-enriching public identity seam; one bounded direct profile lookup if needed | Full person/company enrichment, filmography/catalog/ownership cascades, expertise-triggered cross-waterfall kickoff |
 | `media_ingest` | Use the shared avatar/movie-poster file pipeline for a declared artwork candidate; save under `game-thumbnail/` and publish through the shared media renderer | Search galleries, traverse linked games, admit roots or reset network/byte budgets |
 | `award_evidence` | Read bounded approved award snapshots/pages for the already admitted game/person; record scoped evidence | Admit unrelated nominees, follow archive years, or launch person/company discovery |
 | `facts_replay` / `graph_replay` / `publish` | Consume existing bounded claims and elected facts; repair the same objects | Source discovery or extending the manifest |
-| `describe` | Describe an already elected relation with evidence and bounded enrichment of the sentence | Decide that a relation exists, invent endpoints or launch discovery |
+| `series_description` | Summarize retained public-eligible series facts; validate one sentence ≤127 characters; at most two model attempts within original limits | Browse, create entities/edges, enumerate members, or start another waterfall |
+| `platform_metadata` | Reuse admitted exact-platform metadata; if required for website verification/description evidence, fetch at most one additional verified exact-platform official product/support page per canonical platform per root | General search, game catalog/family enumeration, endpoint creation or scheduling jobs itself |
+| `platform_description` | Use retained elected facts for one required short platform description, ≤127 characters; `z-ai/glm-5.3-flash`, nested effort `low`, at most two total model attempts | Browse, create entities/edges, claim game availability or launch another waterfall |
+| `engine_description` | Use retained elected engine-family facts for one required short description, ≤127 characters; `z-ai/glm-5.3-flash`, nested effort `low`, at most two total model attempts | Browse, create entities/edges, infer game-engine use or launch another waterfall |
+| `release_description` | Use this exact `game_release` scope's elected facts for one short description, ≤127 characters; `z-ai/glm-5.3-flash`, nested effort `low`, at most two total model attempts | Browse, enumerate releases, invent release dates/status/territory, create entities/edges or invoke music processing |
+| `award_description` | Use one exact elected `game_award` entry's facts/outcome for a short description, ≤127 characters; `z-ai/glm-5.3-flash`, nested effort `low`, at most two total model attempts | Browse award archives, invent recipients/outcomes, promote nominees to winners, create endpoints/edges or start another waterfall |
+| `describe` | Before first edge write, reuse suitable evidence-grounded text or generate a required non-empty description with `z-ai/glm-5.3-flash`, reasoning effort `low`; consume only retained evidence and the original budget | Decide that a relation exists, invent endpoints, publish an empty description or launch discovery |
 
 **Enforcement is in Go and the database, not just a payload flag.**
 
@@ -573,6 +602,8 @@ Only the root coordinator can admit the game manifest. The person-role adapter i
 7. Finishing a root never converts deferred candidates into new roots. Explicit later user/admin admission is separate demand and remains subject to rate and daily caps.
 
 The stored relationship graph can contain cross-media cycles or reciprocal evidence. **The job dependency graph cannot.** A visited set alone, queue dedup alone, or “maximum depth 2” alone does not satisfy this contract.
+
+**Required series developer branch:** the coordinator predeclares `game_snapshot → series_evidence → identity_only → facts_replay → describe if needed → graph_replay → publish` for admitted series. The series evidence stage emits claims only; the coordinator freezes and reserves its Company endpoints before entity creation. Each accepted developer association must create/reuse its Company identity and produce its series edge with a validated non-empty description, or remain explicitly pending/deferred. Company leaves cannot schedule work. Deduplicate Company identity/jobs across game and series evidence within the root, and charge each new endpoint to its deterministically recorded originating game as well as the root; no separate series budget or recursive expansion. [Authoritative edge properties and creation sequence](/guides/ontology/edges#developed-by).
 
 ### Proposed pilot budgets
 
@@ -699,7 +730,7 @@ _Elden Ring: the locked 2:3 portrait candidate from [Steam](https://store.steamp
 
 _Hamlet: a second real game-node portrait from [Steam](https://store.steampowered.com/app/222160/), matched by app ID `222160` — the same 300×450 2:3 asset resolves for this 2010 indie title. The store-release scope stays distinct from the game's original release date. See [Node Types](/guides/ontology/nodes#video-game-nodes) for the image/property contract._
 
-**Locked 2026-09-09 — one frame, 2:3 portrait.** Every game card uses the same 2:3 frame as a movie poster, so it renders in the same card component as `film_tv_display` with no orientation special case. The **primary source is Steam's library portrait, `library_600x900.jpg`** (measured 300×450), resolved by the stored app ID. Other sources (IGDB cover, MobyGames front cover, official press kit, an exact-game award tile, a Commons file) are fallback candidates and are accepted only as contained inside the 2:3 frame; a landscape asset is letterboxed within it, never served as a different card ratio. The shared pipeline's conversion is aspect-_preserving_, not normalizing, so this unification happens at **selection**, not at conversion. IMDb posters are excluded, including already rehosted copies and movie-adaptation artwork. Do not buy a credits tier solely to obtain a thumbnail.
+**Locked 2026-09-09 — one frame, 2:3 portrait.** Every game card uses the same 2:3 frame as a movie poster, so it renders in the same card component as `film_tv_display` with no orientation special case. The **primary source is Steam's library portrait, `library_600x900.jpg`** (measured 300×450), resolved by the stored app ID. Other sources (IGDB cover, MobyGames front cover, official press kit, an exact-game award tile, a Commons file) are fallback candidates and are accepted only as contained inside the 2:3 frame; a landscape asset is letterboxed within it, never served as a different card ratio. The existing conversion preserves aspect ratio: accept an exact 2:3 source directly, or apply the explicitly tested shared containment option before conversion for a non-2:3 fallback. CSS alone does not satisfy stored-image normalization. IMDb posters are excluded, including already rehosted copies and movie-adaptation artwork. Do not buy a credits tier solely to obtain a thumbnail.
 
 | Steam asset (measured 2026-09-09 on app IDs `730`, `1245620`, `222160`) | Pixels | Ratio | Role |
 | --- | --- | --- | --- |
@@ -723,7 +754,7 @@ For an IGDB-enabled game snapshot, request the cover in that exact lookup, for e
 
 Artwork readiness is a required stage before first publication in the **same finite plan**: at most three ranked candidates and one selected asset per game. Source metadata requests, downloads and retries count toward the existing root network/byte budgets; no gallery enumeration or separate budget. One bounded `media_ingest` job routes an approved candidate through the **same Go file pipeline used for avatars and movie posters**, stores it under **`game-thumbnail/`**, then prepares the shared `film_tv_display` image field for the final game publication gate. It has no discovery capability and cannot launch another waterfall. A missing, rejected or over-budget image leaves first publication pending and hidden. Internal credits/relationships remain available for repair; no public placeholder or IMDb fallback satisfies artwork readiness.
 
-The required object-key contract is `game-thumbnail/<canonical-game-uuid>/<source-url-hash>.webp`, relative to the existing configured media bucket. Reuse the shared `internal/platform/images` converter and deterministic `ObjectKey` helper, the existing GCS uploader, rehost ledger/retry facilities and `internal/platform/media` renderer. Use the movie-poster `ConvertPoster` path: preserve portrait or landscape aspect ratio, cap width at the shared limit (currently 500 px), and encode WebP. The avatar square crop does not apply to game artwork. The current shared filename is the first 12 hexadecimal characters of SHA-256 of the exact source URL; retain source revision/content hash separately as described below.
+The required object-key contract is `game-thumbnail/<canonical-game-uuid>/<source-url-hash>.webp`, relative to the existing configured media bucket. Reuse the shared `internal/platform/images` converter and deterministic `ObjectKey` helper, the existing GCS uploader, rehost ledger/retry facilities and `internal/platform/media` renderer. Exact 2:3 inputs can use `ConvertPoster` with proportional resizing and the existing width cap (currently 500 px). For other approved fallback shapes, first contain the complete image inside a 2:3 canvas through a shared converter option, then encode WebP; `ConvertPoster` alone does not letterbox. Use a white canvas, centered containment, no crop/stretch, and an even output width no greater than 500 or the decoded source width; output height is width × 3 / 2. Reject unusably small/invalid images. The 300×450 Steam example stays 300×450. Until this fallback transform passes the media gate, skip non-2:3 candidates instead of publishing inconsistent artwork. Record the transform version and output receipt in the existing media ledger; the avatar square crop does not apply. The current shared filename is the first 12 hexadecimal characters of SHA-256 of the exact source URL; retain source revision/content hash separately as described below.
 
 Persist the returned `storage_key` and use the shared configured CDN/signed-URL renderer at read/projection time. The bucket/serving host comes from shared configuration. An already hosted, approved game-source input can reuse the existing file; an IMDb-origin asset cannot. The game's final object must still be under `game-thumbnail/<canonical-game-uuid>/`; only skip ingestion when the existing object is already at that destination. Acceptance requires the correct prefix, preserved aspect ratio, one deterministic key on retry, and the normal avatar/poster file-pipeline failure and delivery behavior.
 
@@ -736,11 +767,13 @@ Preserve candidate `source`, `source_game_id`, `source_page_url`, `source_image_
 | Order | Property | Source | Rule |
 | :-: | --- | --- | --- |
 | 1 | `description` | Generated from elected facts | One neutral sentence, ≤127 characters, following the music `create-node-description` (#13112) pattern: name, first release year, genre, developer, publisher, series or predecessor. **Store copy is never the description.** Steam `short_description` is retained as `store_description` with `store_description_rights: publisher_marketing_copy` — evidence only, never embedded. Elden Ring's store copy is `THE CRITICALLY ACCLAIMED FANTASY ACTION RPG. Rise, Tarnished…`; embedding that retrieves on hype, not on what the game is. |
-| 2 | `tagline` | `z-ai/glm-5.3-flash` over the description | `reasoning.effort: low` — a bounded level; never `enabled: true` (unbounded thinking blows the budget) or `enabled: false` (400, reasoning is mandatory for this model). `provider.sort: throughput`; `moonshotai/kimi-k3` pinned failover on empty content. Prompt targets **10–14 words**, not a character count (models ignore character counts); **≤112 characters enforced in code** at a word boundary. **Do not restate the release year** — the card renders `first_release_year` as its own badge, so a year in the tagline reads twice. Model, effort, character count, trim flag and timestamp are stage telemetry — `log_crash.phase = tagline`, already in the enum — not node properties. ≈\$0.00013 per game. |
+| 2 | `tagline` | `z-ai/glm-5.3-flash` over the description | `reasoning.effort: low`; `provider.sort: throughput`; `moonshotai/kimi-k3` is the existing pinned **tagline-only** failover on empty content, subject to capability and the original attempt/network budget. Prompt targets **10–14 words**, with **≤112 characters enforced in code** at a word boundary; reject a trim that leaves an incomplete or unsupported assertion. **Do not restate the release year** — the card renders `first_release_year` separately. Model, effort, length, trim flag and timestamp belong in the shared Universe `tagline` stage/attempt telemetry, not a Xano log enum or node properties. Preserve shared provider restrictions and validate actual responses; do not copy historical cost estimates into budgets. |
 | 3 | `tags` | Steam store page, `InitAppTagModal` block | Exact app, one request; `appdetails` does **not** return user tags — its `genres`/`categories` are storefront facets. Top **10** tag names by vote count on the node; all 20 as `{tagid, name, count, observed_at}` in the scoped evidence record so the cut is reproducible. `tagid` is a Steam-wide controlled vocabulary (`Multiplayer` = `3859`, `Online Co-Op` = `3843` on every game), so tags are a filterable facet across the catalog — consistent with the no-genre-hub rule. SteamSpy is a cross-check only: it lags the store and still names app `730` "Counter-Strike: Global Offensive". |
-| 4 | `embeddings` | `"{name}: {description} Tags: {tags, comma-joined}"` | Gemini `gemini-embedding-001`. **3072** in AlloyDB per the locked vector standard; prefix-truncated and renormalized to **1536** if projected into FalkorDB `Entity.embeddings`, the shape of the 2026-07-06 migration. Appending the tags is deliberate: it makes "competitive esports shooter"-style queries land on the right games where the description alone would not. |
+| 4 | `embeddings` | `"{name}: {description} Tags: {tags, comma-joined}"` | Use the **shared Universe embedder and query space**, verified at the handoff commit as `google/gemini-embedding-2`, **1536** dimensions; validate finite values and L2 normalization. Persist model/dimensions/input hash in the shared vector provenance. Do not introduce a separate 3072 space, use the historical `001` model for games, or compare different models merely because dimensions match. The phase-0/phase-3 gates verify storage/index/query compatibility. Appending the final tags makes game facets searchable. |
 
 Genre stays `wikidata:P136`, not Steam: Steam returns storefront facets such as `Free To Play`, which is a business model, not a genre.
+
+**Missing tags:** an exact game without a supported Steam record or with no returned tags gets `tags=[]` and explicit coverage, not invented generic tags. An unavailable/failed tag source is recorded as such; optional coverage does not block a valid game. Freeze the selected tag revision before embedding; omit the ` Tags: ...` suffix when empty. A later authorized tag correction regenerates the embedding from the new final input. Tag acquisition can share a retained snapshot; the finalization order above does not require a second request. `first_release_year` comes from the elected release fact when known; `developer` is only a display projection of evidenced company credits, never proof for creating one.
 
 **Description stage — pending.** The Go description-generation stage is not wired. The Counter-Strike 2 and Elden Ring descriptions used for this QA run were hand-drafted from elected facts, not generated by that stage. The CS2 input below is **157 characters**, exceeding the locked 127-character publication limit; it is an input fixture, not a publication-ready node. Production must generate and validate the final description before the downstream tagline, tags, embedding and node-creation stages.
 
@@ -826,6 +859,292 @@ Both taglines were generated live on September 9, 2026 by `z-ai/glm-5.3-flash` w
 
 The portraits in the HTML cards are the real Steam assets loaded directly from the CDN, so this block renders the same source files the pipeline will ingest.
 
+## Game award node and edge contract
+
+**Locked September 9, 2026.** Implement the exact reviewed [Game_Award properties and full JSON](/guides/ontology/nodes#game-award-properties) with the [HAS_AWARD contract and full edge JSON](/guides/ontology/edges#game-has-award). Stored node fields are `uuid`, `name`, `description`, authority/ceremony/category/entry keys, source-confirmed `award_year`, `subject_kind`, canonical `game_entity_id`, elected `result`, source/timestamps and `visibility`; resolved ceremony/category QIDs are optional crosswalks. Extra website or display-label properties are outside this approved field set. The card uses the same game artwork as described below; UI layout and Go implementation remain pending.
+
+The edge is `Video_Game → HAS_AWARD → Game_Award`, with `source="video_game"`, weight 40, evidence layer and scoring exclusion. Require the common envelope including a non-empty description, `award_evidence_record_ids` and `award_result` matching the award's current elected result. Real source qualifiers and nominee/recipient scope remain correlated in AlloyDB; another source or nomination-to-win change reuses the same node and edge UUIDs.
+
+**Fixed queued sequence:** the bounded `award_evidence` stage retains exact entry evidence; resolve canonical identity and elect facts; reuse suitable text or have the original coordinator queue typed `game_award` / `award_description` and required edge `describe` work; the `game_recognition` owner replays the resolved node and edge; public projection waits for consistent result/labels/descriptions and the associated game's published media revision. Node description generation uses shared GLM 5.3 FLASH at nested effort `low`, one factual sentence ≤127 Unicode code points, at most two total model attempts and deduplication by root + award UUID + input fact revision. No new budget, archive crawl or recursive game/person/company dispatch is permitted.
+
+Record actual model/prompt/input/fact provenance and outcomes using the shared movie/music stage/attempt logging. A missing outcome or invalid description keeps only the optional award and its public links pending; it does not block an independently valid game. Outcome correction refreshes the same entry and related projections under one fenced recognition revision; stale text or labels cannot remain public. Partial or winners-only coverage cannot retract nominations. Retraction does not wait for text generation. [Complete source-backed simulation](/guides/open-work/video-game-waterfall-game-awards#complete-award-node-and-game-edge).
+
+**Acceptance checks:** nomination → win and correction back preserve UUIDs while updating every affected outcome/description projection; two named nominees for one game stay separate entries; node and edge evidence references resolve to the exact retained ceremony/category claim; invalid text keeps the award pending; hidden games expose no award path; artwork reuse creates zero media jobs/uploads; all retries obey original budgets and reject stale input revisions.
+
+## Game award card artwork
+
+**Locked September 9:** the `Game_Award` card reuses its associated game's processed artwork. Resolve `game_entity_id` to the canonical published `Video_Game` and expose that game's approved `image_url` in the award card display projection. Keep the same shared renderer, **2:3 portrait frame**, stored `game-thumbnail/` object and media receipt. Do not persist a separate award image URL or schedule another image lookup, transform or upload.
+
+The award and all incident public links inherit the associated game's publication gate; the card also requires its own elected readiness. Game artwork corrections and withdrawals refresh/invalidate the award card projection through the game publication/media revision. Use the shared placeholder for a display failure on an otherwise eligible card; a pending game's missing artwork does not authorize showing its award. No fallback to a raw provider URL or recursive enrichment. [Authoritative Node Types artwork contract](/guides/ontology/nodes#game-award-card-artwork).
+
+For Elden Ring's 2022 Best Game Direction award, use the same stored portrait as the Elden Ring game card. The reviewed [node/edge field set is locked](#game-award-node-and-edge-contract); visual layout and Go/UI implementation remain pending.
+
+## Game series card contract
+
+**Locked September 9, 2026.** `Game_Series` has its own identity, distinct from the individual `Video_Game`. These are the reviewed card parameters; the Go worker and shared series-image transform remain to be implemented.
+
+| Property | Contract |
+| --- | --- |
+| `name` | Verified series name |
+| `series_kind` | `video_game_series` |
+| `wikidata_qid` | Exact typed series identity when available |
+| `description` | One useful neutral sentence, maximum 127 characters. Generic type-only text triggers the evidence-backed fallback below; no separate tagline |
+| `developers` | Optional sorted name array projected from eligible series developer associations. Elected exact-series developer claims or an elected admitted member's developer credit plus membership require queued Company creation/reuse and `Game_Series → DEVELOPED_BY → Company` replay. The list does not mean every studio worked on every game |
+| `official_website` | Optional verified series website or official series hub |
+| `image_url` | Shared media serving URL after successful normalization, upload and matching output receipt |
+| `source` | Primary identity source; field-level description, developer and media evidence remains in the shared evidence ledger |
+
+`aliases` and `genres` remain under review. Developer names alone are not evidence, but **accepted developer evidence must seed/reuse Company identities and create the series edges**. The `developers` property is their display projection. Unknown optional properties stay absent; full company enrichment and series catalog enumeration remain prohibited.
+
+### Series description fallback
+
+**Required quality check:** a blank description, the series name alone, or generic type-only wording such as `video game series`, `game series` or `video game franchise` is insufficient card copy. Normalize case, whitespace and punctuation before this check; reject name-plus-type restatements too. A useful description needs at least one evidenced distinguishing fact beyond the name and entity type. Length alone is not the quality test.
+
+1. Reuse an existing accepted, useful series description when its supporting facts remain current. Otherwise assemble a bounded packet of elected exact-series facts and already retained official series text: genre, known developer, setting or defining gameplay where actually supported for the series.
+2. If coverage is still too thin, the predeclared `series_evidence` stage may fetch **at most one additional verified official series/about page**, selected by the supported exact-series resolver. Reuse a page already fetched for the website/logo. An enabled catalog's retained exact-series summary can supplement the packet; do not launch another catalog lookup or an unrestricted web search. Never follow member links or treat a single game's features as universal series facts.
+3. Queue one scoped `series_description` job through the same Go description provider registry and stage/attempt logging used by the movie/music framework. Produce **one neutral sentence, at most 127 Unicode characters**, solely from the retained facts. Target roughly 60–127 characters when the evidence supports it; do not pad sparse evidence. Omit hype, unsupported superlatives, boilerplate and a separate tagline. Provider prose is evidence to summarize, not copy verbatim.
+4. Validate length, non-generic content, subject match and factual support. Allow at most **two model attempts total**, including any repair or shared-registry failover, within the original root's 10-LLM / 100-network-attempt limits. The job cannot browse, create entities, infer edges or initiate another waterfall. Public text may use only public-eligible facts; preserve any member-publication dependency.
+5. If evidence or budget is insufficient, retain an older still-supported useful description if available; otherwise omit the display property and record scoped insufficient coverage or pending work. Keep the raw generic source text in the source ledger. Do not publish generic filler as a successful enriched description. Actual source/model failures use shared failure records, never a fabricated success or a new ad hoc error code.
+
+Record the input description, rejection reason, source URLs/revisions, accepted fact IDs, prompt/model version, attempt outcome and selected text in the shared source/description receipt, outside node properties. A changed or withdrawn supporting fact invalidates the relevant receipt. This is a **Go build requirement**, not a claim that the description worker is already wired.
+
+**Zelda example:** Wikidata's `video game series` fails the quality check. [Nintendo's series overview](https://www.nintendo.com/jp/character/zelda/en/index.html) explicitly supports action-adventure, Link and Hyrule's fields/dungeons. The updated design description below is an editorial demonstration of the expected fallback output.
+
+### Evidenced series developers
+
+**Required output:** elected evidence → queued canonical Company identity creation/reuse → required evidence-grounded description → `Game_Series → DEVELOPED_BY → Company` → the matching `developers` name projection. Use the existing game company replay owner, weight **35**, and `excluded_from_scoring=true`. Do not stop after storing a name. Existing companies are reused; only missing canonical identities are created. Unresolved identities, rejected/conflicting claims and exhausted budgets retain explicit pending/deferred evidence and do not receive a successful completion receipt. **Graphs → Edge Types is the source of truth:** [complete properties, creation sequence and Zelda → Nintendo JSON](/guides/ontology/edges#developed-by).
+
+Accept an explicit exact-series developer statement, or both an exact admitted member's elected development credit and its elected series membership. Preserve the distinction in `development_scopes` (`series_explicit`, `member_credit`, or both) and correlated `series_developer_record_ids`; member support additionally references the exact `supporting_game_ids`, `company_role_record_ids` and `membership_record_ids`. Do not spread a series claim to member games, infer parent-company development, or use publisher/employer names as developer evidence.
+
+**Counter-Strike:** its exact series item `Q15717790` has P178 claims for the following six organisations. If all six claims pass the pinned source/identity election policy and budget admission, the required result is **six distinct canonical Company endpoints and six series development edges**. The number of newly created companies is zero to six, depending on which already exist. Source claims are evidence candidates, not a claim that these graph writes have already run.
+
+| Company | Exact source identity | Required series association when elected |
+| --- | --- | --- |
+| Gearbox Software | `Q1046593` | Counter-Strike → `DEVELOPED_BY` → Gearbox Software |
+| Hidden Path Entertainment | `Q1956256` | Counter-Strike → `DEVELOPED_BY` → Hidden Path Entertainment |
+| Nexon | `Q562078` | Counter-Strike → `DEVELOPED_BY` → Nexon |
+| Ritual Entertainment | `Q1806887` | Counter-Strike → `DEVELOPED_BY` → Ritual Entertainment |
+| Turtle Rock Studios | `Q1193116` | Counter-Strike → `DEVELOPED_BY` → Turtle Rock Studios |
+| Valve Corporation | `Q193559` | Counter-Strike → `DEVELOPED_BY` → Valve Corporation |
+
+This creates no blanket set of six Counter-Strike 2 developer credits. Each individual game's edges require its own elected evidence. A newly seeded company receives an identity-only job, never a company waterfall or catalog-discovery trigger. Retries reuse canonical IDs and semantic edge keys.
+
+Public projection requires both endpoints ready. Member-supported associations additionally depend on that member's publication; filter hidden member IDs, facts and descriptions even if direct series support makes the same edge public. When its last eligible support is withdrawn, retire the series edge and remove that developer from the series property; preserve Company identity and unrelated edges. [Normative evidence, queue, projection and retraction contract](/guides/ontology/edges#game-series-developers).
+
+### Series image: locked output and fallback order
+
+- **Stored width:** 400 px. **Stored height:** 267 px (`round(400 × 2 / 3)`). Keep the UI frame at **3:2**; the small whole-pixel rounding is intentional.
+- **Format:** WebP, white (`#FFFFFF`) opaque canvas, **32 px padding** on each side. Center and proportionally contain the real artwork within 336 × 203 px. Do not crop, stretch, recolor or generate a replacement logo.
+- **Source order:** exact-series Wikidata P154 / approved P18 with Commons file metadata and a supported raster rendition → verified official series-hub artwork → enabled catalog artwork explicitly linked to the same series. An individual game's cover is not automatically series artwork; IMDb images are excluded.
+- **No usable source:** omit `image_url`, retain the coverage/failure evidence and use the common 3:2 UI placeholder. Missing optional series artwork does not block series identity or membership. Do not upload the placeholder as source artwork.
+- **Shared pipeline:** add `series-3x2-v1` normalization inside the existing Go image package, then reuse the avatar/movie-poster GCS bucket, `ObjectKey`, uploader, media ledger, retries, shared Universe failure/stage logging and media renderer. Current `ConvertPoster` preserves source aspect ratio; it does not yet create this fixed canvas. SVG sources need a verified provider-supplied raster rendition supported by the existing decoder.
+- **Finite work:** at most three ranked candidates and one selected output per series, inside the original root's queue and remaining budgets. No member enumeration, fresh roots or recursive waterfall calls.
+
+Namespace the shared deterministic key by canonical series identity and transform version, retaining the source-URL hash. Require a matching **400 × 267 WebP** upload receipt before setting `image_url`; retain source URL, rights, transform parameters and output/storage receipts outside node properties. The UI displays the normalized image without adding the padding again. [Detailed source selection, failure handling and replay rules](/guides/open-work/video-game-waterfall-sources#series-image-selection-and-fallbacks).
+
+### Three series design nodes
+
+These are **source-backed design previews**, without UUIDs, timestamps or embeddings. Their real external image URLs show the selected input artwork; production replaces them with the serving URLs from the shared pipeline. The fuller Elden Ring and Zelda descriptions are source-based editorial previews, not completed runtime generation results.
+
+The series images below simulate the normalized canvas at 300 px display width. They have not been processed or uploaded by the proposed worker.
+
+<div style={{display:'flex', flexWrap:'wrap', gap:'16px', margin:'16px 0'}}>
+  <div>
+    <div role="img" aria-label="Counter-Strike series logo in the locked 3:2 frame" style={{"width": "300px", "maxWidth": "100%", "aspectRatio": "3 / 2", "boxSizing": "border-box", "padding": "24px", "backgroundColor": "#ffffff", "border": "1px solid #d4d4d8", "borderRadius": "12px", "backgroundImage": "url(https://thumb.wikimedia.org/wikipedia/commons/thumb/2/26/Counter-Strike_vertical_logo_%282023%29.svg/330px-Counter-Strike_vertical_logo_%282023%29.svg.png)", "backgroundSize": "contain", "backgroundRepeat": "no-repeat", "backgroundPosition": "center", "backgroundOrigin": "content-box"}} />
+    <p><strong>Counter-Strike</strong></p>
+  </div>
+  <div>
+    <div role="img" aria-label="Elden Ring series logo in the locked 3:2 frame" style={{"width": "300px", "maxWidth": "100%", "aspectRatio": "3 / 2", "boxSizing": "border-box", "padding": "24px", "backgroundColor": "#ffffff", "border": "1px solid #d4d4d8", "borderRadius": "12px", "backgroundImage": "url(https://static.bandainamcoent.eu/high/elden-ring/brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png)", "backgroundSize": "contain", "backgroundRepeat": "no-repeat", "backgroundPosition": "center", "backgroundOrigin": "content-box"}} />
+    <p><strong>Elden Ring</strong></p>
+  </div>
+  <div>
+    <div role="img" aria-label="The Legend of Zelda series logo in the locked 3:2 frame" style={{"width": "300px", "maxWidth": "100%", "aspectRatio": "3 / 2", "boxSizing": "border-box", "padding": "24px", "backgroundColor": "#ffffff", "border": "1px solid #d4d4d8", "borderRadius": "12px", "backgroundImage": "url(https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2a/Zelda_Logo.svg/330px-Zelda_Logo.svg.png?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=thumbnail)", "backgroundSize": "contain", "backgroundRepeat": "no-repeat", "backgroundPosition": "center", "backgroundOrigin": "content-box"}} />
+    <p><strong>The Legend of Zelda</strong></p>
+  </div>
+</div>
+
+Counter-Strike's series record supplies its logo and six developer organisations; that list spans the series and is not Counter-Strike 2's credits. Elden Ring has a separate series identity even though its Wikidata record lacks image/website/developer fields. Its official Universe hub supplies the logo and website, and official developer evidence for verified members supports FromSoftware. [Verified source records and field provenance](/guides/open-work/video-game-waterfall-sources#game-series-card-parameters).
+
+The Legend of Zelda's [exact series record](https://www.wikidata.org/wiki/Q12393) supplies its short description, Nintendo developer claim (`Q8093`), official website and P154 logo. Its generic source description triggers the fallback: the example now uses a neutral summary of [Nintendo's official series overview](https://www.nintendo.com/jp/character/zelda/en/index.html). The developer list is observed coverage, not a claim of completeness.
+
+[Download all three node JSONs](/assets/video-game-waterfall/game-series-card-preview.json).
+
+<Tabs>
+<Tab title="Counter-Strike">
+
+```json
+{
+  "labels": [
+    "Entity",
+    "Game_Series"
+  ],
+  "properties": {
+    "name": "Counter-Strike",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q15717790",
+    "description": "video game series by Valve Corporation",
+    "developers": [
+      "Gearbox Software",
+      "Hidden Path Entertainment",
+      "Nexon",
+      "Ritual Entertainment",
+      "Turtle Rock Studios",
+      "Valve Corporation"
+    ],
+    "official_website": "https://counter-strike.net",
+    "image_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/26/Counter-Strike_vertical_logo_%282023%29.svg/330px-Counter-Strike_vertical_logo_%282023%29.svg.png",
+    "source": "wikidata"
+  }
+}
+```
+
+</Tab>
+<Tab title="Elden Ring">
+
+```json
+{
+  "labels": [
+    "Entity",
+    "Game_Series"
+  ],
+  "properties": {
+    "name": "Elden Ring",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q124706366",
+    "description": "Video game series by FromSoftware, including Elden Ring and Elden Ring Nightreign.",
+    "developers": [
+      "FromSoftware"
+    ],
+    "official_website": "https://en.bandainamcoent.eu/eldenring",
+    "image_url": "https://static.bandainamcoent.eu/high/elden-ring/brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png",
+    "source": "wikidata"
+  }
+}
+```
+
+</Tab>
+<Tab title="The Legend of Zelda">
+
+```json
+{
+  "labels": [
+    "Entity",
+    "Game_Series"
+  ],
+  "properties": {
+    "name": "The Legend of Zelda",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q12393",
+    "description": "Action-adventure game series from Nintendo, following Link's quests through Hyrule's fields and dungeons.",
+    "developers": [
+      "Nintendo"
+    ],
+    "official_website": "https://www.zelda.com/",
+    "image_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2a/Zelda_Logo.svg/330px-Zelda_Logo.svg.png?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=thumbnail",
+    "source": "wikidata"
+  }
+}
+```
+
+</Tab>
+</Tabs>
+
+### Game platform parameters
+
+**Locked September 9, 2026.** `Game_Platform` remains a shared support identity with **no standalone card**. Graphs → [Node Types → Game_Platform properties](/guides/ontology/nodes#game-platform-properties) is the source of truth.
+
+| Parameter | Locked behavior |
+| --- | --- |
+| `name`, `platform_code`, `platform_kind` | Required exact-platform identity fields; retain existing registered codes/kinds |
+| `description` | Required for public platform readiness. One short, factual sentence, maximum **127 Unicode code points**; no generic type-only copy or padding |
+| `official_website` | Optional verified official platform/product URL; exact-platform official support page as fallback. Match the node's console/OS-family granularity |
+| `wikidata_qid` | Optional exact typed alias; canonical UUID and other aliases stay in the shared registry |
+| System fields | Existing UUID, source/revision, timestamps and visibility envelope |
+
+**Platform edge locked:** [Graphs → Edge Types → AVAILABLE_ON](/guides/ontology/edges#available-on) fixes the two directions (`Video_Game` / `Game_Release` → `Game_Platform`), weight 80, required scoped evidence/description, readiness and correction behavior. Platform metadata alone is not evidence that a game was released on it.
+
+Reuse suitable source/previous text and metadata from the admitted platform lookup. If necessary, the coordinator reserves `identity_only → platform_metadata → facts_replay → platform_description if needed → graph_replay`; a missing description uses shared **GLM 5.3 FLASH at low effort**, up to two total model attempts. Resolve one canonical platform once per root and reuse it across all selected games. At most one additional official product/support page may be read for missing evidence or website verification, within the original root network/byte/job limits. Every later job is predeclared and queued by the coordinator; metadata/description leaves cannot schedule work, enumerate games or start a platform/company waterfall.
+
+Website absence is optional coverage. If a supported description cannot be produced, preserve valid existing text or retain an internal pending identity and hide its public platform link; optional platform metadata does not block the game itself from publishing. Missing/failed generation uses shared Universe stage/attempt logging and never becomes a successful empty description. Descriptive metadata neither proves `AVAILABLE_ON` nor creates a maker/developer edge. No platform tagline, image field, media job or new card/display table.
+
+**Examples:** real platform identities and verified official websites, with editorial descriptions based on [PlayStation's PS4 page](https://www.playstation.com/en-us/ps4/) and [Microsoft's Windows hub](https://www.microsoft.com/en-us/windows). These are expected metadata outputs, not live node reads or model-generation receipts. UUIDs, timestamps, visibility and embeddings are omitted. Field-level evidence is in the [downloadable examples](/assets/video-game-waterfall/game-platform-examples.json); `source="wikidata"` names the primary identity source.
+
+```json
+{
+  "labels": ["Entity", "Game_Platform"],
+  "properties": {
+    "name": "PlayStation 4",
+    "wikidata_qid": "Q5014725",
+    "platform_code": "ps4",
+    "platform_kind": "console",
+    "description": "Sony home video game console for games, streaming and entertainment.",
+    "official_website": "https://www.playstation.com/en-us/ps4/",
+    "source": "wikidata"
+  }
+}
+```
+
+```json
+{
+  "labels": ["Entity", "Game_Platform"],
+  "properties": {
+    "name": "Microsoft Windows",
+    "wikidata_qid": "Q1406",
+    "platform_code": "pc_windows",
+    "platform_kind": "operating_system_family",
+    "description": "Microsoft's operating system family for personal computers.",
+    "official_website": "https://www.microsoft.com/en-us/windows",
+    "source": "wikidata"
+  }
+}
+```
+
+### Game engine description
+
+**Node and edge locked September 9:** `Game_Engine` retains its engine-family identity and `engine_kind="game_engine"`, with one factual `description` **≤127 Unicode code points** required for public engine readiness. Graphs → [Node Types → Game_Engine properties](/guides/ontology/nodes#game-engine-properties) and [Edge Types → USES_ENGINE](/guides/ontology/edges#uses-engine) are authoritative.
+
+The locked edge is `Video_Game → USES_ENGINE → Game_Engine`, weight **80**, `layer="evidence"`, `excluded_from_scoring=true`, replay owner `game_context`. Require exact-game use evidence, `engine_use_record_ids`, a non-empty description and the full shared envelope including `source="video_game"` and `evidence_ids`. Optional `engine_versions` contains only evidenced strings, such as `["5"]`; detailed version/platform/build/time correlations stay in AlloyDB. Reuse one semantic edge per canonical game/engine pair. Engine homepages can support node descriptions but do not establish game-use edges.
+
+Reuse useful retained exact-engine source text or an existing supported description. Otherwise the coordinator queues `engine_description` after fact election using shared GLM 5.3 FLASH at low effort, with at most two model attempts inside the original root budget. Deduplicate per canonical engine/root. No worker browsing or cascading work. Invalid/missing text keeps the optional engine/link pending without blocking an otherwise valid game; use shared movie/music logging and actual description provenance. No standalone card is added.
+
+The original coordinator reserves the finite identity → facts → node/edge descriptions → graph replay → public projection dependencies. The edge's missing text uses the shared `describe` job before first write. Public reads require a published game, ready engine and active edge. Replay checks canonical identities and current revisions; corrections re-elect source scope and version summaries, preserve UUIDs and other support, and retire only after the final eligible claim is withdrawn. Description retries and graph repair never trigger new discovery. The [completed Hellblade II example](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples) includes its formerly missing source/evidence references; it remains a simulation.
+
+Updated expected node, omitting system UUIDs/timestamps and embeddings. The description is editorial text based on the [official Unreal Engine overview](https://www.unrealengine.com/); the original Xbox source still supports the engine identity/use example. Field-level source evidence is retained in the [companion JSON](/assets/video-game-waterfall/support-type-examples.json). No runtime model call is claimed.
+
+```json
+{
+  "labels": ["Entity", "Game_Engine"],
+  "properties": {
+    "name": "Unreal Engine",
+    "engine_kind": "game_engine",
+    "description": "Real-time 3D engine for building video games and interactive experiences.",
+    "source": "official_xbox",
+    "source_urls": [
+      "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/",
+      "https://www.unrealengine.com/"
+    ]
+  }
+}
+```
+
+### Game release description
+
+**Added September 9:** include description creation in the Go `Game_Release` pipeline. After release identity/scope resolution and fact election, reuse suitable supported source/existing text or queue a typed `game_release` / `release_description` job. Use shared **GLM 5.3 FLASH (`z-ai/glm-5.3-flash`), nested effort `low`**, and validate one factual sentence **≤127 Unicode code points**. [Graphs → Node Types is authoritative](/guides/ontology/nodes#game-release-description).
+
+Use only the exact release's retained elected game, platform, territory/edition, date precision and status. Do not invent a date component, treat unknown territory as worldwide or describe an announced/delayed release as launched. At most two total model attempts share the original root limits; the original coordinator alone schedules this predeclared later stage. Deduplicate by root, canonical release UUID and input fact revision. The job cannot browse, create endpoints/edges, enumerate a catalog or start another waterfall.
+
+Only validated output matching the current input revision proceeds to bounded graph/public projection replay. Keep model/prompt/input/evidence and actual outcomes in the shared ledger with movie/music stage/attempt logging. The release must have a valid description **and** inherit its parent game's publication before the node or any incident edge becomes public. Failed/insufficient output preserves only still-supported prior text; otherwise keep this optional release/link pending while an independently valid game may publish. Date/status/scope changes refresh the same release's description; stale jobs cannot overwrite the correction. No new card or changes to release identity are introduced.
+
+Updated expected text from the existing Last of Us PS3 fixture:
+
+```json
+{
+  "description": "PlayStation 3 release of The Last of Us, released on June 14, 2013."
+}
+```
+
+This is an editorial example, not a completed model call. The [rendered release JSON and source evidence](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples) are synchronized. This is a build requirement; the Go stage remains to be implemented.
+
 ## AlloyDB and Go ownership
 
 Reuse shared `entities`, `entity_identifiers`, `enrichment_payloads`, `enrichment_attempts`, `enrichment_stages`, `enrichment_queue` and `entity_facts`. Exact migrations below are proposed; check existing reusable schemas first.
@@ -833,7 +1152,7 @@ Reuse shared `entities`, `entity_identifiers`, `enrichment_payloads`, `enrichmen
 | Proposed logical storage | Key / responsibility |
 | --- | --- |
 | `game_profile` | One row per canonical game UUID; selected fields, source coverage, successful refresh timestamps. |
-| `game_release` | Game + provider release identifier, or a reviewed composite of platform/territory/edition/date precision. Never a guessed date-based global identity. |
+| `game_release` | Canonical game + exact platform + evidenced territory/edition or source-local unspecified scope; opaque immutable `release_scope_key` per Node Types. Dates, precision, status and outcome are mutable facts, never identity components. A verified provider release ID is a typed alias; a provider date-assertion ID is not automatically a release identity. |
 | `game_source_record` / snapshot | Source + external record ID + revision/hash; GCS object/generation, retrieval status, permitted retention, completeness scope. Reuse the existing payload ledger if it can express this. |
 | `game_relation_mention` | Unique source snapshot + statement/credit ID. Typed subject/predicate/object, literal role, qualifiers, evidence locator, resolution state. |
 | `game_relation` / pending replay | Stable semantic relation key, chosen-fact scope, exact qualifier rows, source generation, node readiness, graph revision, active/retracted state. |
@@ -852,6 +1171,7 @@ Weights use the existing **lower = stronger** convention. Reused weights below a
 | --- | ---: | --- | --- |
 | Person → `WORKED_ON` → Video_Game | 30, reused | Explicit role; all roles/languages/characters/versions retained. One edge per person/game pair; detailed credit records in SQL. | Core |
 | Video_Game → `DEVELOPED_BY` → Company | 35, new | Named developer; lead/co-development/porting/support role if stated. Specific studio, not automatically its parent. | Core |
+| Game_Series → `DEVELOPED_BY` → Company | 35, series endpoint extension | Elected exact-series developer statement or exact admitted member development + membership. Preserve direct/member scope; create/reuse Company identity and write the edge. Never expand to all member games. | Required when evidenced |
 | Video_Game → `PUBLISHED_BY` → Company | 45, game endpoint extension | Named publisher; preserve territory, platform and dates in scoped records. Existing publication → company uses weight 20 and remains unchanged. Distribution is not silently publishing. | Core |
 | derivative → `BASED_ON` → source | 55, adaptation proposal | Explicit P144/P4969, normalized once. Endpoints add Video_Game to existing film/stage/work support. | Core bridge |
 | Release_Group or Music_Work → `SOUNDTRACK_FOR` → Video_Game | 55, new | Explicit score/soundtrack relation. Album ≠ composition ≠ recording. | Music slice |
@@ -861,13 +1181,13 @@ Weights use the existing **lower = stronger** convention. Reused weights below a
 | Video_Game → `EDITION_OF` → Video_Game | 60, new | Explicit remake/remaster/edition relation with `edition_kind`. Do not synthesize from a similar name. | Release slice |
 | Video_Game → `EXPANSION_OF` → Video_Game | 60, new | Expansion/DLC and its base game identified separately. | Release slice |
 | Game_Release → `RELEASE_OF` → Video_Game | 30, endpoint extension | Release/platform/territory record belongs to this game; separate dispatch from the music release writer. | Release slice |
-| Video_Game or Game_Release → `AVAILABLE_ON` → Game_Platform | 80, new | Confirmed release availability, with release context. Announced platforms remain pending availability. | Optional context |
-| Video_Game → `USES_ENGINE` → Game_Engine | 80, new | Explicit engine and version evidence. | Optional context |
-| Video_Game → `HAS_AWARD` → Game_Award | 40, reused | Award body + ceremony/year + category + nominee entry, including recipient scope when applicable; outcome is mutable. Distinguish winner and nomination; never an eternal category hub. | Award slice |
+| Video_Game or Game_Release → [`AVAILABLE_ON`](/guides/ontology/edges#available-on) → Game_Platform | 80, locked proposed contract | Confirmed exact-platform availability; required availability records and description. Published game plus ready platform; announcements remain pending. | Optional context |
+| Video_Game → [`USES_ENGINE`](/guides/ontology/edges#uses-engine) → Game_Engine | 80, locked proposed contract | Explicit game-use records; optional evidenced version strings; required description/source/evidence and endpoint readiness. | Optional context |
+| Video_Game → [`HAS_AWARD`](/guides/ontology/edges#game-has-award) → Game_Award | 40, locked endpoint extension | Exact nominee-entry evidence, mandatory description/full envelope, `award_evidence_record_ids` and synchronized `award_result`; outcome changes preserve identity | Award slice |
 | Explicit Person/Company → `WON_AWARD` / `NOMINATED_FOR` → Game_Award | 30 / 35, reused | Named recipient only. A game's win does not award every employee or credited person. | Award slice |
 | Person → `HAS_EXPERTISE` → existing expertise taxonomy | Existing policy | Versioned role-to-expertise mapping with game evidence. Expertise writer gets no discovery capability. | Follow-on slice |
 
-`Game_Platform`, `Game_Engine`, `Game_Series`, `Game_Release` and `Game_Award` are support entities with stable scoped identities, not automatic standalone cards. Genres/themes remain properties, following Music. An affinity for a game is private user-graph data referencing the same public game UUID; the enrichment pipeline cannot infer it from employment or credits.
+`Game_Platform`, `Game_Engine`, `Game_Series`, `Game_Release` and `Game_Award` are support entities with stable scoped identities. Cards require explicit contracts: series parameters are reviewed above, and the award card now [reuses the associated game's artwork](#game-award-card-artwork). Platforms, engines and releases have no standalone cards. Genres/themes remain properties, following Music. An affinity for a game is private user-graph data referencing the same public game UUID; the enrichment pipeline cannot infer it from employment or credits.
 
 **Shared names have endpoint-specific owners.** The game extension of `PUBLISHED_BY` does not change the publication writer or its weight. `RELEASE_OF` dispatch distinguishes game releases from music releases. For this build, `BASED_ON` edges have at least one `Video_Game` endpoint and use one shared adaptation replay owner; the older theatre-only `ADAPTED_FROM` proposal is not a second writer for the same game relationship. A stage work ↔ game adaptation uses `BASED_ON` exactly once. Any later unification of the non-game adaptation names requires an explicit migration, not dual emission.
 
@@ -877,9 +1197,13 @@ All graph writes use the shared parameterized writer, stable UUID keys, preserve
 
 Common envelope: `uuid`, `created_at`, `updated_at`, `source`, `source_urls`, `evidence_ids`, `chosen_fact_ids`, `projection_revision`, `policy_version`, `active`, `weight`, `layer`, `excluded_from_scoring`, `description`, `description_generated_at`. UUIDs and descriptions are generated by the proposed system; source identifiers, literals and qualifications must have evidence.
 
+**Required edge descriptions — September 9:** every edge must have a non-empty evidence-grounded `description` before first materialization. Reuse still-valid existing/source text; otherwise queue `describe` through the shared registry using **GLM 5.3 FLASH (`z-ai/glm-5.3-flash`), effort `low`**, with `ReasoningEffortNested: "low"`. Keep the original root's job/LLM/attempt budgets and shared movie/music error logging. Failure leaves the relation pending, not an empty completed edge. Store model/prompt/input provenance in the description ledger and refresh invalidated text after fact correction; retractions do not wait for generation. **Runtime gap:** the shared Go edge-description configuration currently uses this model at `max`; low effort and pre-write description gating still require implementation and validation. [Normative description and creation contract](/guides/ontology/edges#required-description-and-queued-creation).
+
 For `WORKED_ON`, add `roles`, `role_labels`, `character_names`, `credit_record_ids`, optional language/platform/edition summaries, `resolution_method` and `credit_coverage`. The scalar primary role is a display choice only; it must not replace the role set. A source claim's reliability and a person's identity resolution are separate decisions. No name-only automatic attachment. A high-confidence extraction attached to the wrong human is still wrong.
 
 For company relationships, keep **correlated scope tuples** in SQL: publisher + territory + platform + time interval + source. Flattened territory and platform arrays are display summaries only; joining those arrays must never assert every territory/platform combination. Regional publisher variants can coexist. Ownership, acquisition, employment and licensing belong to their own independently evidenced relations, never inferred from these edges.
+
+For `DEVELOPED_BY`, follow the [authoritative typed property table and creation contract](/guides/ontology/edges#developed-by). A game edge requires `company_role_record_ids`. A direct series edge requires `development_scopes` and `series_developer_record_ids`; member support additionally requires the exact `supporting_game_ids`, `company_role_record_ids` and `membership_record_ids`. One shared game company owner elects both variants; `source="video_game"` identifies its lane and provider provenance remains in the ledger. `developers` is a name projection, not another fact source. [Series evidence and Company creation](#evidenced-series-developers).
 
 For `BASED_ON`, retain `source_property` as actually observed (`wikidata:P144` or `wikidata:P4969`), the observed subject/object QIDs and normalized `derivative_qid` / `original_work_qid`. Do not overwrite provenance to P144 after inversion. One edge per ordered endpoint pair can have multiple supporting statements. Its owner is the adaptation replay lane, not both the film and game writers.
 
@@ -895,6 +1219,7 @@ The adaptation draft's one-sentence **25–45 word** description convention is r
 | Which partner studio delivered a port or localization? | Explicit company contribution and scoped release/credit evidence, not the parent publisher's identity. |
 | Which people have repeated substantive collaboration? | Query distinct games and compatible role/time evidence. Do not materialize an O(n²) “knows” clique from a cast list. |
 | How do titles in a series share creative teams? | Existing credited games plus series context; traversal does not enqueue undiscovered series titles. |
+| Which studios have evidenced development involvement in this series? | Series → DEVELOPED_BY → Company, with direct-series or exact-member evidence; do not imply every studio worked on every title. |
 | Who actually received an award? | Named recipient-to-scoped-result edges, separate from the game's recognition. |
 
 Potential later edges—rights licensor, localization, outsourcing, middleware supplier, distribution and development funding—are worth collecting as typed pending evidence. Add active predicates only after exact semantics, reliable source fixtures, owner, endpoints, weights and correction behavior are specified. A rights-owner inference from a publishing credit is not a shortcut.
@@ -911,24 +1236,17 @@ Serialize updates through a durable per-source/object generation row. An empty r
 
 ## Projections and product behavior
 
-Reuse the **`film_tv_display` physical card contract** with a `video_game` discriminator as the default, following current docs conventions. The new canonical entity type does not require a new card table. A first-class game panel would be a separate UI decision. Do not assume the existing publish service already supports it: add a typed projection package and prove round-trip identity/type handling.
+Reuse the **`film_tv_display` physical card contract** with a `video_game` discriminator as the default, following current docs conventions. The new canonical entity type does not require a new card table. Series and award cards also require typed versioned payloads and a proven consumer mapping; platform, engine and release remain cardless. A first-class game panel would be a separate UI decision. Do not assume the existing publish service already supports it: add a typed projection package and prove round-trip identity/type handling.
 
-Use existing `person_display` and `company_display` for endpoints. Music keeps its own existing card contracts; support series/platform/release/award nodes do not automatically create new display tables. Projections carry schema version, source/graph revision, canonical UUID, generation and run receipt; apply updates monotonically. They cannot overwrite private notes, contacts or user affinity data.
+Use existing `person_display` and `company_display` for endpoints. Music keeps its own existing card contracts; series and award cards reuse compatible projection infrastructure or add a typed consumer mapping; support-node existence alone never creates a physical display table. Projections carry schema version, source/graph revision, canonical UUID, generation and run receipt; apply updates monotonically. They cannot overwrite private notes, contacts or user affinity data.
 
 Apply the [game publication gate](#game-publication-gate): no public game node, card or incident relationship before the required game facts, game-source artwork and publication receipts succeed. After publication, show partial credit coverage as partial and future games as announced when verified. Unresolved relationships and placeholder artwork belong only in internal review. Rehost permitted game-source art through the shared avatar/movie-poster file pipeline into `game-thumbnail/`; IMDb artwork and movie display fields are excluded.
 
 ## Implementation sequence and acceptance
 
-| Phase | Concrete deliverable | Exit check |
-| --- | --- | --- |
-| 0. Contracts and replay fixtures | Type registration, aliases, role map, output manifest, source capability registry, frozen examples | Same-name game/movie/remake cases and all identity aliases resolve correctly; missing Wikidata edge stays missing. |
-| 1. Finite scheduler | Root admission, immutable manifests, budget reservations, scoped jobs, leases/outbox, explicit game dispatcher | Company/game/person cycles cannot enqueue a new root; retries cannot replenish budget or broaden scope. |
-| 2. Wikidata + IMDb + person-role intake | Reused IMDb snapshots, raw role registry/probe, typed claims, identifiers, game/credit/company ledgers | Elden Ring retains both Miyazaki roles, 11 distinct people, regional publishers and numeric aliases. |
-| 3. Election and graph | Required node/edge registration, pending replay, exact fact scope, merge handling | Flat counts/stable UUIDs on replay; no edge before election; source withdrawal repairs graph. |
-| 4. Company + adaptation entries | Bounded company catalog and both Wikidata relation directions; theatre callback contract | The Last of Us and Hamlet inverse-P144 fixtures pass; mixed company business and wrong endpoint types are rejected. |
-| 5. Music + recognition + support types | Music-to-game intake, exact soundtrack/recording bridges, The Game Awards adapter, typed series/platform/engine and conditional scoped releases under `games-v1` | No album-as-composition mistake; no award-to-everyone; no catalog expansion by music leaves. |
-| 6. Publication and bounded canary | Hidden game stubs, required game artwork, game-owned display fields, revisioned activation, metrics/runbook | No public game before successful game publication; no IMDb artwork/movie-field leakage; all production feature flags are deliberate. |
-| 7. Optional commercial adapter | Entitlement-aware Moby/IGDB adapter and held-out coverage comparison | Measure incremental correct edges per cost; no dependency on a paid provider for core operation. |
+The [phased build guide](/guides/open-work/video-game-waterfall-build-guide) replaces the earlier coarse phase table. Complete its phase 0–8 gates in order, record machine-readable receipts, and rerun affected predecessor gates after shared-contract changes. Publication guards are implemented in phase 1, before an upstream hook or provider worker can expose a game. Full support and bridge behavior is tested before live intake or rollout. Optional commercial sources have their own capability gates and never block the core build.
+
+The adversarial checks below remain requirements; their executable case IDs and phase ownership are in [build-evals.json](/assets/video-game-waterfall/build-evals.json). A documentation fixture is not evidence that those runtime checks have passed.
 
 ### Required adversarial checks
 
@@ -959,7 +1277,12 @@ Apply the [game publication gate](#game-publication-gate): no public game node, 
 - Complete empty replacement retracts only its own scoped evidence; partial extraction and provider failure retract nothing; old-generation pages cannot resurrect evidence.
 - P144 only, P4969 only, reciprocal duplicate, unsupported source, conflicting QID and missing relation each produce the specified distinct outcome.
 - No developer→parent substitution, employee→game inference, composer→album COMPOSED edge, everybody→award edge, or cast→KNOWS clique.
+- `DEVELOPED_BY` retries converge on one canonical pair/UUID; source additions and multiple roles retain correlated records. Direct-only series evidence creates no member records; member support must join the same game. A missing Company is seeded through queued identity-only work and receives no full waterfall. Hidden member support cannot leak through a mixed-support edge.
+- No new edge can be written with a missing/blank description. Suitable text is reused; otherwise the request uses exactly `z-ai/glm-5.3-flash` with nested reasoning effort `low`. Invalid/empty output, injected instructions in source text, timeout and exhausted LLM budget leave explicit pending/failure states. Stale descriptions cannot pass a newer fact revision; final-support retraction succeeds without a model call.
+- Platform metadata reuses one canonical identity across selected games, with no standalone card/image job. Descriptions are useful, factual and ≤127 Unicode code points; generic/empty output cannot mark the platform ready. A missing website stays absent; a PS4 URL redirected to PS5 or a generic company page is rejected. One additional official page and two model attempts are per-platform ceilings within the unchanged shared root limits; missing metadata hides only the optional platform projection/link, not an otherwise valid game.
 - Movie/music regression fixtures retain their original dispatch, tier, limits, graph weights and projection behavior.
+- A game-release description uses only one correlated release scope, stays ≤127 Unicode code points and preserves source date precision/status. Unknown territory and missing date parts remain unstated. Empty/invalid output, timeout and exhausted model budget leave the optional release/link pending; a stale description cannot overwrite a newer release-date/status revision or change the release UUID. The parent game can publish independently, and no generation/retry launches another waterfall.
+- `USES_ENGINE` examples resolve every `engine_use_record_ids` and `evidence_ids` entry to the same exact game/engine evidence. A missing version emits no version field; correcting a version preserves the edge UUID and other scoped support. Engine product pages, trailers or middleware do not create inferred game-use edges. Both node and edge descriptions gate public readiness, with no new root on metadata/description/replay work.
 
 ### Coverage and rollout
 
