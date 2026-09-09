@@ -5,7 +5,7 @@ description: "Source of truth for every FalkorDB edge in the Orbiter graph — p
 
 Core graph edge relationship types plus enrichment-specific edge sets, organized by logical group.
 
-**Video game contract synchronized September 8, 2026:** [game edge directions, weights, properties, ownership and real examples](#video-game-edges). These are Go/GCP build contracts, not deployed game writers.
+**Video game contract synchronized September 9, 2026:** [game edge directions, weights, properties, ownership and real examples](#video-game-edges), including the [complete DEVELOPED_BY contract](#developed-by). These are Go/GCP build contracts, not deployed game writers.
 
 Most core entries on this page are generated from the live `util.template_engine` (and `api.lambda`-built) Cypher blocks inside Xano workspace 3. Compact enrichment inventories, such as MusicBrainz, point to the deeper pipeline-specific implementation pages. Entries include:
 
@@ -16,6 +16,8 @@ Most core entries on this page are generated from the live `util.template_engine
 **Weight convention:** Lower numbers indicate stronger / more important relationships. Every edge uses the integer 1–100 scale (identity bridges at 1, hub damping at 100) — the IMDB film/TV edges' old sub-1 weights were raised to 30–40 by the §3.6 audit (2026-05-31); never write sub-1 weights.
 
 **Deployment convention:** an edge name shown in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> is specified on this page but has no live writer yet — see [Person Relationship Edges](#person-relationship-edges) and [Enrichment Engine v1.2 Edges](#enrichment-engine-v12-edges). The colour comes off when the writer ships.
+
+**Required description policy — September 9, 2026:** every edge must have a non-empty, evidence-grounded `description`. Reuse suitable existing/source text; when missing, generate with **GLM 5.3 FLASH (`z-ai/glm-5.3-flash`), reasoning effort `low`**, before creating the edge. Queue generation in queued waterfalls and retain actual provenance; failed generation leaves the relation pending. Historical writer extracts below describe their audited behavior and may predate this requirement; they do not establish compliance. See the [creation and description contract](#required-description-and-queued-creation) for the game implementation and its known runtime gap.
 
 <Note>
   **Historical writer audit: 2026-07-09** — the original patterns and quoted Cypher describe the legacy writers. **Theatre specification revised: 2026-09-06** — [Go theatre edges](#theatre-edges), endpoint rules and property examples are proposed development contracts, not deployed writers. This addition does not re-audit unrelated sections.
@@ -1225,7 +1227,7 @@ ON MATCH SET
 ## Video game relationships — proposed Go contract
 
 <Info>
-**Synchronized September 8, 2026; game writers remain proposed.** This is the graph output reference for the [Go/GCP game waterfall](/guides/open-work/video-game-waterfall), with [node types and image examples](/guides/ontology/nodes#video-game-nodes). Every game-domain edge starts with `excluded_from_scoring: true`. Existing movie/music/publication edges keep their current behavior. Weights below are proposed endpoint-specific traversal values, not evidence of interpersonal closeness.
+**Baseline September 8, 2026; series developer extension locked September 9; game writers remain proposed.** This is the graph output reference for the [Go/GCP game waterfall](/guides/open-work/video-game-waterfall), with [node types and image examples](/guides/ontology/nodes#video-game-nodes). Every game-domain edge starts with `excluded_from_scoring: true`. Existing movie/music/publication edges keep their current behavior. Weights below are proposed endpoint-specific traversal values, not evidence of interpersonal closeness.
 </Info>
 
 **Movie-credit handoff:** a stored person credit for a game queues the [same existing game identity into the game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). Retain each role/character assertion and reconcile existing `WORKED_ON` credits through one elected game replay owner. The trigger is durable upstream evidence; creating or replaying the graph edge must not launch discovery. Pending game nodes and their incident edges remain internal until the [game publication gate](/guides/open-work/video-game-waterfall#game-publication-gate) succeeds; public readers enforce readiness on both endpoints.
@@ -1244,6 +1246,7 @@ Rows reserve endpoint contracts; a reused edge name does not authorize its exist
 | --- | --- | ---: | --- | --- |
 | `WORKED_ON` — extension | Person → Video_Game | 30 | `roles`, `role_labels`, `character_names`, `credit_record_ids`, `credit_coverage`; keep language/platform/edition scope | Core |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>DEVELOPED_BY</span> | Video_Game → Company | 35 | Named development credit; literal role and scope in relation records; no parent-company inference | Core |
+| `DEVELOPED_BY` — series endpoint extension | Game_Series → Company | 35 | Elected direct series developer claim or an elected member development credit joined to that exact member's elected series membership; preserve the basis and member scope | Required when evidenced |
 | `PUBLISHED_BY` — extension | Video_Game → Company | 45 | Named publisher; correlated territory/platform/date records; no distribution-to-publishing inference | Core |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>BASED_ON</span> | Derivative → source, with at least one Video_Game endpoint | 55 | `source_property`, observed subject/object, normalized derivative/source QIDs, description evidence | Core cross-media bridge |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>SOUNDTRACK_FOR</span> | Release_Group or Music_Work → Video_Game | 55 | Explicit soundtrack/score relation and exact music identity; album and composition remain distinct | Music slice |
@@ -1253,8 +1256,8 @@ Rows reserve endpoint contracts; a reused edge name does not authorize its exist
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>EXPANSION_OF</span> | Video_Game → Video_Game | 60 | Explicit expansion/DLC-to-base relation; separate verified identities | Release slice |
 | `RELEASE_OF` — extension | Game_Release → Video_Game | 30 | Exact release identity and scoped platform/territory/edition; distinct dispatch from music Release → Release_Group | Release slice |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>AVAILABLE_ON</span> | Video_Game or Game_Release → Game_Platform | 80 | Confirmed availability; retain release/version/date context | Optional context |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>USES_ENGINE</span> | Video_Game → Game_Engine | 80 | Explicit engine and version evidence | Optional context |
-| `HAS_AWARD` — extension | Video_Game → Game_Award | 40 | Scoped award body/category/ceremony/nominee entry; separate same-game recipient entries; outcome is mutable | Awards slice |
+| <span style={{ color: "#16a34a", fontWeight: 600 }}>USES_ENGINE</span> | Video_Game → Game_Engine | 80 | [Locked engine-use contract](#uses-engine): required use-record references and description; version strings only when evidenced | Optional context |
+| `HAS_AWARD` — extension | Video_Game → Game_Award | 40 | [Locked recognition contract](#game-has-award): scoped award-evidence records, consistent current outcome and required description; separate same-game recipient entries | Awards slice |
 | `WON_AWARD` — extension | Explicit Person or Company → Game_Award:Winner | 30 | Named recipient evidence, independent of the game's award | Awards slice |
 | `NOMINATED_FOR` — extension | Explicit Person or Company → Game_Award:Nominee | 35 | Named nominee evidence; no credit-list fan-out | Awards slice |
 
@@ -1266,12 +1269,14 @@ Existing music-owned `RELEASED`, `COMPOSED`, `PERFORMED` and related edges remai
 
 ### Locked game relationship contract — games-v1
 
+**Build handoff:** all fifteen families below need writer/description/evidence/correction/public-read coverage. The [phase guide](/guides/open-work/video-game-waterfall-build-guide) and [eval catalog](/assets/video-game-waterfall/build-evals.json) assign those gates. Older simulation rows are not automatically complete golden writer inputs; phase 0 supplies missing scoped references from retained evidence without changing its facts.
+
 **Design baseline locked September 8, 2026.** The inventory above fixes names, directions and weights; this table fixes admission and ownership. Runtime writers remain proposed. [Source coverage](/guides/open-work/video-game-waterfall-sources) and [six node contracts](/guides/ontology/nodes#game-type-contract-v1) must pass before an endpoint extension activates. The existing endpoint-specific weights stay unchanged.
 
 | Relationship | Accepted evidence and additional properties | Single replay owner / rejection rule |
 | --- | --- | --- |
 | `WORKED_ON` | Explicit named person/game credit from retained IMDb, typed Wikidata, official credit or enabled licensed source; `roles`, scoped credit-record IDs, optional character/language/version | Game credit replay; role title, employment, award proximity or name-only match cannot create the credit |
-| `DEVELOPED_BY` | Exact developer or explicitly described co-development/port-development role; `development_role`, correlated role/scope-record IDs | Game company replay; parent ownership or a generic “supporting” company flag does not establish development |
+| `DEVELOPED_BY` | Video_Game → Company: exact development/co-development/port-development role. Game_Series → Company: direct series developer evidence or exact elected member development plus membership. Preserve `development_role`, `company_role_record_ids`; series variants also carry `development_scopes`, `series_developer_record_ids` and member references when applicable | One game company replay owner for both endpoint variants. Accepted evidence requires Company identity creation/reuse and edge replay; parent ownership, publisher billing and names copied from a card cannot establish development |
 | `PUBLISHED_BY` | Explicit publisher with scoped territory/platform/time records | Game company replay; distribution, rights ownership and unlabeled company billing stay distinct |
 | `BASED_ON` | Explicit derivative/source relation, preserving original P144/P4969 direction and qualifiers | Shared adaptation replay; never infer from shared franchise, sequel order or Best Adaptation category alone |
 | `SOUNDTRACK_FOR` / `USED_IN` | Exact music endpoint plus game relation; soundtrack/work/recording kind and scoped usage records | Music/game bridge replay; named composer or an album track list alone cannot establish the bridge |
@@ -1281,20 +1286,265 @@ Existing music-owned `RELEASED`, `COMPOSED`, `PERFORMED` and related edges remai
 | `RELEASE_OF` | Resolved `Game_Release` scope with one canonical game target; release-scope record IDs | Game release replay; exactly one active game target, no date-only release identity |
 | `AVAILABLE_ON` | Exact platform plus verified released/availability scope; `availability_record_ids`, optional `release_entity_ids`, territory/date summaries | Game release/context replay; announced, backward-compatible or cloud-streamed alone is insufficient. Scoped SQL records are authoritative |
 | `USES_ENGINE` | Explicit engine use on the exact game; `engine_use_record_ids`, optional `engine_versions`, scoped release/platform/time references | Game context replay; do not infer from a studio's tools, a trailer or middleware usage |
-| `HAS_AWARD` | Game associated with a resolved ceremony/category/nominee entry; award-evidence record IDs | Game recognition replay; the game is context for a named-person award, not a claim every contributor won |
+| `HAS_AWARD` | Game associated with a resolved ceremony/category/nominee entry; required non-empty `award_evidence_record_ids` plus the common envelope. [Complete node and edge example](/guides/open-work/video-game-waterfall-game-awards#complete-award-node-and-game-edge) | Game recognition replay; the game is context for a named-person award, not a claim every contributor won |
 | `WON_AWARD` / `NOMINATED_FOR` | Explicit independently resolved Person/Company recipient of that particular entry; recipient-record IDs | Game recognition replay; billing an organization next to a game does not make it an award recipient |
 
 These owner names designate modules/stages in the **shared Go application and queue**, not new services. They consume elected facts and bounded manifests. A writer cannot trigger source discovery, full person/company enrichment, an award archive or another game's waterfall. Related games needed for version/adaptation endpoints remain hidden identity-only stubs unless already independently admitted or published.
 
 **Edge identity and cardinality:** one semantic edge per canonical ordered endpoint pair and edge family, shared across supporting sources. Multiple roles, engine versions, publishing regions or release observations become correlated SQL records referenced by that edge; they do not become duplicate parallel edges or Cartesian products. `RELEASE_OF` additionally enforces one active parent per release. Merges rekey through the canonical resolver; stale aliases cannot resurrect an obsolete endpoint. Reject game-to-itself adaptation/edition/expansion claims after alias resolution; a second alias does not create a second work.
 
-**Availability projection:** a release → platform edge describes that exact release. A game → platform edge is a deduplicated summary supported by explicit game availability and/or elected released scopes of the same canonical game. Both use the same owner; the summary is not a second source assertion or a second unit of scoring support. Never aggregate a separately identified remake into its original. If its final eligible scope is withdrawn, retire the summary edge. A surviving historical release supports “released on”; current store sale status is a separate time-scoped fact, so delisting does not erase release history.
+<a id="developed-by" />
+
+### DEVELOPED_BY
+
+**Authoritative property and creation contract — September 9, 2026.** The game build plan and machine-readable contract must follow this entry. Status: proposed Go/GCP writer; documenting an edge does not mean it exists in production.
+
+| Contract | Required behavior |
+| --- | --- |
+| Allowed direction | `Video_Game → DEVELOPED_BY → Company` or `Game_Series → DEVELOPED_BY → Company` |
+| Meaning | The specific company has elected development involvement in that game or series. A series edge does not establish development of every member |
+| Owner | `game_company` fact/graph replay in the shared Go application |
+| Identity | One stable semantic edge per edge family and canonical ordered endpoint pair, shared by all supporting sources and roles |
+| Weight / scoring | `weight=35`, `layer="evidence"`, `excluded_from_scoring=true` |
+| Company creation | Reuse the canonical identity or queue a minimal `Entity:Company` identity when admitted evidence resolves a missing organization. Do not substitute its parent |
+
+#### DEVELOPED_BY properties
+
+The graph contains primitive scalars and lists. Evidence records with correlated qualifiers live in AlloyDB. Required lists must be non-empty for an active edge; optional empty properties are omitted. Names and QIDs in the example's endpoint wrappers are review aids, not relationship properties or replacements for canonical UUIDs.
+
+| Property | Type | Requirement and meaning |
+| --- | --- | --- |
+| `uuid` | string / UUID | Required. Resolve or allocate once through the shared semantic relation registry; preserve across retries and source additions |
+| `created_at` | integer, epoch milliseconds | Required. Set once on first materialization, never from the source's publication/release date |
+| `updated_at` | integer, epoch milliseconds | Required. Application-managed time of an accepted material change; a no-op retry preserves it |
+| `source` | string | Required: `video_game`, the writing lane. `game_company` is its replay owner; actual evidence providers are retained in the source ledger and URLs |
+| `source_urls` | string[] | Required. URLs for the surviving eligible evidence, pinned to a source revision where available |
+| `evidence_ids` | string[] | Required. Immutable evidence references; Wikidata statement IDs identify assertions whose snapshots/revisions remain in the ledger |
+| `chosen_fact_ids` | string[] | Required. Elected fact IDs supporting this exact relationship, including both developer and membership facts when using member support |
+| `projection_revision` | integer | Required. Monotonically accepted revision, enforced by the shared fenced replay so older work cannot resurrect a retired relation |
+| `policy_version` | string | Required. Pinned version of the policy that elected the materialized facts |
+| `active` | boolean | Required. `true` only while eligible support survives; retained retired records use `false` and are excluded from public traversal |
+| `weight` | integer | Required: `35` |
+| `layer` | string | Required: `evidence` |
+| `excluded_from_scoring` | boolean | Required: `true` for both endpoint variants |
+| `description` | string | Required, non-empty and evidence-grounded **before a new edge is written**. Reuse suitable text; otherwise generate with GLM 5.3 FLASH at low effort under the description rule below |
+| `description_generated_at` | integer, epoch milliseconds | Required when writing the validated description. Preserve with unchanged text/input; the description ledger distinguishes source reuse from model generation |
+| `development_role` | string | Optional lossless role summary. P178 can support `developer`, not an invented lead/co-development/porting role. If surviving scopes have different roles, omit this scalar rather than choosing one; retain all roles in their records |
+| `company_role_record_ids` | string[] | Required for a game edge and for series member support. References exact game/company development records, preserving any evidenced platform, edition, territory and time qualifications |
+| `development_scopes` | string[] | Required only for series edges. Sorted unique values: `series_explicit`, `member_credit`, or both |
+| `series_developer_record_ids` | string[] | Required only for series edges. Each record binds this series/company pair to a direct statement or to the same member's development **and** membership records |
+| `supporting_game_ids` | string[] / UUIDs | Required when series support includes `member_credit`. Canonical IDs of those exact admitted members; do not expose unpublished member support |
+| `membership_record_ids` | string[] | Required when series support includes `member_credit`. Elected memberships for those same games in this exact series |
+
+**Conditional fields:** a direct series-only claim needs `development_scopes=["series_explicit"]` and `series_developer_record_ids`; it does not manufacture member/game-role records. A member-supported series edge needs all five scope/reference arrays. A game edge needs `company_role_record_ids` and omits the series-only arrays. A mixed series edge retains both bases, with each basis correlated in its own ledger record; arrays must never be cross-joined into new facts. Do not copy game/series descriptions, images, `developers` arrays, company logos or model configuration onto the edge.
+
+#### Required description and queued creation
+
+**Description rule:** every game edge requires a non-empty factual `description`. Reuse an existing or source-provided sentence only if it still describes the elected endpoints and scope. Otherwise queue `describe` using **`z-ai/glm-5.3-flash`**, **`ReasoningEffortNested: "low"`** (`reasoning: {"effort": "low"}`). The model sees retained eligible facts only; it cannot create evidence or discover endpoints. Keep the shared provider routing, usage accounting, prompt validation, attempt logging and original root limits. No blank edge, fabricated description receipt or silent model substitution on failure. Existing edge-specific length rules still apply; the Game_Series node's 127-character limit is not an edge limit.
+
+**Runtime gap:** the inspected Universe shared `edgeDescriptionConfig` currently selects this model with effort `max`; it does not yet satisfy the requested `low` setting. The game build must configure and validate low effort through the shared registry, including factuality, embedded-source-instruction rejection and non-empty output. This documentation update does not change or certify existing movie/music writers.
+
+1. **Retain and elect evidence.** Land the exact source assertion, revision, provider, qualifiers and entitlement/coverage outcome. Accept explicit development evidence; for member-derived series support require the developer credit and membership of the **same** admitted game. Publisher billing, employment, ownership and a display name alone cannot pass election.
+2. **Reserve the bounded work.** Only the original root coordinator admits endpoints and predeclared later jobs. Freeze the combined Company manifest and atomically reserve existing root/per-game limits with durable job/outbox records. The series evidence stage emits claims, never its own jobs.
+3. **Resolve endpoints.** Reuse canonical series/game and Company UUIDs; queue `identity_only` for a missing, resolvable Company. Conflicting identities remain pending. Recheck canonical aliases before commit. No full Company waterfall, company catalog or member-game enumeration.
+4. **Build the elected relation.** `game_company` gathers surviving scoped records under the canonical pair, with one relation UUID and desired projection revision. It queues required later work through the coordinator. Company leaves and graph writes never trigger discovery.
+5. **Prepare the description.** Reuse valid evidence-grounded text or run the reserved `describe` job. Validate against the desired endpoints, evidence and revision; retain actual model, effort, prompt/input hash and output provenance in the description ledger. Failure leaves `description_pending` or the applicable failure/budget reason and blocks first edge materialization. Never use a description as proof that an edge exists.
+6. **Replay, then publish.** The shared parameterized graph writer consumes the elected payload and validated description, preserving UUID/creation time and enforcing the current revision/lease fence. Record graph and display receipts before declaring completion. Public output requires `active=true`, both endpoints ready and, for member support, the supporting game's publication. The series `developers` list updates from these eligible associations under the same projection revision; a name-only write is not completion.
+7. **Correct without recursion.** Retries resume the same relation and budget. Re-election recomputes records, fields and text from surviving support; an invalidated description hides the affected projection until repaired. Final support withdrawal retires the edge and projected developer name without waiting for a model call, preserving the Company and unrelated edges. Partial coverage cannot retract omitted claims. Use the [shared Universe failure/stage/attempt logging](/guides/open-work/video-game-waterfall#shared-universe-error-logging-required); no new game-only error vocabulary.
+
+The finite order is `retained source evidence → identity_only / fact election → describe if needed → graph_replay → publish`. For series, `series_evidence` precedes Company resolution. All steps retain the original root, manifest and generation. A graph may contain cycles; this dependency chain cannot recurse.
+
+#### Zelda → Nintendo example
+
+Wikidata's exact series item **The Legend of Zelda (`Q12393`)** has developer **Nintendo (`Q8093`)**, P178 statement `Q12393$cb44d861-42e7-52b9-da05-eb61a8767e64`, in [revision 2540158156](https://www.wikidata.org/w/index.php?title=Q12393&oldid=2540158156). Its rank is normal and it has no attached references; it is a source assertion to elect under the pinned policy, not independent corroboration or proof that Nintendo developed every title. P123 publisher evidence is not used for this edge.
+
+**Expected-output simulation:** real names/QIDs/source statement; illustrative internal UUIDs, fact election, timestamps, readiness, revisions and description. No Company/edge creation or model call was performed. The example assumes the claim passes election and both endpoints are ready. [Download the example and correlated evidence record](/assets/video-game-waterfall/developed-by-example.json).
+
+```json
+{
+  "from": "157afbee-f522-5c79-bab7-43069324c867",
+  "from_ref": "Q12393",
+  "type": "DEVELOPED_BY",
+  "to": "7447fa80-dcff-540e-8b2d-01a0180bce2e",
+  "to_ref": "Q8093",
+  "properties": {
+    "uuid": "018c5ca7-3d51-5df3-a87f-191bf011e413",
+    "created_at": 1788955200000,
+    "updated_at": 1788955200000,
+    "source": "video_game",
+    "source_urls": [
+      "https://www.wikidata.org/w/index.php?title=Q12393&oldid=2540158156"
+    ],
+    "evidence_ids": [
+      "Q12393$cb44d861-42e7-52b9-da05-eb61a8767e64"
+    ],
+    "chosen_fact_ids": ["7ce873a1-191b-54a7-a2d2-5f997743dafd"],
+    "projection_revision": 1,
+    "policy_version": "games-v1-proposed",
+    "active": true,
+    "weight": 35,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "description": "Nintendo is credited as a developer of The Legend of Zelda series.",
+    "description_generated_at": 1788955200000,
+    "development_role": "developer",
+    "development_scopes": ["series_explicit"],
+    "series_developer_record_ids": ["0e734ee1-4ca8-52ff-98b6-67482624db67"]
+  }
+}
+```
+
+If Nintendo already exists, reuse it; otherwise the admitted evidence requires one queued minimal Company identity and this one series edge. It adds `Nintendo` to the series' sorted developer projection and creates no individual Zelda game credits. Member-derived examples instead require the exact member's development and membership records, as specified above.
+
+<a id="game-series-developers" />
+
+#### Series developer evidence
+
+**Series developer creation is required when evidenced — September 9.** For every elected series/developer association admitted within the existing budgets, resolve the specific organisation through the shared identity registry, reuse its canonical Company UUID or create its minimal `Entity:Company` identity through a queued `identity_only` job, then replay `Game_Series → DEVELOPED_BY → Company`. No full company enrichment is required to create that identity. A display string alone is never identity or relationship evidence. Unresolved, conflicting or over-budget work retains its evidence and a pending/deferred status; it cannot be marked complete after merely adding a name to `developers`.
+
+The series edge means **this company has evidenced development involvement in the series**, not that it developed every member. Its `development_scopes` is a deduplicated primitive array containing `series_explicit`, `member_credit`, or both. Direct support requires an exact-series developer statement, such as non-deprecated Wikidata P178 elected under the pinned source policy, or explicit official series credit. Member support requires both the exact game/company developer credit and that same game's membership in the exact series. Retain correlated evidence in `series_developer_record_ids`, with `supporting_game_ids`, `company_role_record_ids` and `membership_record_ids` for member support. These are registry/ledger IDs, not copied card names. Do not fetch unselected member games to manufacture support, expand a series claim into game-level credits, infer parent-company development, or treat a publisher/sponsor/employer as a developer.
+
+**Finite queue branch:** the original coordinator may schedule a predeclared `series_evidence` stage for an admitted series, then freeze the combined company endpoint manifest and queue identity-only Company resolution followed by fact/graph replay. Direct series claims can yield several companies, but each reservation uses the original root and originating game's remaining limits. Shared Company identities and jobs deduplicate across series/games. Neither the series writer nor a Company leaf can admit another root, enumerate company catalogs or invoke another waterfall. [Main build rules and Counter-Strike example](/guides/open-work/video-game-waterfall#evidenced-series-developers).
+
+**Projection and correction:** `Game_Series.developers` is the sorted name projection of eligible series developer associations, not an independent source for new edges. A member-supported public association requires that member's successful publication and the public readiness of both endpoints. Mixed-support edges expose only eligible public member IDs, facts and descriptions; a direct series claim cannot reveal a separate hidden member credit. Re-election removes only withdrawn support; when the final eligible support disappears, retire the series edge and remove its projected developer name. Preserve Company identity and unrelated game/company edges. Partial source coverage does not imply deletion. Both endpoint variants retain weight 35 and `excluded_from_scoring=true`.
+
+**Availability projection:** follow the [locked AVAILABLE_ON contract](#available-on). A release → platform edge describes that exact release. A game → platform edge is a deduplicated summary supported by explicit game availability and/or elected released scopes of the same canonical game. Both use the same owner; the summary is not a second source assertion or a second unit of scoring support. Never aggregate a separately identified remake into its original. If its final eligible scope is withdrawn, retire the summary edge. A surviving historical release supports “released on”; current store sale status is a separate time-scoped fact, so delisting does not erase release history.
 
 **Award outcome transitions:** nomination → win keeps the award node UUID, replaces the current `Nominee` label with `Winner`, retires the current `NOMINATED_FOR` projection and activates `WON_AWARD` for the exact elected recipients. The historical nomination stays in SQL. Reverse corrections perform the converse; recipient replacement affects only that entry. Unresolved outcomes project no guessed recipient result edge. Replay/read revisions prevent mixed old/new result states from appearing as a completed projection.
 
 **Retraction and public reads:** incomplete source coverage cannot delete omitted edges. Complete replacements retire only their source/scope, re-elect remaining evidence and deactivate an edge only when its last eligible support disappears. All game endpoint variants carry `excluded_from_scoring=true`, including reused edge names. Public traversal requires readiness of both endpoints and inherited game readiness for scoped `Game_Release` / `Game_Award` nodes. Release → platform and person → award paths remain hidden if the associated game is unpublished; checking only direct `Video_Game` endpoints is insufficient. An internal graph's existence is not public publication.
 
 **Endpoint lock:** this build does not extend `DEVELOPED_BY` to engines/platforms, infer company ownership, mint franchise/character relationships or add expertise from generic job-title matching. Retain useful unsupported assertions for a later explicit endpoint contract. [Machine-readable baseline](/assets/video-game-waterfall/type-source-contract.json)
+
+<a id="available-on" />
+
+### AVAILABLE_ON
+
+**Locked September 9, 2026 — authoritative platform-edge contract.** Go/GCP writer remains proposed. This is the only platform relationship admitted by this build; a platform's description/website creates no extra Company relationship.
+
+| Contract | Locked behavior |
+| --- | --- |
+| Direction | `Video_Game → AVAILABLE_ON → Game_Platform` or `Game_Release → AVAILABLE_ON → Game_Platform` |
+| Meaning | Confirmed release/availability on the exact platform. Historical release evidence does not promise current store sale or online service availability |
+| Owner | `game_release_context`, consuming elected facts through the shared Go queue and graph writer |
+| Identity | One semantic edge per canonical ordered pair and family; shared by all eligible evidence sources |
+| Weight / scoring | `weight=80`, `layer="evidence"`, `excluded_from_scoring=true` |
+| Admission | Exact platform identity **plus** elected game/release availability evidence. P400 can identify the platform but cannot alone distinguish an announced title from a released one |
+| Rejection | Announcement-only, past unscoped date alone, generic “PC”, a storefront name, backward compatibility, streaming, series membership or a separately identified remake's release cannot establish this edge |
+
+All [common game edge properties](#common-game-edge-properties-and-corrections) are required: stable `uuid`, epoch-millisecond `created_at` / `updated_at`, writing lane `source="video_game"`, attributable `source_urls` / `evidence_ids` / `chosen_fact_ids`, monotonic `projection_revision`, `policy_version`, `active`, weight/layer/scoring fields and a non-empty factual `description` with `description_generated_at`. Preserve creation time and unchanged values on no-op replay.
+
+| Edge-specific property | Type | Requirement |
+| --- | --- | --- |
+| `availability_record_ids` | string[] | Required non-empty sorted unique references to elected correlated availability records for this exact game/release and platform |
+| `release_entity_ids` | UUID string[] | Conditional on a game-level summary supported by separately identified releases: only those exact released scopes. Omit when support is direct game availability or the source endpoint is already the release |
+
+Availability records retain the exact game and platform, optional release identity, source assertion/locator/revision, release-status evidence and any explicitly supported date/precision, territory, edition or channel. Unknown territory stays unknown. Do not flatten independent date/platform/territory arrays into release combinations. The only edge-specific graph fields locked in this slice are the two reference arrays above; detailed scope lives in AlloyDB.
+
+**Creation and readiness:** the original coordinator reserves only admitted identity/metadata/fact/description/replay jobs. Reuse or queue the canonical platform identity, fulfill its [short description requirement](/guides/ontology/nodes#game-platform-properties), elect the availability record and prepare the edge description. Reuse suitable text or generate it with **GLM 5.3 FLASH, low effort**, under the [required description rule](#required-description-and-queued-creation), before edge creation. Replay through the shared parameterized writer with canonical endpoints and a current revision/lease fence. A `Game_Release` may target only the one platform in its canonical release scope; platform changes require identity/scope reconciliation rather than a second active target.
+
+Public traversal requires an active edge, published game and ready platform. A release → platform edge requires the release's own [short description](/guides/ontology/nodes#game-release-description) and inherits that release's associated game publication; checking only the immediate endpoints is insufficient. A missing optional website does not block platform readiness. Missing release/platform description or edge description leaves the affected projection/link pending; an otherwise valid game may still publish without this optional platform link. No standalone platform card or image stage.
+
+**Summary and correction:** direct game evidence and the same game's elected released scopes can support one game → platform edge. The summary references its supporting records; it is not another source fact. The owner re-elects support on complete scoped replacement or explicit correction, keeps other sources and retires the edge only after its last eligible support disappears. An old retry cannot reactivate it. Delisting alone does not erase historical release support. Readiness changes, source correction and description repair resume the same bounded replay; no platform catalog, Company waterfall, other game or new root is launched.
+
+**Example:** Elden Ring → `AVAILABLE_ON` → PlayStation 4. Its exact platform statement is `Q64826862$d6f61228-4f0b-acd9-819b-f736b718d850` (P400 → `Q5014725`), with release support from [Bandai Namco's official game page](https://en.bandainamcoent.eu/elden-ring/elden-ring). A suitable short edge description is “Elden Ring was released for PlayStation 4.” The [corrected simulation](/assets/video-game-waterfall/graph-simulation.json) retains the matching platform/availability record; the source's series-membership statement is not availability evidence. Election, IDs and processing state in the example remain simulated.
+
+<a id="uses-engine" />
+
+### USES_ENGINE
+
+**Locked September 9, 2026 — authoritative engine-edge contract.** This entry and the [Game_Engine node contract](/guides/ontology/nodes#game-engine-properties) are the source of truth for the Go/GCP build. Writers remain to be implemented.
+
+| Contract | Locked behavior |
+| --- | --- |
+| Direction | `Video_Game → USES_ENGINE → Game_Engine` |
+| Meaning | Explicit use of the engine by this exact game, with any evidenced version/build/platform/time scope retained |
+| Owner | `game_context` fact/graph replay in the shared Go application |
+| Identity | One semantic edge per canonical ordered game/engine-family pair, shared by all supporting sources and versions |
+| Weight / scoring | `weight=80`, `layer="evidence"`, `excluded_from_scoring=true` |
+| Admission | Elected exact-game engine-use evidence from typed source claims, an official development report or an enabled permitted catalog. Resolve both endpoint identities before writing |
+| Rejection | Engine-maker product pages, studio tooling, employment, engine-rendered trailers, SDK/audio/physics middleware use and another game's engine cannot independently establish this relationship |
+
+All [common game edge properties](#common-game-edge-properties-and-corrections) are required: stable `uuid`; epoch-millisecond `created_at` / `updated_at`; `source="video_game"`; non-empty attributable `source_urls`, `evidence_ids`, `chosen_fact_ids`; monotonic `projection_revision`; `policy_version`, `active`; the fixed weight/layer/scoring fields; and non-empty factual `description` with `description_generated_at`. Preserve creation time and no-op values across replay. `source` names the writing lane; the ledger retains the actual provider, such as `official_xbox`.
+
+| Edge-specific property | Type | Locked requirement |
+| --- | --- | --- |
+| `engine_use_record_ids` | string[] | Required, non-empty sorted unique references to elected correlated engine-use records for this exact game and engine family |
+| `engine_versions` | string[] | Optional sorted unique literal version values from surviving eligible use records, e.g. `["5"]`. Omit when unknown; never invent `5.0`, a minor version or the latest version |
+
+Each use record binds the canonical game and engine to its source evidence, version literal when present, and only explicitly supported build/release/platform/time qualifications. Preserve unknown scope as unknown. The version array is a summary of those records, not evidence that every version applies to every platform or build. Engine-family metadata and descriptions belong to `Game_Engine`; version scope does not create extra engine nodes. Multiple evidenced engine families may coexist for a game with their own scope; do not impose an unsupported single-engine rule.
+
+**Queued creation:** the original coordinator reserves the exact engine identity and predeclared later fact, description and replay work within the existing root manifest/budgets. Reuse the canonical engine or queue its bounded `identity_only` resolution. Elect scoped use records; prepare the short node description and the separate edge description. Reuse suitable supported text or use the shared **GLM 5.3 FLASH, low-effort** description jobs. The edge needs validated non-empty text before first materialization. `game_context` then uses the shared parameterized writer with canonical IDs, revision checks and a current lease fence. Evidence/provider text is data, never executable syntax. No source lookup or full engine/company/game waterfall starts from a graph write or leaf job.
+
+**Readiness and corrections:** public traversal requires an active relation, a published game and a ready engine with its short description. Missing identity, evidence or description leaves only this optional engine/link pending; an otherwise valid game can publish. All attempts and failures use the [shared Universe movie/music logging](/guides/open-work/video-game-waterfall#shared-universe-error-logging-required). Complete same-scope replacements or explicit corrections re-elect surviving use records, recompute version summaries and refresh invalidated text. Partial omission retracts nothing. A version correction preserves the same edge UUID; changing a game's engine preserves independently supported historical scope. Retire an edge only when its final eligible support is withdrawn. Stale retries cannot restore withdrawn facts, and retraction does not wait for description generation. Preserve engine nodes and other games' links.
+
+**Locked real-data example:** Senua's Saga: Hellblade II → `USES_ENGINE` → Unreal Engine, with `engine_versions=["5"]`. [Xbox's development report](https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/) describes the game's combat development in Unreal Engine 5. This supports the described use; it does not certify every future build or port. The example description remains “Senua's Saga: Hellblade II uses Unreal Engine.”
+
+The [complete edge JSON and correlated source record](/assets/video-game-waterfall/support-type-examples.json) now include `source` and `evidence_ids`. Example IDs, fact election, timestamps, revisions and description output are simulated; the evidence reference is an illustrative ledger key, not an identifier issued by Xbox. No live graph write or model call was performed. [Rendered node and edge example](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples).
+
+<a id="game-has-award" />
+
+### HAS_AWARD — video game
+
+**Locked September 9, 2026 — authoritative game recognition edge.** This endpoint extension pairs with the [Game_Award node contract](/guides/ontology/nodes#game-award-properties). The existing movie/theatre contracts retain their own scope; this lock is for `Video_Game → Game_Award`. Go implementation remains pending.
+
+| Contract | Locked behavior |
+| --- | --- |
+| Direction / meaning | `Video_Game → HAS_AWARD → Game_Award`: this exact game is associated with this resolved nominee entry; named-person entries remain recognition context for their associated game |
+| Owner | `game_recognition` fact/graph replay in the shared Go application |
+| Identity | One semantic edge per canonical ordered game/award-entry pair; another source or a changed outcome does not create a second edge |
+| Weight / scoring | `weight=40`, `layer="evidence"`, `excluded_from_scoring=true` |
+| Admission | Elected exact-game + authority/ceremony/category/nominee-entry evidence; resolve endpoint UUIDs and preserve named/joint recipient scope |
+| `award_evidence_record_ids` | Required non-empty string list referencing correlated SQL records containing the game, award entry, ceremony/category, outcome, source statement/qualifiers and elected fact |
+| `award_result` | Current elected `nominee` or `winner`, matching the target node's `result` and modifier in the same public recognition revision; never an identity field |
+| Required descriptions | Non-empty supported edge description before first materialization; describe a person's nomination/win as that entry's game context, not a win by every contributor |
+| Rejection | Page proximity, presenter/guest/credit-list membership, company billing or an unresolved outcome cannot establish a nomination/win. A category alone cannot prove a recipient, adaptation or game release |
+| Publication | Both endpoints ready, award's own valid description/elected outcome, associated game published with valid media, and node/edge outcome projections consistent. `active=true` does not override these checks |
+
+All [common game edge properties](#common-game-edge-properties-and-corrections) are required: stable `uuid`; epoch-millisecond `created_at` / `updated_at`; writing lane `source="video_game"`; non-empty `source_urls`, `evidence_ids`, `chosen_fact_ids`; `projection_revision`, `policy_version`, `active`; weight/layer/scoring fields; `description` and `description_generated_at`. Actual provider provenance remains in the evidence ledger. The full approved envelope and two award-specific properties are shown below.
+
+**Creation order:** bounded `award_evidence` → exact entry/endpoint resolution and fact election → queued node description and edge `describe` work when suitable text is missing → `game_recognition` replay → matching public publication. Edge descriptions use the shared [GLM 5.3 FLASH, low-effort rule](#required-description-and-queued-creation). Every stage consumes the original root budgets and shared movie/music logging; source workers, identity-only endpoints and replay writers cannot launch discovery, new award years or another game/person/company waterfall. An optional pending award/link does not block an otherwise publishable parent game.
+
+**Corrections and retirement:** preserve node/edge UUIDs and creation times. Re-elect the exact scoped records and refresh affected name/description, current outcome labels, `award_result` and separately evidenced recipient edges. Apply one fenced recognition revision, or keep the new revision hidden until every affected projection agrees. Preserve nomination history in SQL. Unsupported old winner text cannot stay public while generation is pending; retractions never wait for a model. Missing entries in partial or winners-only pages cannot retract nominees. Complete same-source/scope replacements retire only their own support; retire the edge only after its final eligible support disappears. Stale retries cannot restore withdrawn outcomes.
+
+**Locked example:** Elden Ring's game-only Best Game Direction win. The referenced record preserves the frozen P166 statement and P585/P805 qualifiers for the exact category and 2022 ceremony. Internal IDs, timestamps, election/replay state and description output are simulated; no production edge or LLM generation receipt is claimed.
+
+```json
+{
+  "from": "8d718f08-fad1-5f49-9b39-a3ed7678612b",
+  "type": "HAS_AWARD",
+  "to": "0c4b3bfe-c29a-5ae7-9edf-6068ef7ce7c3",
+  "properties": {
+    "uuid": "3ef567fe-9be3-570d-af5e-76e50e14d2b6",
+    "created_at": 1788868800000,
+    "updated_at": 1788955200000,
+    "source": "video_game",
+    "source_urls": [
+      "https://www.wikidata.org/w/index.php?title=Q64826862&oldid=2519463538"
+    ],
+    "evidence_ids": [
+      "Q64826862$48B48A6C-CFC6-47E0-800A-9DF7BD75E2B4"
+    ],
+    "chosen_fact_ids": [
+      "0d8f35da-dd82-5454-8c4f-26dd259d57b9"
+    ],
+    "projection_revision": 2,
+    "policy_version": "games-v1",
+    "active": true,
+    "weight": 40,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "description": "Elden Ring received Best Game Direction at The Game Awards 2022.",
+    "description_generated_at": 1788868800000,
+    "award_result": "winner",
+    "award_evidence_record_ids": [
+      "954681ab-749f-5975-a378-9d53e3a0ff61"
+    ]
+  }
+}
+```
+
+The [complete example and its source records](/guides/open-work/video-game-waterfall-game-awards#complete-award-node-and-game-edge) remain synchronized with the JSON fixture. No individual recipient edge is inferred for this game-only entry. Award artwork is a resolved game media reference, with no new artwork edge or upload.
 
 ### Shared names and replay ownership
 
@@ -1318,7 +1568,7 @@ The older [theatre `ADAPTED_FROM` proposal](#stage-adapted-from) remains scoped 
 | `source`, `source_urls`, `evidence_ids`, `chosen_fact_ids` | Owning source lane plus attributable elected evidence; source assertions alone cannot create an edge |
 | `projection_revision`, `policy_version`, `active` | Versioned, generation-fenced application/retraction; stale retries cannot resurrect retired evidence |
 | `weight`, `layer`, `excluded_from_scoring` | Positive endpoint-specific weight, declared layer and mandatory pilot scoring exclusion |
-| `description`, `description_generated_at` | Evidence-grounded description; BASED_ON uses the plan's 25–45-word sentence convention |
+| `description`, `description_generated_at` | Required non-empty, evidence-grounded description before creating an edge; missing suitable text uses queued GLM 5.3 FLASH at low effort under the [description rule](#required-description-and-queued-creation). BASED_ON retains its 25–45-word sentence convention |
 | Scoped relation/credit record references | Preserve correlated role/character/language/platform/territory/date facts in SQL; graph properties use primitive scalars/lists |
 
 One `WORKED_ON` edge can retain multiple roles: Miyazaki is both director and writer in the Elden Ring source snapshot. A partial or failed source fetch cannot retract omitted credits. A successfully committed complete replacement or explicit correction can retire its own evidence; re-election retains other source support. Pending endpoints trigger replay only, never discovery. Images are properties/media references and create no image edge.

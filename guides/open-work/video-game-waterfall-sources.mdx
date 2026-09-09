@@ -9,18 +9,201 @@ icon: "database"
 **Contract baseline: `games-v1`, September 8, 2026.** This locks the intended Go/GCP design, not a claim of implemented workers or enabled vendor access. Keep **six game entity families**. The game worker owns their creation/reuse through the finite queued plan; the movie pipeline supplies the existing game identity and credits. Graphs → [Node Types](/guides/ontology/nodes#game-type-contract-v1) and [Edge Types](/guides/ontology/edges#game-edge-contract-v1) are the normative identity and relationship references.
 </Info>
 
+**Build-agent entry:** follow the [nine-phase guide](/guides/open-work/video-game-waterfall-build-guide) and [55 eval cases](/assets/video-game-waterfall/build-evals.json). Freeze supported source capabilities and distinguish illustrative fixtures from actual replay/live receipts. Optional commercial access is not a core-build prerequisite.
+
 ## Decision by node type
 
 | Type | Decision for the first Go build | Sources that can support it | Main relationship |
 | --- | --- | --- | --- |
 | `Video_Game` | Required canonical game; reuse an IMDb-created UUID and keep it hidden until game publication | Wikidata, reused IMDb identity, exact official game/store evidence; enabled catalog providers | Credits, companies, adaptations and game context |
-| `Game_Series` | Include when a **video-game series** and membership are evidenced | Typed Wikidata P179; verified official series membership; enabled catalog series mapping | `IN_GAME_SERIES` |
-| `Game_Platform` | Include exact supported platform identities | Typed Wikidata P400; explicit official/store platform evidence; enabled catalog platform records | `AVAILABLE_ON` after release evidence |
-| `Game_Engine` | Include when exact game-engine use is evidenced; no blanket requirement for every game | Typed Wikidata P408, official developer/engine-maker evidence; enabled engine mapping | `USES_ENGINE` with version/use scope |
-| `Game_Release` | Include **conditionally**, when a coherent platform release needs its own identity; retain sparse dates as facts | Qualified Wikidata dates; exact official releases; enabled catalog release records | `RELEASE_OF`, scoped `AVAILABLE_ON` |
-| `Game_Award` | Include scoped nominations/results with known ceremony/category/nominee entry | The Game Awards, qualified Wikidata, other explicitly supported award-body pages | `HAS_AWARD`; named `WON_AWARD` / `NOMINATED_FOR` |
+| `Game_Series` | Include when a **video-game series** and membership are evidenced; accepted developer evidence must create/reuse Company endpoints and series development edges | Typed Wikidata P179/P178; verified official series/member development and membership; enabled catalog series mapping | `IN_GAME_SERIES`; series → `DEVELOPED_BY` → Company |
+| `Game_Platform` | Include exact supported platform identities with a short description and optional verified official website; no standalone card | Typed Wikidata P400/target metadata/P856; exact official product/support pages; enabled catalog platform records | `AVAILABLE_ON` after release evidence |
+| `Game_Engine` | Include when exact game-engine use is evidenced; short engine-family description required for public readiness; no standalone card | Typed Wikidata P408, official developer/engine-maker evidence; enabled engine mapping | `USES_ENGINE` with version/use scope |
+| `Game_Release` | Include **conditionally**, when a coherent platform release needs its own identity; short description required for public readiness; retain sparse dates as facts | Qualified Wikidata dates; exact official releases; enabled catalog release records | `RELEASE_OF`, scoped `AVAILABLE_ON` |
+| `Game_Award` | Locked scoped result with short description and card; reuses the associated game's published artwork; [node fields](/guides/ontology/nodes#game-award-properties) and [HAS_AWARD](/guides/ontology/edges#game-has-award) | The Game Awards, qualified Wikidata, other explicitly supported award-body pages | `HAS_AWARD`; named `WON_AWARD` / `NOMINATED_FOR` |
 
 Support coverage is optional per game. Missing engine, series, release or award facts do not prevent a valid game publishing. An attempted **required** stage failure still blocks publication under the declared manifest; an optional unsupported provider cannot be silently marked successful. All support identities compete within the existing leaf budgets.
+
+## Game platform parameters
+
+**Locked September 9:** retain exact `name`, registered `platform_code` / `platform_kind`, canonical identity/source fields, plus a required short `description` for public readiness and optional verified `official_website`. Description: one factual sentence **≤127 Unicode code points**. No standalone card, tagline, image field or platform media job. [Authoritative Node Types contract](/guides/ontology/nodes#game-platform-properties) · [PlayStation 4 and Windows JSON](/guides/open-work/video-game-waterfall#game-platform-parameters).
+
+Reuse the admitted platform's exact-item metadata, P856 candidates or an enabled exact-platform record. Verify the official product/family/support URL against the node's identity, including its final redirect target. The official [PlayStation 4 page](https://www.playstation.com/en-us/ps4/) and [Windows hub](https://www.microsoft.com/en-us/windows) were checked for these examples on September 9; the Windows node represents the OS family, not a new Windows 11 node. Example descriptions are editorial summaries of supported facts, not completed model calls. Keep website/description source evidence separate from the primary Wikidata identity source.
+
+If needed, reserve one additional exact-platform official page at most, then queue a short description from retained facts using GLM 5.3 FLASH at low effort, at most two model attempts. All work deduplicates per canonical platform/root and consumes the original root limits and shared movie/music logging. No crawling or catalog discovery. Missing website is optional coverage; if no useful description can be produced, retain a still-supported prior value or keep that support identity/link pending internally while the independently valid game can publish.
+
+## Game engine description
+
+**Node and edge locked September 9:** short engine-family `description`, one factual sentence ≤127 Unicode code points. Reuse useful retained source text or queue GLM 5.3 FLASH at low effort from elected facts, with at most two model attempts under the existing root budget. Missing/invalid text leaves the optional engine/link pending, with shared movie/music failure logging and no recursive work. Versions remain on engine-use records; no standalone card. [Authoritative Node Types contract](/guides/ontology/nodes#game-engine-properties) · [Locked USES_ENGINE properties, creation and corrections](/guides/ontology/edges#uses-engine).
+
+The Unreal Engine example now uses `Real-time 3D engine for building video games and interactive experiences.`, an editorial summary of its [official overview](https://www.unrealengine.com/) checked September 9. The Xbox source remains the primary identity/use evidence; the maker's overview separately supports the description and cannot prove a specific game's engine use. [Updated JSON](/guides/open-work/video-game-waterfall#game-engine-description).
+
+## Game release description
+
+**Creation added September 9:** reuse suitable supported text or queue one typed `game_release` / `release_description` job from retained elected release facts. Generate one factual sentence **≤127 Unicode code points** with shared GLM 5.3 FLASH at low effort, at most two model attempts under the original root limits. Preserve exact platform/territory/edition correlations, date precision and release status. No browsing, release enumeration, extra identity or standalone card. [Authoritative Node Types requirement](/guides/ontology/nodes#game-release-description) · [Build sequence](/guides/open-work/video-game-waterfall#game-release-description).
+
+The Last of Us PS3 example now includes `PlayStation 3 release of The Last of Us, released on June 14, 2013.`, editorial expected text tied to its retained qualified release statement and official release evidence. No runtime generation receipt is claimed. Public release readiness requires the description and parent game publication; missing/failed text keeps the optional release and incident links pending without blocking an independently valid game. Corrections refresh text under the same release UUID and reject stale input revisions through the shared queue/logging facilities.
+
+## Game award card artwork
+
+**Node and HAS_AWARD locked September 9:** the reviewed complete JSON is the approved field set. Keep scoped identity, optional ceremony/category QIDs, elected `result`, short `description`, canonical game reference, source/timestamps and visibility. The edge requires the full common envelope, `award_evidence_record_ids` and synchronized `award_result`, with weight 40 and scoring exclusion. Description fallback uses queued GLM 5.3 FLASH at low effort under existing limits; no new website/display-label properties are included. [Node Types](/guides/ontology/nodes#game-award-properties) · [Edge Types](/guides/ontology/edges#game-has-award) · [Build sequence](/guides/open-work/video-game-waterfall#game-award-node-and-edge-contract).
+
+**Locked September 9:** the award card resolves `game_entity_id` to its canonical published game and reuses that game's processed `image_url` through the shared media renderer, in the same **2:3 portrait frame**. Reuse the existing `game-thumbnail/` object and receipts; no new award image source, upload, stored URL copy or media job is needed. Award-site tiles remain optional candidates for the game-owned pipeline only. The card inherits game publication/media readiness, and its cached image projection refreshes or invalidates with the game's published revision. [Authoritative Node Types contract](/guides/ontology/nodes#game-award-card-artwork) · [Build plan](/guides/open-work/video-game-waterfall#game-award-card-artwork).
+
+## Game series card parameters
+
+**Description fallback:** reject blank, name-only and generic type-only copy. Reuse useful elected series facts and official text; if needed, fetch at most one additional verified official series/about page, then queue a bounded description job producing one neutral sentence ≤127 characters. At most two model attempts share the existing root limits. No series/member crawling or invented details; insufficient evidence remains coverage/pending work. [Full quality, source and failure rules](/guides/open-work/video-game-waterfall#series-description-fallback).
+
+**Agreed September 9, 2026:** `Game_Series` uses its short `description` for card text, with **no tagline**. Include `developers`, `official_website` and `image_url` when available. Every accepted series image is normalized and stored as a **400 × 267 px WebP (3:2)**, with a white canvas, 32 px padding and centered containment. These parameter decisions are reflected in [Graphs → Node Types](/guides/ontology/nodes#game-type-contract-v1); Go workers and the final card layout remain to be implemented.
+
+**Required developer output:** accepted exact-series developer evidence, or an elected admitted member's developer credit plus its verified membership, must create/reuse the canonical Company identity and replay `Game_Series → DEVELOPED_BY → Company`. Queue missing Company identities through the shared non-enriching identity seam; do not merely store names. Before creating the edge, require a suitable evidence-grounded description or queue GLM 5.3 FLASH at low effort to produce one under the original budget. `developers` is the sorted, identity-deduplicated name projection of eligible associations, including for a single studio. Preserve direct-series/member scope, source IDs and publication dependencies. Names alone cannot authorize edges; no series enumeration, publisher-role inference, company enrichment or blanket member-game credits. Unresolved or over-budget associations retain explicit pending/deferred evidence. [Authoritative properties, creation contract and Zelda → Nintendo JSON](/guides/ontology/edges#developed-by).
+
+The [Counter-Strike series record](https://www.wikidata.org/wiki/Q15717790) supplies the series identity, description, official website and logo claims. The [Commons file record](https://commons.wikimedia.org/wiki/File:Counter-Strike_vertical_logo_(2023).svg) identifies the 2023 series logo as a 512 × 136 SVG and supplies raster renditions. **The JSON below is a UI source preview:** its real external PNG `image_url` lets a designer inspect the artwork; production must replace that value with the serving URL returned by the shared file/media pipeline. It is not an already-ingested graph node. UUIDs, processing timestamps and embeddings are omitted.
+
+```json
+{
+  "labels": ["Entity", "Game_Series"],
+  "properties": {
+    "name": "Counter-Strike",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q15717790",
+    "description": "video game series by Valve Corporation",
+    "developers": [
+      "Gearbox Software",
+      "Hidden Path Entertainment",
+      "Nexon",
+      "Ritual Entertainment",
+      "Turtle Rock Studios",
+      "Valve Corporation"
+    ],
+    "official_website": "https://counter-strike.net",
+    "image_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/26/Counter-Strike_vertical_logo_%282023%29.svg/330px-Counter-Strike_vertical_logo_%282023%29.svg.png",
+    "source": "wikidata"
+  }
+}
+```
+
+Counter-Strike's exact series record contains **six** P178 developer claims, resolved on September 9: Gearbox Software (`Q1046593`), Hidden Path Entertainment (`Q1956256`), Nexon (`Q562078`), Ritual Entertainment (`Q1806887`), Turtle Rock Studios (`Q1193116`) and Valve Corporation (`Q193559`). The list spans the series; it is not Counter-Strike 2's developer list. The alphabetical display order does not designate a lead developer. Design for multiple names, with expansion if the card truncates the list.
+
+The earlier candidate `aliases` and `genres` card fields remain under review. Artwork absence remains a coverage result; an existing series identity or its membership edge does not require a logo. A bounded image job uses the original root's queue, network budget and shared failure logging, with no discovery capability.
+
+**Elden Ring — verified series identity, with official-source enrichment.** [Wikidata `Q124706366`](https://www.wikidata.org/wiki/Q124706366) is a video-game series distinct from the individual game. Its description is only `video game series`, with no logo or website statements in the checked revision. That is a source-coverage gap, not a reason to discard the series. Bandai Namco's [Elden Ring Universe hub](https://en.bandainamcoent.eu/eldenring) supplies an official series website and a PNG logo explicitly labelled `ELDEN RING UNIVERSE` in its page markup. Its [Nightreign page](https://en.bandainamcoent.eu/elden-ring/elden-ring-nightreign) confirms the FromSoftware title belongs to that universe.
+
+The fuller description below is **source-based editorial preview text**, not a verbatim Wikidata description or a completed runtime generation result. `source: "wikidata"` identifies the series identity source; field-level evidence separately attributes the website and image to Bandai Namco and the description to this source-based synthesis. The `developers` value uses the official [Elden Ring](https://en.bandainamcoent.eu/elden-ring/elden-ring) and [Nightreign](https://en.bandainamcoent.eu/elden-ring/elden-ring-nightreign) developer evidence, with series membership independently verified; the series Wikidata item itself has no P178. The image URL is the verified external source, pending shared-pipeline ingestion.
+
+```json
+{
+  "labels": ["Entity", "Game_Series"],
+  "properties": {
+    "name": "Elden Ring",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q124706366",
+    "description": "Video game series by FromSoftware, including Elden Ring and Elden Ring Nightreign.",
+    "developers": ["FromSoftware"],
+    "official_website": "https://en.bandainamcoent.eu/eldenring",
+    "image_url": "https://static.bandainamcoent.eu/high/elden-ring/brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png",
+    "source": "wikidata"
+  }
+}
+```
+
+**The Legend of Zelda — third design example.** Its [typed series item Q12393](https://www.wikidata.org/wiki/Q12393), checked at revision `2540158156`, supplies the short description, Nintendo (`Q8093`) developer claim, `https://www.zelda.com/` and the [Zelda Logo.svg file](https://commons.wikimedia.org/wiki/File:Zelda_Logo.svg). The P178 developer statement is `Q12393$cb44d861-42e7-52b9-da05-eb61a8767e64`. The preview uses the verified provider PNG rendition; runtime still requires election, Company identity/edge projection and shared image ingestion. Its generic source description is replaced in this design preview by an editorial summary of [Nintendo's official series overview](https://www.nintendo.com/jp/character/zelda/en/index.html), checked September 9. This demonstrates the [required description fallback](/guides/open-work/video-game-waterfall#series-description-fallback), not a completed model call.
+
+```json
+{
+  "labels": [
+    "Entity",
+    "Game_Series"
+  ],
+  "properties": {
+    "name": "The Legend of Zelda",
+    "series_kind": "video_game_series",
+    "wikidata_qid": "Q12393",
+    "description": "Action-adventure game series from Nintendo, following Link's quests through Hyrule's fields and dungeons.",
+    "developers": [
+      "Nintendo"
+    ],
+    "official_website": "https://www.zelda.com/",
+    "image_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2a/Zelda_Logo.svg/330px-Zelda_Logo.svg.png?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=thumbnail",
+    "source": "wikidata"
+  }
+}
+```
+
+All three design node objects are also available as [downloadable JSON](/assets/video-game-waterfall/game-series-card-preview.json). These are source-backed design previews without UUIDs, timestamps or embeddings; their external image URLs are not normalized production media URLs.
+
+### Series image options and shared storage
+
+**Both worked games have distinct series identities**, verified through direct Wikidata entity JSON on September 9, 2026. The game-to-series P179 statement supplies the membership edge. Resolve display fields from the series record and separately verified official series sources; a sparse Wikidata item does not end the bounded enrichment pass.
+
+| Worked game | Series identity | Description from the series record | Series image / website coverage |
+| --- | --- | --- | --- |
+| Counter-Strike 2 (`Q111165107`) | [Counter-Strike, `Q15717790`](https://www.wikidata.org/wiki/Q15717790) | `video game series by Valve Corporation` | Two P154 logos; the 2023 logo is preferred and has a 2023 start-time qualifier. P856: `https://counter-strike.net` |
+| Elden Ring (`Q64826862`) | [Elden Ring series, `Q124706366`](https://www.wikidata.org/wiki/Q124706366) | `video game series` | Wikidata has no P154/P18/P856; the separately checked official Elden Ring Universe hub supplies the website and a series-labelled PNG logo |
+
+Checked revisions: CS2 `2520282529`, Elden Ring game `2519463538`, Counter-Strike series `2518386875`, Elden Ring series `2518234859`. Elden Ring's game record has its own logo and website, but those game-scoped assertions are not automatically series evidence. Its `series_ordinal="1"` belongs on `IN_GAME_SERIES`, not on the series node. Resolving either series does not enumerate or enqueue its other games.
+
+#### Consistent 3:2 series image frames
+
+**Final ratio decision — September 9:** **3:2 / 400 × 267 is locked**, with the height rounded to a whole pixel. See the [main build plan for the final card parameters and three design nodes](/guides/open-work/video-game-waterfall#game-series-card-contract).
+
+The two current examples use identical **300 × 200 px frames**, white backgrounds, 24 px padding and centered `object-fit: contain`. They demonstrate the selected 3:2 image treatment at card scale; the stored file is **400 × 267 px** with its height rounded to a whole pixel; card width can respond to the available layout. Neither logo is cropped, stretched or recolored. These previews use raw remote logos with CSS to simulate the planned shared-pipeline normalization; they are not already-created WebP files. The stored asset will include the white canvas and padding. Preview borders and rounded corners remain UI styling.
+
+<div style={{display:'flex', flexWrap:'wrap', gap:'16px', margin:'16px 0'}}>
+  <div style={{width:'300px', maxWidth:'100%'}}>
+    <div style={{width:'100%', aspectRatio:'3 / 2', boxSizing:'border-box', padding:'24px', background:'#ffffff', border:'1px solid #d4d4d8', borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center'}}>
+      <img src="https://thumb.wikimedia.org/wikipedia/commons/thumb/2/26/Counter-Strike_vertical_logo_%282023%29.svg/330px-Counter-Strike_vertical_logo_%282023%29.svg.png" alt="Counter-Strike series logo in the shared 3:2 frame" style={{width:'100%', height:'100%', objectFit:'contain', margin:0}} />
+    </div>
+    <p><strong>Counter-Strike</strong><br />Series logo · Wikidata / Commons</p>
+  </div>
+  <div style={{width:'300px', maxWidth:'100%'}}>
+    <div style={{width:'100%', aspectRatio:'3 / 2', boxSizing:'border-box', padding:'24px', background:'#ffffff', border:'1px solid #d4d4d8', borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center'}}>
+      <img src="https://static.bandainamcoent.eu/high/elden-ring/brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png" alt="Elden Ring series logo in the shared 3:2 frame" style={{width:'100%', height:'100%', objectFit:'contain', margin:0}} />
+    </div>
+    <p><strong>Elden Ring</strong><br />Series hub logo · Bandai Namco</p>
+  </div>
+</div>
+
+**Elden Ring source:** the publisher's original PNG is **452 × 128 px**, returned HTTP 200 / `image/png` (52,370 bytes), and rendered successfully in browser review on September 9, 2026. The official hub identifies the asset under `brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png`; this is separately verified series branding, not an automatic copy of the game's cover. Keep that page association and the exact URL in the media evidence record. [View original PNG](https://static.bandainamcoent.eu/high/elden-ring/brand-setup/ER-UNIVERSE-PAGE/ELDEN-RING-LOGO.png).
+
+The Counter-Strike candidates below are linked from the exact series item through Wikidata P154. Their displayed PNG URLs returned **HTTP 200 / image/png on September 9, 2026**. All of these images are source previews, not completed pipeline output.
+
+**Option 1 — 2023 series logo.** Recommended for this card review: the less extreme aspect ratio uses the available space better. Original SVG: 512 × 136; shown PNG: 330 × 88. [Source and file metadata](https://commons.wikimedia.org/wiki/File:Counter-Strike_vertical_logo_(2023).svg).
+
+**Option 2 — older wide wordmark.** Original SVG: 2,048 × 144; shown PNG: 330 × 23. Its very wide shape will make the lettering smaller in a compact image slot. [Source and file metadata](https://commons.wikimedia.org/wiki/File:Counter-Strike.svg).
+
+<div style={{width:'300px', maxWidth:'100%', aspectRatio:'3 / 2', boxSizing:'border-box', padding:'24px', background:'#ffffff', border:'1px solid #d4d4d8', borderRadius:'12px', display:'flex', alignItems:'center', justifyContent:'center', margin:'12px 0'}}>
+  <img src="https://thumb.wikimedia.org/wikipedia/commons/thumb/c/ca/Counter-Strike.svg/330px-Counter-Strike.svg.png" alt="Counter-Strike wide series wordmark in the shared 3:2 frame" style={{width:'100%', height:'100%', objectFit:'contain', margin:0}} />
+</div>
+
+#### Series image selection and fallbacks
+
+Resolve artwork for the **already admitted series identity** in this order. Move to the next source only when the earlier one is absent, rejected or exhausted within the original root's remaining budget.
+
+| Priority | Source and exact lookup | Acceptance / fallback rule |
+| --- | --- | --- |
+| 1 | The exact series Wikidata item: non-deprecated P154 logo; P18 only when explicitly suitable as series artwork | Prefer a current, preferred-rank logo compatible with the fixed white canvas. Resolve the named Commons file and retain its metadata/rights. For SVG, use a verified provider-supplied PNG rendition. A missing file, unsupported rendition or rejected asset advances to the next candidate |
+| 2 | A verified official publisher/developer **series or brand hub**, from an existing verified URL or an approved exact-series resolver | Extract an explicitly series-associated logo/artwork from a supported page template or linked official media asset. Verify the series subject and asset association. Elden Ring's official Universe hub is the worked example. An individual game's cover or website is not automatically series evidence |
+| 3 | An enabled catalog provider's exact, crosswalked series record, when that provider exposes approved series artwork | Require an explicit series-to-asset association and an enabled media policy. Do not substitute generic franchises, store collections, screenshots or the first member game's cover. Skip this source when unsupported or disabled |
+| Exhausted | No acceptable series image within the finite plan | Omit `image_url`; record the coverage result or actual failure. Render the common 3:2 UI placeholder. Do not upload a placeholder as sourced artwork, block series identity/membership, or start another discovery pass |
+
+Do not use IMDb artwork, search-result thumbnails, fan-made logos or generated branding. A game logo can qualify only when an independently verified official series source identifies that asset for the series, as in the Elden Ring hub. Human source research in this QA document is not permission for an unbounded production web crawl.
+
+Admit **at most three ranked image candidates and one selected output per series**. Metadata resolution, candidate downloads and retries consume the existing root's network, byte and job budgets. The finite media job may retry a transient failure under the shared policy; terminal rejection can advance to the next already admitted candidate. Budget exhaustion stops the attempt. Shared Universe logging must retain root/run/stage/attempt, source and rejection/failure evidence; missing coverage must not be reported as a successful upload. This leaf job cannot enumerate series members or enqueue another waterfall.
+
+#### Series image output and shared storage
+
+**Pixel rounding:** keep a 3:2 UI frame and store a 400 px-wide raster with height `round(400 × 2 / 3) = 267`. Output validation requires exactly 400 × 267; the one-third-pixel rounding is expected.
+
+**Stored output:** exactly **400 × 267 pixels**, WebP, white (`#FFFFFF`) opaque canvas, **32 px padding on each side** and centered proportional containment within the remaining 336 × 203 area. Generate the canvas deterministically from the accepted real source artwork; do not generate or redraw a logo. Prefer source renditions large enough for the fitted logo and record observed dimensions; enlarging a small source does not create additional detail. Composite source transparency onto the white canvas. Do not crop, distort or recolor the artwork. The card displays the complete asset in its 3:2 frame without adding another layer of padding; 400 px is the stored width, not a required UI width.
+
+**Implementation requirement:** add a versioned `series-3x2-v1` normalization option inside the existing shared Go image package. The current `ConvertPoster` path preserves the input aspect ratio and caps width at 500 px, so it does **not** yet implement this 400 × 267 contract. The series option needs its own target canvas dimensions while preserving the current avatar and movie-poster behavior. Use the existing shared decoder/encoder, configured GCS media bucket, deterministic `ObjectKey` helper, upload client, media ledger, retries, shared failure/stage logging and CDN/media renderer. This is a shared transform extension, not a separate uploader or service.
+
+Scope the deterministic object-key namespace to the canonical series identity and normalization version; retain the exact source-URL hash through the shared key helper. This prevents an older original-aspect asset from satisfying the new normalization receipt. Retain source page, exact fetched rendition, rights/attribution, source dimensions, transform version/parameters, output dimensions/MIME, storage key and processing receipt in the shared media/evidence records. Set `image_url` only to the serving URL returned for a successfully uploaded **400 × 267 WebP**. A rejected or missing asset cannot produce a ready receipt. Replays reuse the same successful variant; changing source or transform version requires a new matching receipt.
+
+The current shared decoder supports PNG/JPEG/GIF/WebP, not SVG. Use a verified provider-supplied PNG rendition for SVG logos; do not pass the SVG original to the shared decoder or build a private conversion path. Fetch and decode must still pass during ingestion; a successful source HEAD check alone is not an ingestion receipt. Series image processing stays within its already admitted root and cannot trigger another waterfall.
+
+**Consistency rule:** every successfully ingested `Game_Series` asset has the same 3:2 dimensions, background and padding **in the stored file**. The UI displays the complete normalized asset and uses the same 3:2 frame for the missing-image placeholder. Individual `Video_Game` cards keep their separately locked 2:3 portrait contract. This decision does not add a tagline or change storage services.
 
 ## Complete source inventory
 
@@ -66,6 +249,8 @@ These extend the coverage review without changing the original **29-node / 30-ed
 <AccordionGroup>
 <Accordion title="Engine node and game-use edge">
 
+**Locked example:** the edge's `source="video_game"` identifies its writing lane; its evidence reference resolves to the retained `official_xbox` observation in the companion JSON. The record also binds the exact game, engine, elected fact and version `5`. URLs support distinct claims: the Xbox report supports game use, while the engine-maker overview supports the node description. Internal IDs, election, timestamps, revisions and description output are simulated; no runtime model call or graph write is claimed.
+
 ```json
 {
   "nodes": [
@@ -78,12 +263,14 @@ These extend the coverage review without changing the original **29-node / 30-ed
         "uuid": "a5b975e0-fcc9-5b30-8822-521fa033d21f",
         "name": "Unreal Engine",
         "created_at": 1788868800000,
-        "updated_at": 1788868800000,
+        "updated_at": 1788955200000,
         "source": "official_xbox",
         "engine_kind": "game_engine",
         "source_urls": [
-          "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/"
-        ]
+          "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/",
+          "https://www.unrealengine.com/"
+        ],
+        "description": "Real-time 3D engine for building video games and interactive experiences."
       }
     }
   ],
@@ -95,14 +282,14 @@ These extend the coverage review without changing the original **29-node / 30-ed
       "properties": {
         "uuid": "c8a56cd0-e6f0-5379-b0e9-61773c43a866",
         "created_at": 1788868800000,
-        "updated_at": 1788868800000,
+        "updated_at": 1788955200000,
         "source_urls": [
           "https://news.xbox.com/en-us/2024/05/16/hellblade-2-performance-capture-next-level-combat-design/"
         ],
         "chosen_fact_ids": [
           "7e3c1581-0f6c-57f4-8fb4-132ea3052958"
         ],
-        "projection_revision": 1,
+        "projection_revision": 2,
         "policy_version": "games-v1",
         "active": true,
         "layer": "evidence",
@@ -113,6 +300,12 @@ These extend the coverage review without changing the original **29-node / 30-ed
         ],
         "engine_use_record_ids": [
           "example:hellblade-ii-unreal-5"
+        ],
+        "description": "Senua's Saga: Hellblade II uses Unreal Engine.",
+        "description_generated_at": 1788955200000,
+        "source": "video_game",
+        "evidence_ids": [
+          "example:evidence:hellblade-ii-unreal-5"
         ]
       }
     }
@@ -133,9 +326,9 @@ These extend the coverage review without changing the original **29-node / 30-ed
       ],
       "properties": {
         "uuid": "7fa971f9-571c-52e7-9c53-a6b323ed16dc",
-        "name": "The Last of Us — PS3 — worldwide release assertion",
+        "name": "The Last of Us \u2014 PS3 \u2014 worldwide release assertion",
         "created_at": 1788868800000,
-        "updated_at": 1788868800000,
+        "updated_at": 1788955200000,
         "source": "wikidata",
         "release_scope_key": "release:7fa971f9-571c-52e7-9c53-a6b323ed16dc",
         "game_entity_id": "7ccbbe2d-52c3-5bca-8d8c-5a0193bd669c",
@@ -149,7 +342,8 @@ These extend the coverage review without changing the original **29-node / 30-ed
           "https://blog.playstation.com/2013/06/04/the-last-of-us-multiplayer-revealed/",
           "https://www.prnewswire.com/news-releases/award-winning-developer-naughty-dog-launches-new-ip-the-last-of-us-exclusively-for-playstation3-211525641.html"
         ],
-        "visibility": false
+        "visibility": false,
+        "description": "PlayStation 3 release of The Last of Us, released on June 14, 2013."
       }
     }
   ],
@@ -177,7 +371,9 @@ These extend the coverage review without changing the original **29-node / 30-ed
         "excluded_from_scoring": true,
         "release_scope_record_ids": [
           "example:tlou-ps3-worldwide"
-        ]
+        ],
+        "description": "This PlayStation 3 release is a release of The Last of Us.",
+        "description_generated_at": 1788955200000
       }
     },
     {
@@ -204,6 +400,12 @@ These extend the coverage review without changing the original **29-node / 30-ed
         "excluded_from_scoring": true,
         "availability_record_ids": [
           "example:tlou-ps3-worldwide"
+        ],
+        "description": "The Last of Us was released for PlayStation 3.",
+        "description_generated_at": 1788955200000,
+        "source": "video_game",
+        "evidence_ids": [
+          "Q1986744$1C16A910-7740-4E5D-90EB-C9FC3DE63D0B"
         ]
       }
     }
@@ -221,7 +423,7 @@ The 2013 Last of Us item also contains later PS4 date assertions. Their presence
 - Use the six game types plus **existing** Person, Company, movie/theatre and music identities. Genres, themes, modes, ratings and artwork are scoped properties/media records; no new genre, character, award-category or storefront hubs in this build.
 - `Game_Series` means a typed video-game series. Generic franchises, fictional universes, marketing collections and bundles stay source context until a separate compatible contract exists. Their labels alone cannot create `IN_GAME_SERIES` or `BASED_ON`.
 - Remakes/remasters and substantive separately identified expansions may be distinct `Video_Game` identities. A port, SKU, cosmetic DLC or soundtrack app cannot automatically become another game. `EDITION_OF` and `EXPANSION_OF` need the exact typed relation; sequel/similarity links cannot stand in for either.
-- Reuse company identity for a studio with development and publishing roles, while preserving separate scope records. Engine-owner, platform-maker, outsourcing, rights-holder and distribution assertions may be retained as typed pending facts; the current game-only edge endpoints do not authorize new predicates or ownership inferences.
+- Reuse company identity for a studio with development and publishing roles, while preserving separate scope records. Elected series developer evidence requires Company identity creation/reuse and the locked series `DEVELOPED_BY` variant. Engine-owner, platform-maker, outsourcing, rights-holder and distribution assertions remain typed pending facts unless independently supported by an approved endpoint contract.
 - The useful paths are named people across games/movie/music; studios across scoped releases; titles across typed series/platform/engine contexts; and **actual** award recipients. Do not materialize inferred acquaintance edges or broaden discovery from those paths.
 
 ### Reuse each fetched source across allowed facts
@@ -232,7 +434,7 @@ Fetch an exact source object once per retained revision and extract all allowed 
 
 Persist an adapter capability record with source, version, enabled endpoint/page kinds, accepted subject types, field/edge allowlists, entitlement, retention/attribution policy, pagination/response limits and coverage scope. Pin that capability revision in the root manifest. Disabled or unverified capabilities yield a coverage reason without provider spend; do not silently fall back to an unrestricted scraper.
 
-Every provider request and support lookup stays within the **same** 20-game / 60-new-leaf / 100-job / 100-network-attempt root limits. A support node is an identity-only leaf. Never enumerate games from a series/platform/engine, releases from another game, award archives or company catalogs from a descendant. A larger provider response is truncated deterministically; it cannot enlarge admission. Game cards and incident relationships remain hidden until game-owned publication succeeds; game-scoped release/award nodes and their incident edges inherit that readiness. All game-domain edges remain excluded from scoring.
+Every provider request and support lookup stays within the **same** 20-game / 60-new-leaf / 100-job / 100-network-attempt root limits. Support writers receive no discovery or enqueue capability. A predeclared `series_evidence` stage may extract direct developer claims from the one admitted series record; only the original coordinator can reserve the resulting Company endpoints and freeze their identity/replay jobs. This fixed branch cannot enumerate games from a series/platform/engine, releases from another game, award archives or company catalogs. A larger provider response is truncated deterministically; it cannot enlarge admission. Game cards and incident relationships remain hidden until game-owned publication succeeds; game-scoped release/award nodes inherit that readiness, and member-supported series developer projections filter unpublished member support. All game-domain edges remain excluded from scoring.
 
 The award seed's 200-entry parser ceiling is a defensive response bound, not permission to admit 200 candidates. The shared discovery limit of **50 candidates per page across at most 3 pages**, at most 20 admitted games and all lower remaining root limits still applies. Exact-target award lookups observe other entries without admitting them.
 
@@ -247,5 +449,7 @@ All adapters use the [same Universe failure/stage/attempt facilities](/guides/op
 5. Disabled IGDB/Moby capabilities spend nothing and do not claim complete coverage; supported free/official sources can still produce evidenced support types.
 6. Series/platform/engine/award/identity leaves enqueue zero new roots. Duplicate events, retries and relation repair preserve budgets and do not reveal unpublished games.
 7. A storefront ID shared by two successive base games resolves to two identities, scoped by observation — neither merged into one game nor blocked as a strong-ID conflict. A single game holding two storefront IDs resolves to one identity. Neither case allocates a duplicate or reveals an unpublished game.
+8. With six elected Counter-Strike series developer claims and available budgets, resolve six canonical Company endpoints and write six series `DEVELOPED_BY` edges, creating only missing companies. Every edge must have a validated non-empty description; absent suitable text, queue GLM 5.3 FLASH at low effort before the write. Description failure leaves that relation pending, without a blank completed edge or additional budget. Replay creates zero duplicates and zero company waterfall/catalog jobs; it does not copy six credits onto Counter-Strike 2. Name-only, publisher-only, wrong-member and conflicting-identity candidates produce no unsupported edge.
+9. Budget exhaustion retains pending Company/edge work without a success receipt. Last-support withdrawal retires the series edge and projected name, not the Company; partial snapshots preserve surviving support. Member-supported public edges and `developers` entries cannot reveal an unpublished game's credits.
 
 [Machine-readable contract baseline](/assets/video-game-waterfall/type-source-contract.json) · [Node Types](/guides/ontology/nodes#game-type-contract-v1) · [Edge Types](/guides/ontology/edges#game-edge-contract-v1) · [Build plan](/guides/open-work/video-game-waterfall)

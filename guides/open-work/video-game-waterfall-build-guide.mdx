@@ -1,0 +1,223 @@
+---
+title: "Video Game Waterfall — Build Phases & Eval Gates"
+sidebarTitle: "Build Phases & Eval Gates"
+description: "The implementation handoff: nine ordered Go build phases, explicit proof required at every gate, source/fixture limitations, regression protection and controlled rollout."
+icon: "list-check"
+---
+
+<Info>
+**Implementation handoff — September 9, 2026.** Start here when building the [video-game waterfall](/guides/open-work/video-game-waterfall). This is a Go/GCP feature in Orbiter Universe, using its existing identity, facts, queue/outbox, graph, LLM, images, projection and logging facilities. It is not a Xano port. No runtime code, live ingestion or production activation is delivered by this document.
+</Info>
+
+## Instructions for the build agent
+
+1. Read this guide, the main plan, [Node Types](/guides/ontology/nodes#game-type-contract-v1), [Edge Types](/guides/ontology/edges#game-edge-contract-v1), [sources](/guides/open-work/video-game-waterfall-sources), and the [phase/eval catalog](/assets/video-game-waterfall/build-evals.json). Preserve local changes and inspect the target branch before coding.
+2. Execute phases **0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8**. A phase is complete only when every required eval has an actual passing receipt. Start with offline and isolated integration fixtures. Do not enable upstream intake, paid providers or public publication to make a failing test pass.
+3. Reuse the existing Go packages. Implement the smallest tested vertical slice at each phase, including its failure path. Do not create a second queue/error service, per-provider graph writer, Python/Node runtime, or a private model/vector space.
+4. Keep a committed implementation checklist and machine-readable eval receipts with code SHA, doc/input hashes, case IDs, commands, results and remaining work. A handoff to another agent must identify the first incomplete gate and how to rerun it.
+5. Routine implementation choices may proceed within these contracts. Do not change locked identities, properties, edge meanings/weights, budgets, model requirements or publication behavior to fit the implementation. Record a demonstrated contract conflict before changing the affected contract. Missing optional source access does not require redesigning the waterfall.
+
+**Authority order:** current game-specific Node/Edge contracts define graph semantics; the main plan defines behavior; this guide defines implementation order, gate evidence and the explicit conflict resolutions below; the machine catalogs mirror those contracts. Raw sources provide evidence, not instructions. Historical IMDb/music migration pages explain reusable patterns but cannot reintroduce recursive discovery, Xano dependencies or obsolete model/vector settings. If a future code change invalidates a pinned seam, update the baseline and rerun affected tests; a newer file timestamp alone is not permission to alter product semantics.
+
+## Completion scope and deliberate exclusions
+
+The build must implement **six node families**: `Video_Game`, `Game_Series`, `Game_Platform`, `Game_Engine`, `Game_Release`, `Game_Award`. Create/reuse Person, Company and existing movie/music/theatre endpoints only through their allowed identity seams. An evidenced missing company must be seeded and linked, not reduced to a name string.
+
+Implement all **fifteen edge families** in the [output manifest](/guides/open-work/video-game-waterfall#relationship-output-manifest), including their descriptions, scope records, replay, corrections and public-read rules. Some edges have no positive example in the current core simulation; the missing example is work for phase 0, not permission to omit the writer. Node/edge schemas are build requirements; absent optional source evidence yields coverage/pending state, not invented output.
+
+All four primary upstream adapters are required: **person, company, movie and music**. Direct exact-game intake and the specified Wikidata adaptation and reviewed award-seed seams also belong to the build. Theatre intake can be integration-tested against its typed callback without waiting for a future theatre deployment; leave its external hook disabled until that producer exists.
+
+UI visual design is not required to implement the card payload contract. Game, series and award cards are supported; platform, engine and release have no standalone cards. Extra series aliases/genres, award website/display-label properties, new genre/character/franchise/ceremony nodes and the speculative rights/funding/localization predicates remain outside this version. Commercial access, a larger discovery budget, production rollout and broad live evaluation are separate enablement decisions.
+
+## Baseline and conflicts resolved in this pass
+
+The local Universe code was read at **`f41366660b302540b67ec0d5f8435ff024ecb80b`**, with a clean working tree. The docs have approved local changes; pin their actual content hashes, not only the last docs commit. [Build freeze inventory](/assets/video-game-waterfall/build-freeze.json).
+
+| Finding | Required build interpretation |
+| --- | --- |
+| No dedicated game runner found | Register typed handlers before intake. The current generic queue already rejects unknown runners; preserve that behavior. A game must never fall through to company/movie orchestration |
+| Existing fan-out depth limits are insufficient | Extend immutable job scope, root budgets and forward-only stage admission; never rely on depth or `dispatch_variant` alone |
+| Graph and media publication were late in the old phase order | Install fail-closed public read guards in phase 1. All later tests run behind them. Finish revisioned public projection in phase 3; live activation waits until phase 8 |
+| Shared edge descriptions currently use `max` | Requested target is GLM 5.3 FLASH with nested effort `low`. Use the shared registry, retain provider/ZDR restrictions, and prove instruction-injection and sibling regressions. Do not silently return to `max` or a different model after a failure |
+| Older game text specified `001` / 3072 vectors | Reuse the current shared Go embedder: observed `google/gemini-embedding-2`, 1536 dimensions. Assert model, dimension, normalization and query/index compatibility. Do not change other vector spaces or truncate between different models |
+| Series card metadata still said false | Corrected to an enabled series card, preserving the locked 400×267 shared image transform |
+| Release storage sketch included date precision in identity | Dates/precision/status are mutable. The scoped immutable release key and canonical platform/territory rules in Node Types prevail |
+| Movie-poster conversion preserves aspect ratio | It cannot by itself turn a landscape fallback into a 2:3 poster. Use the specified shared containment transform or reject that candidate; test the stored output, not CSS alone |
+| Source examples are not complete golden runtime fixtures | Preserve raw source observations and separate internal simulated fields. Complete missing scope-reference/envelope coverage and then test actual code against independent assertions |
+
+## Shared Go work map
+
+Paths below are existing integration seams, not permission to bypass their public interfaces. Add game feature files beside them as needed; SQL migrations own DDL.
+
+| Work | Existing seam / required extension |
+| --- | --- |
+| Typed identity, aliases and merges | `internal/features/entities/entitiespub`, entity repositories and merge inventory; register six game types and every new FK/reference. Preserve IMDb-created UUIDs and temporal storefront aliases |
+| Gate, root/job ledger and workers | `internal/features/enrichment`, `queue_drain.go`, shared SQL repositories/outbox, `fanoutlimit`; add `internal/features/enrichment/games` with narrow capabilities |
+| Upstream hooks | `enrichment/person`, `enrichment/company`, `enrichment/filmtv`, `enrichment/music`, pending film/music credit replay and completed specialty receipts |
+| Evidence and graph | `features/facts/factspub`, feature-owned replay and `platform/graph`; shared envelope, elected facts, parameterized writes, monotonic revisions |
+| Text and embeddings | `internal/platform/llm/registry.go`, typed prompt/response validation and `internal/clients/openrouter` shared embedder; no inline alternative clients |
+| Files | `internal/platform/images`, `platform/gcs`, `platform/media`, `film_tv_poster_gcs.go` and shared rehost ledger; add versioned series and fallback-containment options |
+| Publication and product reads | `internal/features/publish`, projection receipts and Backend-owned applier. Game uses the `film_tv_display` discriminator; series/award use typed versioned card payloads with an explicit consumer mapping |
+| Observability | Existing attempts, `stages.Recorder`, failure classifier, `slog` logger and operational views. No new error-code vocabulary |
+
+The Backend applier owns its physical display schema. Reuse an existing compatible typed projection handler where available; if series/award mapping is absent, implement a backward-compatible handler in the owning repository and prove consumer acknowledgement. Do not mark delivery complete after writing a producer-only JSON blob. Never write App-private notes, collections or contacts.
+
+## How phase gates work
+
+The [eval catalog](/assets/video-game-waterfall/build-evals.json) lists reproducible arrangements, operations and expected assertions. All cases start **`not_run`**. In phase 0, implement a Go eval harness under the Universe repository, proposed path `scripts/game-eval`, with this interface:
+
+```bash
+go run ./scripts/game-eval --catalog testdata/video-game/build-evals.json --phase 0 --mode offline --report artifacts/video-game/phase-0.json
+```
+
+This command is a **required implementation target, not an existing executable**. Copy the reviewed catalog with its hash into runtime testdata. The harness invokes registered real Go tests/integration runners; it must not mark a case passing by reading its expected prose. It rejects unknown IDs, empty test selections, a skipped required case, missing dependencies, stale hashes and missing artifact references. The report includes both required and actual case counts. Missing infrastructure produces `blocked`, never a fake pass or `t.Skip` success.
+
+For each phase, require **100% of that phase's required cases passing, zero missing/skipped cases, and all dependency receipts current**. Unit/provider-replay tests prohibit unrecorded network requests. SQL/graph integration gates use disposable databases/graphs and an isolated media namespace. A graph mock alone cannot satisfy a graph integration gate. Use real production query code for read-hiding tests; do not test a parallel predicate written only for the eval.
+
+Every relevant case asserts all four surfaces: **canonical SQL/evidence state, graph state, queued jobs/budget side effects, and public projection/read results**. If a surface must remain unchanged, assert that explicitly. Assert identities, roles, scope, outcomes, revisions, weights and absence of recursive jobs exactly. Generated prose is tested against length, factual support, scope and injection constraints; a paid model response need not match an editorial sentence byte-for-byte. Vectors use model/dimension/finite-value/norm/input-hash checks rather than equality to example floats.
+
+Changing a shared interface, migration, fixture or contract invalidates dependent receipts. Rerun the affected predecessor phases and the current phase before advancing. Do not rerun unrelated expensive live checks after documentation-only changes; record why an existing receipt still covers the unchanged code/input contract.
+
+An illustrative unexecuted report shape:
+
+```json
+{
+  "schema_version": 1,
+  "phase": 0,
+  "status": "not_run",
+  "code_sha": null,
+  "docs_manifest_sha256": null,
+  "eval_catalog_sha256": null,
+  "fixture_bundle_sha256": null,
+  "policy_version": "games-v1",
+  "environment": "isolated",
+  "dependency_receipts": [],
+  "required_case_count": null,
+  "passed_case_ids": [],
+  "failed_case_ids": [],
+  "blocked_case_ids": [],
+  "skipped_case_ids": [],
+  "commands": [],
+  "evidence_artifacts": []
+}
+```
+
+## Phase 0: freeze contracts and build the eval harness
+
+**Deliver:** pin the actual Universe/Backend commit(s), docs/source/fixture hashes, enabled capability revisions and shared model/vector configuration. Map every new entity, identifier, graph writer, merge FK, projection consumer, stage and failure path to an implementation owner. Create the Go harness and register every catalog case before calling any phase complete.
+
+Promote the documentation data into runtime fixtures. The [core simulation](/assets/video-game-waterfall/graph-simulation.json) has **29 nodes / 30 edges**; the [support companion](/assets/video-game-waterfall/support-type-examples.json) adds **4 nodes / 3 edges** and is not automatically part of the same root. They illustrate selected output with simulated internal IDs/election/timestamps. Missing per-edge record references in older examples, incomplete source captures and hidden publication states must be accounted for explicitly. Do not import all pictured context into one game root or infer a root budget from the combined diagram.
+
+For each of the 15 edge families, produce at least one admitted fixture, one evidence-rejection fixture, replay/no-op and correction/retraction assertions. Preserve source statements and build correlated records from them. If source support is absent, add a **clearly synthetic control-flow fixture** or capture an approved real source later; never relabel invented data as a provider response. Same-game aliases, a distinct remake, same-name film, CS:GO/CS2 reused Steam app, and wrong-year awards require independent expected outcomes. The 157-character CS2 description input is a **negative publication fixture**, not golden public output.
+
+**Gate:** `P0-*`. Require complete family/case coverage and baseline commands recorded. The later runtime cases remain unexecuted; phase 0 proves the harness, fixtures and contract mapping, not the waterfall implementation. Existing CI uses `make test`, lint, migration ordering and DDL-in-migrations checks; record pre-existing failures without hiding new regressions.
+
+## Phase 1: durable scope, accounting and public guards
+
+**Deliver:** migrations and repositories for the logical state below, reusing shared tables where their invariants fit. Implement authenticated admission, separate root/snapshot/identity-only/replay capabilities, six-type dispatch registration, job scope, immutable manifest revisions, budget reservations, leased claims, outbox recovery and independent fetch/replay/publish switches. Upstream hooks remain disabled.
+
+| Durable invariant | Required key / transaction |
+| --- | --- |
+| Trusted demand receipt | Producer + original upstream event ID; Pub/Sub delivery ID is not a new request |
+| Root and plan | Immutable selected references, capability/policy version, limits, input hash and authorized stage graph; one accepted revision per generation |
+| Scoped work | Root + canonical reference + job kind + generation + policy; explicit immutable scope must survive alias merges and unrelated full-enrichment requests |
+| Reservations | Atomically compare root/per-game remaining limits, reserve, create job/identity intent and outbox row; no network or entity creation before reservation |
+| Source generation | Source + object + coverage scope; monotonic revision even for complete empty replacement |
+| Relation / description | Canonical ordered endpoints + edge family; exact retained evidence scope and input revision; description reuse cannot establish a relation |
+| Publication | Canonical entity + candidate revision + required durable stage/graph/media/consumer receipts; compare-and-set promotion of one matching revision |
+
+Use shared migration tooling and `pgx`/`sqlc`. Do not invent all-new physical tables when an existing ledger can enforce these invariants. Migrations must include uniqueness, lookup/claim indexes, FK/merge registration and preservation of history; prove clean bootstrap and forward upgrade. No automatic production backfill or destructive reset.
+
+**Core-work allocation:** reserve the required game snapshot/text/media/publication work before optional support and edge-description work. The 20-game limit is a ceiling, not a guarantee that twenty complete enrichments fit a ten-LLM-attempt root. Retain a deterministic admitted/deferred set when the remaining budget cannot cover required work; do not raise budgets or let optional fan-out consume the last reserved core calls. Additional sources and alias hits share the same reservation. Provider request accounting includes every retry and model failover; internal SQL/graph/outbox operations use their own bounded worker/batch controls rather than masquerading as source fetches.
+
+**Install the public guard now:** hidden or unclassified legacy `Film_TV:Video_Game` rows are excluded from direct lookup, search, cards, credit lists, graph paths and counts. A hidden game's release/award and their indirect edges are also hidden. Test actual readers, including reads from published people/companies and named award recipients. Stub identities may exist internally. Shared series/company identities can stay public, but hidden-game evidence cannot leak through their edges, names, counts or descriptions.
+
+Diagnostic stage writes remain best-effort as in movie/music; **durable publication proofs are not diagnostic logs**. A missing completion/media/election/projection receipt keeps publication pending even if the provider succeeded. Persist the successful paid response so retry can write/replay the missing receipt without paying again.
+
+**Gate:** `P1-*`. Race concurrent admissions/claims, duplicate events, expired leases, explicit zero, foreign roots and outbox crash points. Assert every independent ceiling, zero scope upgrades and zero public leakage before any real source work exists.
+
+## Phase 2: exact-game identity, source snapshots and fact election
+
+**Deliver:** the smallest internal exact-game flow using retained Wikidata/IMDb/official fixtures and typed source capabilities. Reuse an IMDb-created UUID and all compatible labels; resolve verified strong aliases before allocation. Treat temporally reused storefront IDs as scoped aliases rather than globally unique game IDs. Parse claims into source records and candidate facts; source presence is not election.
+
+Implement deterministic candidate admission and retention under the existing root limits. Preserve multiple roles/characters/languages and regional publisher tuples. Fetch an exact object once per retained revision where possible. Unsupported identity, entitlement absence, partial extraction, true empty and provider failure remain different outcomes. Do not create relationships or execute company/person enrichment from a fetched credit list.
+
+**Gate:** `P2-*`. Test the real source identifiers plus synthetic collision/correction cases. Assert no duplicates, no game/remake/movie collapse, no temporal Steam alias collapse, no false negative cache, no field promotion from unsupported source text and no internal candidate presented as public output.
+
+## Phase 3: required text, shared files and one complete game publication
+
+**Deliver:** final game description → tagline → selected tag revision → embedding, shared portrait ingestion and the typed game card projection. Description ≤127 Unicode code points; tagline ≤112 characters and no repeated release year. Preserve the existing tagline-only failover; it is not an edge/support-description fallback. Empty/unsupported Steam tags produce an explicit empty facet with coverage; marketing copy never becomes generated description or vector input.
+
+Use the current shared embedder for both storage and query vectors. Required text/embedding work participates in original LLM/network/job budgets. Reuse outputs only when input/model/policy hashes match. Do not copy the old `max` edge-description config into a purported `low` test or waive injection failures to enable a provider.
+
+Verify actual WebP bytes, dimensions, source provenance, deterministic `game-thumbnail/` key and upload receipt. Exact 2:3 portraits use the poster path; non-2:3 fallback needs the shared containment transform. Series output is tested later at 400×267. GCS/CDN host and storage configuration come from the shared pipeline; do not hardcode example serving URLs, persist expiring URLs as facts or substitute IMDb artwork.
+
+Build and acknowledge one versioned game projection in the isolated consumer. Read eligibility is separate from replay readiness: internal graph replay can finish while hidden. Publish only a consistent candidate revision; crashes between SQL, graph, media and the consumer leave it hidden. A refresh can retain a supported old published revision, but evidence/media withdrawal must invalidate unsafe old output immediately. Root completion does not depend on all optional relationships finishing.
+
+**Gate:** `P3-*`. Include no-description, too-long input, model-injection, wrong model/width, media failure, raw/IMDb image rejection, stale text/media and every publication crash boundary. An otherwise sparse game must publish when its required stages succeed. Public flags remain off outside the isolated test environment.
+
+## Phase 4: people, companies, series, platforms, engines and releases
+
+**Deliver:** identity-only endpoints; `WORKED_ON`, `DEVELOPED_BY`, `PUBLISHED_BY`, `IN_GAME_SERIES`, `AVAILABLE_ON`, `USES_ENGINE`, `RELEASE_OF`; the four support types other than awards. Every materialized edge has an elected scoped record, full common envelope and valid description. A record list is not a Cartesian product of arrays.
+
+The series developer branch is fixed: admitted series evidence → coordinator reserves companies → queued identity-only resolution → election/description → series development edge → matching developers display projection. When six Counter-Strike developer claims are elected and budgets allow, create/reuse six companies and six series edges; do not attach six developers to CS2. Existing companies consume work but not new-identity slots. Partial failure retains deferred evidence rather than claiming that a stored name completed the relationship.
+
+Series media uses 400×267 WebP / white canvas / 32px padding / centered containment. Platform and engine short descriptions are required for their own public readiness, with no cards/images. Release description is required, dates remain mutable, and one release has exactly one game and one exact platform. Missing optional support does not block the game; an unpublished release cannot leak through its platform edge.
+
+**Gate:** `P4-*`. Test exact scoped identities, source quality, required Company seeding, name-array projection, no automatic maker/publisher/parent inference, missing support, series media normalization, release-date corrections and hidden-member filtering. Replaying twice keeps the same canonical UUIDs and creation times.
+
+## Phase 5: versions, adaptations, music and award results
+
+**Deliver:** `EDITION_OF`, `EXPANSION_OF`, `BASED_ON`, `SOUNDTRACK_FOR`, `USED_IN`, `HAS_AWARD`, `WON_AWARD`, `NOMINATED_FOR`; `Game_Award` completes the six node families. Reuse existing endpoint writers through their typed contracts, and leave unsupported scope pending.
+
+P144 and inverse P4969 normalize to one derivative → source edge. No transitive adaptation or title-similarity inference. Preserve release-group/composition/recording distinction. A named credit may support person participation but cannot silently create a composition, soundtrack album or award recipient. Game/series/version endpoints discovered here are identity-only unless already independently admitted in the root.
+
+Awards preserve authority + ceremony/year + category + nominee-entry identity. Same-game performers remain separate entries; a joint nomination remains one entry with independently resolved recipients. A nomination-to-win correction preserves node/edge UUIDs and synchronizes result, modifier, descriptions and recipient edges under one fenced revision. Winners-only archives cannot retract nominees. The award card reuses its published game's image and creates zero media jobs/uploads.
+
+**Gate:** `P5-*`. All fifteen edge families now have passing create/replay/reject/correction tests. Include P144-only and P4969-only examples, music type mistakes, cyclic source relations, wrong-year award pages and indirect public leakage. No discovered endpoint can schedule a new root.
+
+## Phase 6: connect the four upstream adapters
+
+**Deliver:** queue-producing hooks behind disabled flags for movie, person, company and music, plus typed adaptation/theatre and reviewed-award input seams. Persist evidence first, then atomically enqueue/outbox the game work with original lineage; do not wait for an existing graph edge before accepting a credit.
+
+Movie games route before movie-only inline/tier decisions, preserve UUID and roles, and do not inherit movie artwork. Person eligibility uses original current/past work titles across all ten supplied role families. Company eligibility uses the completed accepted specialty-resolution receipt, not an unfinished rebuild or name substring. Music intake uses exact anchor/evidence scope and preserves its owner. Three sources finding one game share its canonical identity and root work while retaining all source evidence.
+
+No-match caches are scoped to identity + substantive evidence + policy/capability revision; failures and incomplete coverage are never negative matches. An independently requested full person/company run cannot upgrade a game leaf. Theatre callback tests may use a stub producer with the real typed event contract; source ownership is not simulated as already deployed.
+
+**Gate:** `P6-*`. Use the actual producer consumer boundary and durable outbox, not only a direct test call to `GameGate`. Test duplicate/delayed events, complete-vs-partial classifications, fresh games with new credits, old/new roles, music-to-game-to-music cycles and same-root dedup. Run existing sibling regression tests after each hook.
+
+## Phase 7: system faults, budgets, corrections and regression proof
+
+**Deliver:** recovery tick, durable resume, request cancellation, kill switches, operational views, merge repairs and the complete isolated end-to-end runner. Exercise the SQL/graph/media/consumer transaction boundaries with deliberate faults. Restore only unfinished authorized work under the same root budget.
+
+Root ceilings remain 20 selected games (direct root 1), 3 discovery pages / 50 candidates each, 60 new leaves / 20 per game, 100 non-replay jobs, 100 network attempts, 10 LLM attempts, 2,000 retained relation mentions, 10 MiB streamed source bodies, 50 relations per replay tick, 5 job attempts and 24-hour active lifetime. Lower remaining upstream/provider/daily limits win. Twenty games do not receive twenty new budgets. Read-only corrective replay cannot spend with providers or regenerate text after expiry; it may retire evidence and expose explicit pending description work.
+
+Bound heartbeats, ticks and wakeups too: each tick reads at most one batch, schedules only eligible unfinished work and records an unchanged-state no-op. It must not busy-loop on a permanently missing endpoint or reset enqueue revision on every wakeup. Data cycles may exist; scheduled work has strictly forward stage dependencies and no fresh admission from descendants.
+
+**Gate:** `P7-*`. Require zero recursive roots, zero unexplained duplicate identities/edges, zero public leaks, zero unaccounted provider calls and zero false-success required stages. Run actual DB concurrency and graph correction tests, race-check touched Go packages and the current CI requirements: `make test`, `make lint`, migration ordering against the verified base ref, and DDL-in-migrations checks. Record any environmental block explicitly; passing unit tests do not substitute for unavailable integration tests.
+
+## Phase 8: source capability checks, bounded canary and release evidence
+
+**Deliver:** a deployment-ready package with configuration names/defaults/owners, capability revisions, runbooks, thresholds and a per-feature activation checklist. Keep secrets out of reports. Check the shared source/model/image clients against the enabled real endpoints using a separate explicit eval budget; replay fixtures cannot prove current provider access, formatting or media rights. A model/endpoint unavailable in the target environment stays disabled/pending without an invented substitute.
+
+Start with the reviewed example roots in isolated infrastructure, then at most **10 canary roots** covering every enabled entry origin, including retries and corrections. Synthetic producer events are acceptable to exercise controlled intake; do not describe them as observed organic traffic. Manually adjudicate every canary emitted relationship, source attribution and game identity. Require **100% correct identity and emitted-edge attribution in this tiny launch set**, zero recursion/publication/budget violations, and complete recovery receipts. This is a release guard, not a calibrated coverage/recall claim.
+
+The larger roughly 500-person stratified cohort is a separate coverage/provider evaluation. Freeze the cohort, labels and holdout before tuning; report precision, unresolved/coverage rates and cost with denominators, excluding no-match inflation and publisher/game-only awards counted as personal credits. Do not claim broad accuracy from three examples or silently spend on this cohort. Commercial IGDB/Moby adapter enablement requires its entitlement/retention/attribution capabilities and its own replay/live checks; disabled commercial sources do not block the core feature.
+
+**Gate:** `P8-*`. Production activation requires actual environment/IAM/provider configuration and the user's existing deployment authorization. Preparing this build plan does not grant deployment, procurement or 500-person evaluation spend. If authorization/access is missing, deliver the passing build and mark only activation/live eval blocked. Report which capabilities are enabled, disabled or unverified; never label disabled coverage complete.
+
+## Receipt and resume checklist
+
+Before ending each implementation session, save: current code/doc/fixture hashes; completed phases and receipt paths; first incomplete case and its observed failure; migration/feature-flag state; any live work still queued; remaining allowed budget; exact rerun commands; and reviewer-visible changes. Do not put keys, raw PII, signed URLs or provider bodies in receipts.
+
+A final implementation handoff must include actual SQL/graph/projection artifacts from isolated tests, all phase receipts, sibling regression results, a root execution trace proving non-recursion, provider/media/model capability receipts, and rollback/retraction steps. **Documentation validation, a simulated JSON subgraph, an HTTP 200 page or a clean build alone cannot mark the waterfall built.**
+
+## Documentation checks provided with this handoff
+
+The docs repository includes `scripts/check-video-game-build-plan.py`. Run it from the docs checkout to validate phase ordering, case IDs, six-node/fifteen-edge coverage, navigation, local target files and the current freeze hashes:
+
+```bash
+python3 scripts/check-video-game-build-plan.py
+```
+
+This validates the handoff package only. It does not execute the planned Go tests or prove live provider, graph, media, consumer or deployment behavior.
