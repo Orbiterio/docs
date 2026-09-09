@@ -729,6 +729,36 @@ Persist the returned `storage_key` and use the shared configured CDN/signed-URL 
 
 Preserve candidate `source`, `source_game_id`, `source_page_url`, `source_image_url`, `asset_kind`, platform/edition/locale scope, observed dimensions, attribution, rights-policy reference and verification status. After ingestion, also retain the shared asset ID, content hash, MIME type, output dimensions, GCS object generation and source fact/revision. Keep provider URLs as provenance; project the approved serving URL. Replacing or withdrawing an image must invalidate the old selection and respect generation fencing. IGDB documents a 30-day removal window for replaced/deleted source images, so a raw CDN URL is not permanent storage. [IGDB image lifecycle](https://api-docs.igdb.com/#images)
 
+### Display text, tags and embedding
+
+**Locked 2026-09-09.** Four node properties are prepared in a fixed order before game publication, because each derives from the one before it. The stage order is not optional: the embedding must be computed from the _final_ description and tags.
+
+| Order | Property | Source | Rule |
+| :-: | --- | --- | --- |
+| 1 | `description` | Generated from elected facts | One neutral sentence, ≤127 characters, following the music `create-node-description` (#13112) pattern: name, first release year, genre, developer, publisher, series or predecessor. **Store copy is never the description.** Steam `short_description` is retained as `store_description` with `store_description_rights: publisher_marketing_copy` — evidence only, never embedded. Elden Ring's store copy is `THE CRITICALLY ACCLAIMED FANTASY ACTION RPG. Rise, Tarnished…`; embedding that retrieves on hype, not on what the game is. |
+| 2 | `tagline` | `z-ai/glm-5.3-flash` over the description | `reasoning.effort: low` — a bounded level; never `enabled: true` (unbounded thinking blows the budget) or `enabled: false` (400, reasoning is mandatory for this model). `provider.sort: throughput`; `moonshotai/kimi-k3` pinned failover on empty content. Prompt targets **10–14 words**, not a character count (models ignore character counts); **≤112 characters enforced in code** at a word boundary. Model, effort, character count, trim flag and timestamp are stage telemetry — `log_crash.phase = tagline`, already in the enum — not node properties. ≈\$0.00013 per game. |
+| 3 | `tags` | Steam store page, `InitAppTagModal` block | Exact app, one request; `appdetails` does **not** return user tags — its `genres`/`categories` are storefront facets. Top **10** tag names by vote count on the node; all 20 as `{tagid, name, count, observed_at}` in the scoped evidence record so the cut is reproducible. `tagid` is a Steam-wide controlled vocabulary (`Multiplayer` = `3859`, `Online Co-Op` = `3843` on every game), so tags are a filterable facet across the catalog — consistent with the no-genre-hub rule. SteamSpy is a cross-check only: it lags the store and still names app `730` "Counter-Strike: Global Offensive". |
+| 4 | `embeddings` | `"{name}: {description} Tags: {tags, comma-joined}"` | Gemini `gemini-embedding-001`. **3072** in AlloyDB per the locked vector standard; prefix-truncated and renormalized to **1536** if projected into FalkorDB `Entity.embeddings`, the shape of the 2026-07-06 migration. Appending the tags is deliberate: it makes "competitive esports shooter"-style queries land on the right games where the description alone would not. |
+
+Genre stays `wikidata:P136`, not Steam: Steam returns storefront facets such as `Free To Play`, which is a business model, not a genre.
+
+**Worked example — Counter-Strike 2** (real values from Wikidata `Q111165107` and Steam app `730`, observed 2026-09-09; the tagline is a simulated placeholder pending a live run):
+
+```json
+{
+  "name": "Counter-Strike 2",
+  "description": "Counter-Strike 2 is a 2023 free-to-play first-person shooter developed and published by Valve Corporation, the successor to Counter-Strike: Global Offensive.",
+  "description_source": "generated_from_elected_facts",
+  "store_description": "For over two decades, Counter-Strike has offered an elite competitive experience, one shaped by millions of players from across the globe. And now the next chapter in the CS story is about to begin. This is Counter-Strike 2.",
+  "store_description_rights": "publisher_marketing_copy",
+  "tagline": "Valve's free-to-play first-person shooter and 2023 successor to Counter-Strike: Global Offensive",
+  "tags": ["FPS", "Shooter", "Multiplayer", "Competitive", "Action", "Team-Based", "eSports", "Tactical", "First-Person", "PvP"],
+  "embeddings": "<vecf32 — from \"Counter-Strike 2: Counter-Strike 2 is a 2023 free-to-play … Tags: FPS, Shooter, Multiplayer, …\">"
+}
+```
+
+Tag vote counts on app `730` are inherited from CS:GO (92,683 votes on `FPS` accumulated since 2012). The tag identities still describe CS2 accurately; the counts and ranking are the predecessor's — one more consequence of the shared storefront ID recorded in the [identity fixture](/guides/open-work/video-game-waterfall-sources#real-engine-and-release-examples).
+
 ## AlloyDB and Go ownership
 
 Reuse shared `entities`, `entity_identifiers`, `enrichment_payloads`, `enrichment_attempts`, `enrichment_stages`, `enrichment_queue` and `entity_facts`. Exact migrations below are proposed; check existing reusable schemas first.
