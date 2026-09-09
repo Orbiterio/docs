@@ -1271,23 +1271,23 @@ Existing music-owned `RELEASED`, `COMPOSED`, `PERFORMED` and related edges remai
 
 **Build handoff:** all fifteen families below need writer/description/evidence/correction/public-read coverage. The [phase guide](/guides/open-work/video-game-waterfall-build-guide) and [eval catalog](/assets/video-game-waterfall/build-evals.json) assign those gates. Older simulation rows are not automatically complete golden writer inputs; phase 0 supplies missing scoped references from retained evidence without changing its facts.
 
-**Design baseline locked September 8, 2026.** The inventory above fixes names, directions and weights; this table fixes admission and ownership. Runtime writers remain proposed. [Source coverage](/guides/open-work/video-game-waterfall-sources) and [six node contracts](/guides/ontology/nodes#game-type-contract-v1) must pass before an endpoint extension activates. The existing endpoint-specific weights stay unchanged.
+**Design baseline locked September 8, 2026.** The inventory above fixes names, directions and weights; this table fixes admission and ownership. Runtime writers remain proposed. [Source coverage](/guides/open-work/video-game-waterfall-sources) and [six node contracts](/guides/ontology/nodes#game-type-contract-v1) must pass before an endpoint extension activates. The existing endpoint-specific weights stay unchanged. **Every family in this table carries the [common envelope](#common-game-edge-properties-and-corrections) unchanged, including `source="video_game"` as the writing lane — also for `BASED_ON`, whose shared adaptation replay owner still writes the game lane whenever a `Video_Game` endpoint is present; the evidence provider (`wikidata`, `musicbrainz`, …) is retained in the source ledger, never in `source`. `policy_version` is `games-v1`; `games-v1-proposed` in older examples is pre-lock text (Phase 0b OQ-1/OQ-3, September 9, 2026).**
 
 | Relationship | Accepted evidence and additional properties | Single replay owner / rejection rule |
 | --- | --- | --- |
-| `WORKED_ON` | Explicit named person/game credit from retained IMDb, typed Wikidata, official credit or enabled licensed source; `roles`, scoped credit-record IDs, optional character/language/version | Game credit replay; role title, employment, award proximity or name-only match cannot create the credit |
+| `WORKED_ON` | Explicit named person/game credit from retained IMDb, typed Wikidata, official credit or enabled licensed source; `roles`, `role_labels`, `credit_record_ids`, optional `character_names`, language and version scope | Game credit replay; role title, employment, award proximity or name-only match cannot create the credit |
 | `DEVELOPED_BY` | Video_Game → Company: exact development/co-development/port-development role. Game_Series → Company: direct series developer evidence or exact elected member development plus membership. Preserve `development_role`, `company_role_record_ids`; series variants also carry `development_scopes`, `series_developer_record_ids` and member references when applicable | One game company replay owner for both endpoint variants. Accepted evidence requires Company identity creation/reuse and edge replay; parent ownership, publisher billing and names copied from a card cannot establish development |
-| `PUBLISHED_BY` | Explicit publisher with scoped territory/platform/time records | Game company replay; distribution, rights ownership and unlabeled company billing stay distinct |
-| `BASED_ON` | Explicit derivative/source relation, preserving original P144/P4969 direction and qualifiers | Shared adaptation replay; never infer from shared franchise, sequel order or Best Adaptation category alone |
-| `SOUNDTRACK_FOR` / `USED_IN` | Exact music endpoint plus game relation; soundtrack/work/recording kind and scoped usage records | Music/game bridge replay; named composer or an album track list alone cannot establish the bridge |
+| `PUBLISHED_BY` | Explicit publisher with scoped territory/platform/time records; `publishing_record_ids` | Game company replay; distribution, rights ownership and unlabeled company billing stay distinct |
+| `BASED_ON` | Explicit derivative/source relation, preserving original P144/P4969 direction and qualifiers; `adaptation_record_ids` | Shared adaptation replay; never infer from shared franchise, sequel order or Best Adaptation category alone |
+| `SOUNDTRACK_FOR` / `USED_IN` | Exact music endpoint plus game relation; soundtrack/work/recording kind and scoped usage records as `usage_record_ids` | Music/game bridge replay; named composer or an album track list alone cannot establish the bridge |
 | `IN_GAME_SERIES` | Typed video-game series membership; `membership_record_ids`, optional literal `series_ordinal` | Game context replay; reject generic franchise/group membership and title similarity |
-| `EDITION_OF` | Separately identified derivative game and exact source-game remake/remaster/edition claim; `edition_kind`, relation-record IDs | Game version replay; orient derivative → original. Packaging-only SKU, port date, sequel and similarity do not authorize this edge |
-| `EXPANSION_OF` | Substantive game/expansion identity with explicit base-game relation; `expansion_kind`, scoped relation-record IDs | Game version replay; reject soundtrack/cosmetic apps and do not follow the base game's catalog |
-| `RELEASE_OF` | Resolved `Game_Release` scope with one canonical game target; release-scope record IDs | Game release replay; exactly one active game target, no date-only release identity |
+| `EDITION_OF` | Separately identified derivative game and exact source-game remake/remaster/edition claim; `edition_kind`, `relation_record_ids` | Game version replay; orient derivative → original. Packaging-only SKU, port date, sequel and similarity do not authorize this edge |
+| `EXPANSION_OF` | Substantive game/expansion identity with explicit base-game relation; `expansion_kind`, `relation_record_ids` | Game version replay; reject soundtrack/cosmetic apps and do not follow the base game's catalog |
+| `RELEASE_OF` | Resolved `Game_Release` scope with one canonical game target; `release_scope_record_ids` | Game release replay; exactly one active game target, no date-only release identity |
 | `AVAILABLE_ON` | Exact platform plus verified released/availability scope; `availability_record_ids`, optional `release_entity_ids`, territory/date summaries | Game release/context replay; announced, backward-compatible or cloud-streamed alone is insufficient. Scoped SQL records are authoritative |
 | `USES_ENGINE` | Explicit engine use on the exact game; `engine_use_record_ids`, optional `engine_versions`, scoped release/platform/time references | Game context replay; do not infer from a studio's tools, a trailer or middleware usage |
 | `HAS_AWARD` | Game associated with a resolved ceremony/category/nominee entry; required non-empty `award_evidence_record_ids` plus the common envelope. [Complete node and edge example](/guides/open-work/video-game-waterfall-game-awards#complete-award-node-and-game-edge) | Game recognition replay; the game is context for a named-person award, not a claim every contributor won |
-| `WON_AWARD` / `NOMINATED_FOR` | Explicit independently resolved Person/Company recipient of that particular entry; recipient-record IDs | Game recognition replay; billing an organization next to a game does not make it an award recipient |
+| `WON_AWARD` / `NOMINATED_FOR` | Explicit independently resolved Person/Company recipient of that particular entry; `recipient_record_ids` | Game recognition replay; billing an organization next to a game does not make it an award recipient |
 
 These owner names designate modules/stages in the **shared Go application and queue**, not new services. They consume elected facts and bounded manifests. A writer cannot trigger source discovery, full person/company enrichment, an award archive or another game's waterfall. Related games needed for version/adaptation endpoints remain hidden identity-only stubs unless already independently admitted or published.
 
@@ -1319,7 +1319,7 @@ The graph contains primitive scalars and lists. Evidence records with correlated
 | `updated_at` | integer, epoch milliseconds | Required. Application-managed time of an accepted material change; a no-op retry preserves it |
 | `source` | string | Required: `video_game`, the writing lane. `game_company` is its replay owner; actual evidence providers are retained in the source ledger and URLs |
 | `source_urls` | string[] | Required. URLs for the surviving eligible evidence, pinned to a source revision where available |
-| `evidence_ids` | string[] | Required. Immutable evidence references; Wikidata statement IDs identify assertions whose snapshots/revisions remain in the ledger |
+| `evidence_ids` | string[] | Required. Immutable evidence references; Wikidata statement IDs identify assertions whose snapshots/revisions remain in the ledger. A statement ID retained only inside a correlated record is **not** evidence until its claims snapshot is in the ledger; until then the edge stays pending-snapshot (Phase 0b OQ-4) |
 | `chosen_fact_ids` | string[] | Required. Elected fact IDs supporting this exact relationship, including both developer and membership facts when using member support |
 | `projection_revision` | integer | Required. Monotonically accepted revision, enforced by the shared fenced replay so older work cannot resurrect a retired relation |
 | `policy_version` | string | Required. Pinned version of the policy that elected the materialized facts |
@@ -1380,7 +1380,7 @@ Wikidata's exact series item **The Legend of Zelda (`Q12393`)** has developer **
     ],
     "chosen_fact_ids": ["7ce873a1-191b-54a7-a2d2-5f997743dafd"],
     "projection_revision": 1,
-    "policy_version": "games-v1-proposed",
+    "policy_version": "games-v1",
     "active": true,
     "weight": 35,
     "layer": "evidence",
