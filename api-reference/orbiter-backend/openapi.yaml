@@ -86,6 +86,8 @@ tags:
       Contact imports from external sources (LinkedIn CSV, Apple Contacts
       vCard, Nylas address books). Signed-URL upload, async processing,
       per-row report. Requires a verified WorkOS access token.
+  - name: Leverage Loops
+    description: Copilot suggestion requests in loop mode with their suggestions, actions, trajectories and follow-up questions. Requires a verified WorkOS access token.
   - name: Links
     description: Web links on persons/companies. Requires a verified WorkOS access token.
   - name: Memories
@@ -1097,6 +1099,35 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /admin/persons/projection-sync:
+    post:
+      operationId: adminPersonsProjectionSync
+      tags:
+        - Admin
+      summary: Queue a package re-apply for persons
+      description: |
+        Operator backfill (X-Admin-Token). Queues a projection sync for each held person named, so the worker overwrites each row from its latest enrichment package: the tool for a package field the backend only recently started to store. Ids not held are reported as unknown and skipped. Capped at 500 ids per call.
+      security:
+        - adminToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminProjectionSyncRequest'
+      responses:
+        '202':
+          description: Syncs queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminProjectionSyncEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
   /users/webhooks/workos:
@@ -8113,6 +8144,43 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /discover/{discover_id}/candidates:
+    get:
+      tags:
+        - Discover
+      summary: List a discover's Deep Discover candidates
+      description: |
+        Returns every entity the Deep Discover web lane found for this
+        discover, kept or not: what the engines returned, its anchor, the
+        relevance score and reason, and where it landed (`status`, and after
+        the fan-in, `bucket`). Empty when the request did not set
+        `deep_research` or the lane has not run yet. Auth-gated but not
+        owner-scoped. Unknown ids return 404.
+      operationId: listDiscoverDeepCandidates
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: discover_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The discover's candidates, kept first, best score first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeepCandidateListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /discover-context-nodes:
     get:
       tags:
@@ -8216,6 +8284,418 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /leverage-loops:
+    get:
+      operationId: listLeverageLoops
+      tags:
+        - Leverage Loops
+      summary: List the caller's leverage loops
+      description: Newest activity first. Excludes archived loops unless `status=archived`. Each item embeds its resolved person and non-archived suggestions.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          description: Filter to one status (draft, submitted, processing, suggestion, archived). Empty excludes archived.
+          schema:
+            type: string
+        - name: query
+          in: query
+          description: Case-insensitive substring match on request_panel_title.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of leverage loops.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Create a draft leverage loop
+      description: The owner is the authenticated user. The loop starts in status `draft`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeverageLoopRequest'
+      responses:
+        '201':
+          description: The created loop.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /leverage-loops/{loop_id}:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    get:
+      operationId: getLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Get one leverage loop
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The loop with its suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: updateLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Update a leverage loop
+      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`.'
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLeverageLoopRequest'
+      responses:
+        '200':
+          description: The updated loop.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Delete a leverage loop and everything under it
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loops/{loop_id}/dispatch:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    post:
+      operationId: dispatchLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Submit a draft loop for suggestion generation
+      description: Moves the loop to `processing`, records usage and queues generation on the worker. A loop already past draft/submitted returns 409.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: The loop in its processing state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /leverage-loops/{loop_id}/suggestions:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    get:
+      operationId: listLeverageLoopSuggestions
+      tags:
+        - Leverage Loops
+      summary: List a loop's suggestions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: archived
+          in: query
+          description: '`true` returns the archived suggestions instead of the live ones.'
+          schema:
+            type: boolean
+            default: false
+        - name: query
+          in: query
+          description: Case-insensitive substring match on header_text.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of suggestions, newest activity first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopSuggestionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: getLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Get one suggestion
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The suggestion with its person / company resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopSuggestionEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: updateLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Archive or restore a suggestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - archived
+              properties:
+                archived:
+                  type: boolean
+      responses:
+        '200':
+          description: The updated suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopSuggestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Delete a suggestion and its actions, trajectories and questions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/actions:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopActions
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's actions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of live actions, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopActionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/trajectories:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopTrajectories
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's trajectories with their nodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of trajectories, oldest first, nodes embedded and hydrated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopTrajectoriesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/questions:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopQuestions
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's follow-up questions
+      description: Every question, oldest first (not paged); rebuild the thread from parent_id.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The questions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopQuestionListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createLeverageLoopQuestion
+      tags:
+        - Leverage Loops
+      summary: Ask a follow-up question on a suggestion
+      description: 'Stores the question with `processing: true`; the answer is produced asynchronously. selected_nodes must name existing entities.'
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeverageLoopQuestionRequest'
+      responses:
+        '201':
+          description: The created question.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopQuestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-questions/{question_id}/nodes:
+    get:
+      operationId: listLeverageLoopQuestionNodes
+      tags:
+        - Leverage Loops
+      summary: List the nodes pinned to a question
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of hydrated nodes, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSuggestionNodesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /edge-sync/rebuild:
     post:
       tags:
@@ -9165,7 +9645,7 @@ paths:
         - Persons
       summary: Look up a person by profile URL
       description: |
-        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). On a local miss with a LinkedIn URL the person is resolved-or-created with the enrichment provider, persisted, and returned with status created while enrichment completes in the background. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
+        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). A LinkedIn URL is always sent to the enrichment provider's get-add, local hit or miss; a held person is overwritten with the provider's latest package. On a miss the person is resolved-or-created there, persisted, and returned with status created while enrichment completes in the background. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
       security:
         - bearerAuth: []
       requestBody:
@@ -9697,7 +10177,7 @@ paths:
         - Companies
       summary: Look up a company by website domain
       description: |
-        Resolve a company from its website domain. On a local miss the company is resolved-or-created with the enrichment provider, persisted, and returned with status created. A seed the provider declines returns pending_enrichment.
+        Resolve a company from its website domain. The domain is always sent to the enrichment provider's get-add, local hit or miss; a held company is overwritten with the provider's latest package. On a miss the company is resolved-or-created there, persisted, and returned with status created. A seed the provider declines returns pending_enrichment.
       security:
         - bearerAuth: []
       requestBody:
@@ -11446,6 +11926,42 @@ components:
         user_id:
           type: string
           format: uuid
+    AdminProjectionSyncRequest:
+      type: object
+      required:
+        - person_ids
+      properties:
+        person_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+            format: uuid
+    AdminProjectionSync:
+      type: object
+      required:
+        - requested
+        - unknown
+      properties:
+        requested:
+          type: integer
+          description: Syncs queued.
+        unknown:
+          type: array
+          description: Ids this backend does not hold; nothing was queued for them.
+          items:
+            type: string
+            format: uuid
+    AdminProjectionSyncEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/AdminProjectionSync'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     UserWebhookResponse:
       type: object
       required:
@@ -17169,6 +17685,14 @@ components:
           type:
             - string
             - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        short_description:
+          type:
+            - string
+            - 'null'
     NodeLocation:
       type: object
       required:
@@ -18836,9 +19360,66 @@ components:
         deep_research:
           type: boolean
           description: |
-            Widens the context set and asks the model for a more thorough
-            synthesis. Costs more tokens and latency.
+            Widens the context set, asks the model for a more thorough
+            synthesis, and also runs the Deep Discover web lane: entity search
+            beyond the Universe, reported through the record's `deep` block and
+            the candidates endpoint. Costs more tokens and
+            latency.
           default: false
+    DeepProgress:
+      type: object
+      required:
+        - found
+        - enriching
+        - ready
+        - leads
+        - timed_out
+      description: |
+        Where the lane's candidates are. `found` excludes what the relevance
+        gate rejected; `enriching` are seeded and awaiting Universe;
+        `ready` have local rows; `leads` were kept but could never be added.
+      properties:
+        found:
+          type: integer
+        enriching:
+          type: integer
+        ready:
+          type: integer
+        leads:
+          type: integer
+        timed_out:
+          type: integer
+    DeepLane:
+      type: object
+      required:
+        - status
+        - trigger
+        - message
+        - progress
+      description: |
+        The Deep Discover web lane as the client should show it. Poll the
+        record while `status` is `queued`, `running`, `enriching` or
+        `completing`; `complete` and `failed` are terminal. `trigger` is
+        `request` when the caller set `deep_research`, `miss` when the graph
+        answer cited nothing and the lane opened on its own. `message` is the
+        one line to show for the current state. What the lane finds is not
+        here: on completion the record's `answer` is rewritten as the sum of
+        the graph research and the web findings, and the entities it added
+        appear among the response nodes.
+      properties:
+        status:
+          type: string
+        trigger:
+          type: string
+        message:
+          type: string
+        progress:
+          oneOf:
+            - $ref: '#/components/schemas/DeepProgress'
+            - type: 'null'
+          description: |
+            Candidate counts, loaded by the detail endpoint only; null on
+            create and update responses.
     DiscoverRecord:
       type: object
       required:
@@ -18848,6 +19429,7 @@ components:
         - team_ids
         - archived
         - processing
+        - deep
         - created_at
         - updated_at
       description: |
@@ -18874,6 +19456,10 @@ components:
           type:
             - string
             - 'null'
+          description: |
+            The final answer, null until one exists. A graph miss that opens
+            the web lane writes nothing here; show the search from `deep`
+            until the lane completes and writes the aggregated answer.
         team_ids:
           type: array
           items:
@@ -18883,7 +19469,19 @@ components:
           type: boolean
         processing:
           type: boolean
-          description: True while the research pipeline is in flight.
+          description: |
+            True while the research pipeline is in flight, including a web
+            lane that opened on a graph miss.
+        deep:
+          oneOf:
+            - $ref: '#/components/schemas/DeepLane'
+            - type: 'null'
+          description: |
+            The Deep Discover web lane, null when it never opened. It opens
+            when the request sets `deep_research`, or automatically when the
+            graph answer cited nothing and the Universe had nothing to say.
+            While it runs `answer` may be null; when it completes the answer
+            and the response nodes carry what it found.
         created_at:
           type: string
           format: date-time
@@ -18937,6 +19535,100 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/DiscoverRecord'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DeepCandidate:
+      type: object
+      required:
+        - id
+        - entity_type
+        - name
+        - anchor_kind
+        - anchor
+        - source_url
+        - snippet
+        - source_engines
+        - score
+        - reason
+        - kept
+        - status
+        - bucket
+        - entity_id
+        - created
+        - created_at
+        - updated_at
+      description: |
+        One entity the Deep Discover web lane found. `anchor_kind` is
+        `domain`, `linkedin_company`, `linkedin_person` or `none`; `status`
+        is `rejected`, `lead`, `shadow`, `pending`, `polling`, `ready`,
+        `timed_out` or `failed`; `bucket`, set by the fan-in, is `in_answer`,
+        `in_graph`, `net_new` or `lead`. `entity_id` is the Universe id once
+        the entity was seeded.
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          description: persons or companies.
+        name:
+          type: string
+        anchor_kind:
+          type: string
+        anchor:
+          type: string
+        source_url:
+          type: string
+        snippet:
+          type: string
+        source_engines:
+          type: array
+          items:
+            type: string
+        score:
+          type:
+            - number
+            - 'null'
+        reason:
+          type:
+            - string
+            - 'null'
+        kept:
+          type: boolean
+          description: True when the relevance gate scored it at or above the keep threshold.
+        status:
+          type: string
+        bucket:
+          type:
+            - string
+            - 'null'
+        entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        created:
+          type: boolean
+          description: True when seeding created the entity in Universe rather than matching one.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DeepCandidateListEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeepCandidate'
         error:
           type: 'null'
         meta:
@@ -19062,7 +19754,16 @@ components:
       required:
         - id
         - name
-      description: The company a node points at, with the authenticated user's company contact (my_company).
+        - logo
+        - domain
+        - tagline
+        - short_description
+        - my_company
+      description: |
+        The company a node points at, with the authenticated user's company
+        contact (my_company). Carries everything the company card renders:
+        tagline under the name, short_description as the about text. Nullable
+        fields are always present, null when unknown.
       properties:
         id:
           type: string
@@ -19077,8 +19778,18 @@ components:
           type:
             - string
             - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        short_description:
+          type:
+            - string
+            - 'null'
         my_company:
-          $ref: '#/components/schemas/MyCompany'
+          oneOf:
+            - $ref: '#/components/schemas/MyCompany'
+            - type: 'null'
     LiveEvent:
       type: object
       required:
@@ -19312,6 +20023,11 @@ components:
           format: uuid
         company_name:
           type: string
+        company_logo:
+          type:
+            - string
+            - 'null'
+          description: The raising company's logo URL, null when it has none.
         name:
           type: string
         funding_type:
@@ -19498,18 +20214,40 @@ components:
             - string
             - 'null'
           description: The MusicBrainz id.
-    PathEntity:
+    PathPerson:
       type: object
       required:
         - id
         - name
-      description: A resolved hop endpoint (id + display name).
+        - avatar
+      description: |
+        A resolved person endpoint. avatar is the same picture the node read
+        shows on the card, empty when unknown.
       properties:
         id:
           type: string
           format: uuid
         name:
           type: string
+        avatar:
+          type: string
+    PathCompany:
+      type: object
+      required:
+        - id
+        - name
+        - logo
+      description: A resolved company endpoint. logo is null when unknown.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        logo:
+          type:
+            - string
+            - 'null'
     PathEndpoint:
       type: object
       required:
@@ -19525,9 +20263,9 @@ components:
         node_uuid:
           type: string
         person:
-          $ref: '#/components/schemas/PathEntity'
+          $ref: '#/components/schemas/PathPerson'
         company:
-          $ref: '#/components/schemas/PathEntity'
+          $ref: '#/components/schemas/PathCompany'
     NodePathHop:
       type: object
       required:
@@ -19676,9 +20414,9 @@ components:
         - error
         - meta
       description: |
-        A page of discover graph nodes (one kind — context or response, per the
-        route). Pagination (page / pageSize / total) lives in meta; data is the
-        bare item array.
+        A page of discover graph nodes (one kind per route: context or
+        response; entities the web lane adds are response nodes). Pagination
+        (page / pageSize / total) lives in meta; data is the bare item array.
       properties:
         data:
           type: array
@@ -19688,6 +20426,540 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    LeverageLoopSuggestion:
+      type: object
+      required:
+        - id
+        - suggestion_request_id
+        - header_text
+        - node_targeted
+        - archived
+        - paths_to_person
+        - paths_to_company
+        - created_at
+        - updated_at
+      description: 'One leverage_loop_suggestion with its primary node flattened onto it: entity_type + node_uuid name the entity, person / company carry it.'
+      properties:
+        id:
+          type: string
+          format: uuid
+        suggestion_request_id:
+          type: string
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        header_text:
+          type: string
+        suggestion_context:
+          type:
+            - string
+            - 'null'
+        entity_type:
+          type:
+            - string
+            - 'null'
+        node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        node_targeted:
+          type: boolean
+        archived:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/NodeCompany-2'
+            - type: 'null'
+        paths_to_person:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        paths_to_company:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoop:
+      type: object
+      required:
+        - id
+        - copilot_mode
+        - status
+        - request_panel_title
+        - request_header_title
+        - modified
+        - leverage_loop_suggestions
+        - leverage_loop_suggestion_count
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        copilot_mode:
+          type: string
+          description: Always `loop` on this surface.
+        status:
+          type: string
+        request_panel_title:
+          type: string
+        request_header_title:
+          type: string
+        request_context:
+          type:
+            - string
+            - 'null'
+        class_slug:
+          type:
+            - string
+            - 'null'
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        number_of_results:
+          type:
+            - integer
+            - 'null'
+        deliver_format:
+          type:
+            - string
+            - 'null'
+        llm_summary_context:
+          description: Raw JSON (array of strings) or null.
+        modified:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        leverage_loop_suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopSuggestion'
+        leverage_loop_suggestion_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PageMeta:
+      type: object
+      description: Envelope meta for keyset lists. nextCursor is empty on the last page.
+      properties:
+        requestId:
+          type: string
+        total:
+          type: integer
+          format: int64
+        nextCursor:
+          type: string
+    ListLeverageLoopsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoop'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateLeverageLoopRequest:
+      type: object
+      properties:
+        request_panel_title:
+          type: string
+          maxLength: 500
+        request_header_title:
+          type: string
+          maxLength: 500
+        request_context:
+          type:
+            - string
+            - 'null'
+        class_slug:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The person the loop is about. Omit for a generic loop.
+        number_of_results:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          maximum: 200
+        deliver_format:
+          type:
+            - string
+            - 'null'
+          description: One of suggestions, csv, pdf, create collection.
+    LeverageLoopEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoop'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateLeverageLoopRequest:
+      type: object
+      description: Partial update; absent fields are unchanged.
+      properties:
+        request_panel_title:
+          type: string
+          maxLength: 500
+        request_header_title:
+          type: string
+          maxLength: 500
+        request_context:
+          type:
+            - string
+            - 'null'
+        status:
+          type: string
+          description: One of draft, submitted, processing, suggestion, archived.
+        number_of_results:
+          type: integer
+          minimum: 1
+          maximum: 200
+        deliver_format:
+          type: string
+    ListLeverageLoopSuggestionsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    LeverageLoopSuggestionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoopSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LeverageLoopAction:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - action_context
+        - draft_email
+        - warm_intro
+        - message
+        - archived
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        action_context:
+          type: string
+        draft_email:
+          type: boolean
+        warm_intro:
+          type: boolean
+        message:
+          type: boolean
+        archived:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ListLeverageLoopActionsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopAction'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SuggestionNode:
+      type: object
+      required:
+        - id
+        - entity_type
+        - node_uuid
+        - label
+        - node_targeted
+        - paths_to_person
+        - paths_to_company
+        - created_at
+        - updated_at
+      description: A stored node plus the entity it points at, in the Discover node shape. Exactly one entity block is non-null; all are null when the entity no longer resolves.
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+          format: uuid
+        label:
+          type: array
+          items:
+            type: string
+        node_targeted:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/NodeCompany-2'
+            - type: 'null'
+        live_event:
+          oneOf:
+            - $ref: '#/components/schemas/LiveEvent'
+            - type: 'null'
+        film_tv:
+          oneOf:
+            - $ref: '#/components/schemas/FilmTv'
+            - type: 'null'
+        film_tv_award:
+          oneOf:
+            - $ref: '#/components/schemas/FilmTvAward'
+            - type: 'null'
+        funding_round:
+          oneOf:
+            - $ref: '#/components/schemas/FundingRound'
+            - type: 'null'
+        music_group:
+          oneOf:
+            - $ref: '#/components/schemas/MusicGroup'
+            - type: 'null'
+        music_recording:
+          oneOf:
+            - $ref: '#/components/schemas/MusicRecording'
+            - type: 'null'
+        paths_to_person:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        paths_to_company:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoopTrajectory:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - trajectory_context
+        - leverage_loop_trajectory_nodes
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        trajectory_context:
+          type: string
+        leverage_loop_trajectory_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionNode'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ListLeverageLoopTrajectoriesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopTrajectory'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    LeverageLoopQuestion:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - question
+        - processing
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        parent_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        question:
+          type: string
+        answer:
+          type:
+            - string
+            - 'null'
+        processing:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoopQuestionListEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CreateLeverageLoopQuestionRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          maxLength: 5000
+        parent_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: An earlier question on the same suggestion to thread under.
+        selected_nodes:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Entity ids to pin as context for the question.
+    LeverageLoopQuestionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoopQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListSuggestionNodesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionNode'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
     Rebuild:
       type: object
       required:
@@ -20685,8 +21957,13 @@ components:
       description: |
         One round the person participated in. `firm_*` is populated only for
         institutional investments. `money_raised` amounts are in MILLIONS.
+        Rounds held locally carry `funding_round_id` and `company_id`; deals
+        that come only from the person's enrichment package carry
+        `external_deal_id`, and their ids are null when the company is not
+        held. Newest first.
       required:
         - funding_round_id
+        - external_deal_id
         - funding_type
         - company_id
         - company_name
@@ -20694,8 +21971,14 @@ components:
         - acquired
       properties:
         funding_round_id:
-          type: string
+          type:
+            - string
+            - 'null'
           format: uuid
+        external_deal_id:
+          type:
+            - string
+            - 'null'
         funding_type:
           type: string
         money_raised:
@@ -20712,7 +21995,9 @@ components:
         is_lead_investor:
           type: boolean
         company_id:
-          type: string
+          type:
+            - string
+            - 'null'
           format: uuid
         company_name:
           type: string
@@ -20787,6 +22072,10 @@ components:
             - string
             - 'null'
         derived_thesis_summary:
+          type:
+            - string
+            - 'null'
+        board_advisory_summary:
           type:
             - string
             - 'null'
@@ -22363,6 +23652,34 @@ components:
     PersonID:
       in: path
       name: person_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      description: Page size (default 50, max 200).
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from the previous page's `meta.nextCursor`. Omit for the first page.
+      schema:
+        type: string
+    LoopID:
+      name: loop_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SuggestionID:
+      name: suggestion_id
+      in: path
       required: true
       schema:
         type: string
