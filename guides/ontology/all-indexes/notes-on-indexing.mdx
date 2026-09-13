@@ -1,0 +1,83 @@
+---
+title: "Notes on Indexing"
+description: "What developers need to know about FalkorDB indexes when adding node labels, edge types, and MERGE keys to the Universe graph"
+sidebarTitle: "Notes on Indexing"
+---
+
+These notes come from a static audit of every Cypher statement in `orbiter-universe` (2026-09-13). They exist so that a new entity type or edge type lands with the right index the first time, instead of as a label scan that nobody notices until the graph is large.
+
+## How FalkorDB picks an index
+
+- An index is **per label** (or per relationship type) and **single property**. It is used only when the query pattern names that label and filters that property with `=`, `<`, `<=`, `>`, `>=`, or `IN`.
+- A multi-label pattern such as `(p:Person:Entity {entity_id: $id})` names `Entity`, so an index on `Entity.entity_id` is eligible. A pattern that names only `Person` cannot use any `Entity` index, whatever labels the stored node carries.
+- An unlabeled pattern `MATCH (n) WHERE n.uuid IN $uuids` and an untyped relationship pattern `MATCH ()-[r]->() WHERE r.uuid IN $uuids` can use no index at all.
+- `<>`, `IS NULL`, `coalesce(x, …)`, and `toLower(x)` predicates are not accelerated. A predicate wrapped in a function is a scan.
+- Vector queries must name the indexed label exactly: `db.idx.vector.queryNodes('Entity', 'embeddings', …)` only sees nodes that carry `Entity`.
+- Indexes never enforce uniqueness. A unique constraint is a separate object and needs a supporting range index on the same label and property first.
+
+## The house conventions the index set relies on
+
+| Node kind | Labels | MERGE key | Served by |
+|---|---|---|---|
+| Entity-backed nodes (Person, Company, Film_TV, music kinds, Stage_Production, Video_Game, Game_*) | `<Label>:Entity` | `entity_id` (set equal to `uuid` ON CREATE) | `Entity.entity_id` |
+| Reference nodes seeded from tables (Region, City, DomainExpertise, SubDomainExpertise) | `<Label>:Entity` | composite, lowercased, `::`-joined key (`region_key`, `city_key`, `domain_key`, `sub_domain_key`) | `Entity.<key>` |
+| Satellites keyed by content (credentials, Film_TV_Award, InvestmentThesis) | `<Label>:Entity` | `merge_key`, `canonical_identity_key`, `thesis_id` | `Entity.<key>` |
+| Support nodes that are not entities (Release, Place, MediaAppearance) | label only, **no** `Entity` | `row_id` / `media_key`, and `uuid` for endpoint seeks | label-specific indexes on both properties |
+| Edges | relationship type | the endpoint pair, sometimes plus one property (`via_key`, `cert_type`, `role`) | no edge index needed: endpoints are bound first |
+
+Every edge writer MATCHes both endpoints by `uuid` or `entity_id` and then MERGEs the relationship between the two bound nodes. FalkorDB resolves that by expanding the bound endpoints, so a property inside the relationship pattern does not need an index.
+
+## Adding a node label
+
+<Steps>
+  <Step title="Decide whether it is an entity">
+    If the node represents something with an `entities` row, it carries `:Entity` and MERGEs on `entity_id`. If it is a support node that must stay invisible to entity-wide reads and the shared KNN, it carries only its own label. Either is fine; the choice decides which indexes you need.
+  </Step>
+  <Step title="Choose the MERGE key and ask before choosing CREATE vs MERGE">
+    A bare `CREATE` duplicates nodes on re-runs; a wrong MERGE key fuses distinct things. Propose the key (composite, lowercased, `::`-joined from the identifying fields) and get the call before writing the builder.
+  </Step>
+  <Step title="Put only the identity labels in the MERGE pattern">
+    `MERGE (p:Company:Entity {entity_id: $id}) … SET p:School` is safe. `MERGE (p:Company:School:Entity {entity_id: $id})` is not: MERGE matches only nodes that carry every label in the pattern, so a node first written without `School` is not found and a second node with the same `entity_id` is created. Modifier and subtype labels go in `SET`, never in the MERGE pattern.
+  </Step>
+  <Step title="Add the index for the key">
+    If the key is `entity_id` or `uuid` under an `Entity`-bearing pattern, nothing to add. Any other key needs `CREATE INDEX FOR (n:Entity) ON (n.<key>)`. A label that omits `Entity` needs a label-specific index for its MERGE key **and** for `uuid` if any edge writer seeks it: `CREATE INDEX FOR (n:<Label>) ON (n.<key>)` and `CREATE INDEX FOR (n:<Label>) ON (n.uuid)`.
+  </Step>
+  <Step title="Register the index where the graph is provisioned">
+    Add the statement to the script on the [Indexes](/guides/ontology/all-indexes) page and to `EnsureVectorIndexes` in `internal/platform/graph/vector_index.go`, which already creates `Entity.uuid` at boot and on the admin ensure route. A statement for an index that already exists returns "already indexed", which the code treats as success.
+  </Step>
+  <Step title="Verify the plan">
+    Run `GRAPH.EXPLAIN` on the real MERGE with a bound parameter and confirm an index scan appears. `CALL db.indexes()` lists what the graph holds and whether each index is operational.
+  </Step>
+</Steps>
+
+## Adding an edge type
+
+- Register the type and its weight in `internal/kernel/edges` first; writers read the registry, never a literal.
+- MATCH both endpoints with the `Entity` label in the pattern whenever the node carries it: `(p:Person:Entity {uuid: $p})`, `(c:Entity {uuid: $c})`. Writing `(c:Company {uuid: $c})` silently loses the index. The two `Company`-only and one `Event`-only patterns that exist today are why the script carries `Company.uuid` and `Event.uuid`.
+- MERGE on the endpoint pair. Add a property to the relationship pattern only when the same pair legitimately carries several edges of one type (a certification type, a role and part).
+- Use the shared `edgeIdentitySet` helper for `uuid`, `created_at`, and `updated_at`, so a re-run never moves the first-seen time.
+- Every edge must carry a non-empty, evidence-grounded `description`; see the graph skill rule dated 2026-09-09. Descriptions are content, not an index concern, but a writer that skips them is incomplete.
+- No relationship index is needed for any of this. Reach for `CREATE INDEX FOR ()-[r:TYPE]-() ON (r.prop)` only when a query starts from a typed relationship property with no bound endpoint, which nothing in the codebase does today.
+
+## Vector indexes
+
+- Both vector indexes live on `Entity`, at 1536 dimensions, cosine. A node that should be searchable must carry `Entity`; a node that must not be found by search must not.
+- The dimension is fixed at index creation. A vector of another width is rejected on write, and an index built at the wrong width indexes nothing while reporting operational.
+- Every node that carries a vector also carries `embedding_model` and `embedding_dimensions`, so a model switch can find exactly what to re-embed.
+- `queryNodes` returns the k nearest and only then applies a `WHERE`; a type filter after the call can return fewer than k rows. Raise k before filtering.
+
+## Query shapes that defeat every index
+
+- `toLower(n.name) = toLower($name)` over `(n:Entity)`: a scan of the whole graph. Store a normalized key and compare it directly, and start the pattern from the smallest label that can hold the answer.
+- `WHERE n.key = $key OR (n.key IS NULL AND …)`: the OR branch is not indexable, so the whole predicate scans. Run the exact-key lookup first and fall back in a second statement.
+- `MATCH (n) WHERE n.uuid IN $uuids`: unlabeled. Acceptable in operator tools that must span non-`Entity` nodes; never in a request path.
+- `coalesce(n.flag, false) = false`: a guard that no index can serve. Write the property on every node so the predicate can be a plain equality, or accept the scan and keep it off hot paths.
+
+## Uniqueness
+
+None of the indexes above stop a duplicate. If a duplicate would be a bug rather than a race to heal, add a unique constraint after its index exists, and expect the writer to see an error instead of a silent second node. Candidates worth discussing before the graph grows: `Entity.entity_id`, `Entity.uuid`, `MediaAppearance.media_key`, `Event.event_key`, `Release.row_id`, `Place.row_id`.
+
+## Related
+
+- [Indexes](/guides/ontology/all-indexes): the provisioning script.
+- [Node Types](/guides/ontology/nodes) and [Edge Types](/guides/ontology/edges): the ontology the keys above belong to.
