@@ -42,7 +42,7 @@ All entries call one proposed Go `GameGate.Admit` boundary. HTTP/event names bel
 | **IMDb title** | IMDb extraction says `videoGame`, or a verified game alias matches the title | Use the [same movie-to-game handoff](#movie-to-game-handoff). Create/reuse identity with the current node writer, then queue the game adapter with that UUID and already paid-for snapshot; skip movie-only enrichment for the game. |
 | **Movie/TV adaptation** | Resolved film QID and explicit P144/P4969 statement involving a supported game | Admit the game and the relationship evidence. Preserve film → game or game → film according to the statement. |
 | **Forthcoming theatre adaptation** | Resolved theatrical work or production QID and explicit Wikidata relation | Admit the directly connected game. A play and one production of that play are not interchangeable endpoints. |
-| **Reviewed Game Awards seed batch** | Trusted user/admin event with explicit ceremony year and category/page allowlist | Freeze a bounded set of nominated/winning games and queue the existing game flow. [Official-source adapter](/guides/open-work/video-game-waterfall-game-awards); no archive recursion. |
+| **Reviewed Game Awards seed batch** | Trusted user/admin event with explicit ceremony year and category/page allowlist | Freeze a bounded set of nominated/winning games and queue the existing game flow. [Official-source adapter](#the-game-awards-adapter); no archive recursion. |
 | **User/admin direct game** | Strong ID or a title/year/platform candidate for review | One game root; ambiguous matches return candidates, not an automatic merge. |
 
 <a id="company-specialization-entry" />
@@ -693,7 +693,7 @@ The provider ladder is **per missing field or relationship**, not “run every p
 | --- | --- | --- | --- |
 | 1 | Wikidata structured statements | Identity crosswalks, notable credits, developer/publisher, adaptation, series, dates, soundtrack references | First adapter; preserve rank, qualifiers, statement GUIDs and references. Structured data is CC0; this does not license linked cover images. |
 | 2 | Already acquired IMDb and permitted person/company data | Existing named title credits; explicit shipped-title assertions | Reuse the owning pipeline's lawful snapshot and source provenance. Job-history overlap alone creates no credit. |
-| 3 | Official studio/publisher/creator/store/award pages, including [The Game Awards adapter](/guides/open-work/video-game-waterfall-game-awards) | Missing role details, release scope and named recognition | Exact-page, bounded extraction using shared Go provider clients. Search discovers a candidate URL; it is not the fact. |
+| 3 | Official studio/publisher/creator/store/award pages, including [The Game Awards adapter](#the-game-awards-adapter) | Missing role details, release scope and named recognition | Exact-page, bounded extraction using shared Go provider clients. Search discovers a candidate URL; it is not the fact. |
 | 4 | MobyGames commercial adapter | Catalog/release/company detail; full credits only with the appropriate entitlement | Optional, disabled until source capability and intended-use terms are confirmed. |
 | Alternative | IGDB commercial partnership | Rich catalog, franchise, platform, engine and company detail | Reconsider as a catalog alternative; it does not solve individual-credit coverage. |
 | Later | Licensed full credits, including MobyGames Gold or a separately quoted IMDb dataset | Long-tail named production credits | Evaluate against a held-out people/game corpus before procurement. Do not assume matching coverage or price across vendors. |
@@ -704,13 +704,184 @@ IGDB should not remain categorically “ruled out”: its official FAQ offers co
 
 Delete the earlier unmeasured “full catalog in four days” promise. Budget using measured pages, enabled endpoint entitlements, source quotas and retries. The runtime should cache selected game detail, never block roots behind a global bootstrap crawl. Capability absence is `not_entitled`, not an endless retry. Keep Moby/IGDB key-bearing URLs out of logs.
 
+<a id="the-game-awards-adapter" />
+
 ### The Game Awards: official awards and person/game evidence
 
-Add a Go adapter for [The Game Awards](https://thegameawards.com/) as a primary source for its own results. Use it to enrich admitted games, feed the person-credit probe from explicitly named performance/music entries, and optionally seed an explicitly reviewed year/category batch. The [full adapter contract and real examples](/guides/open-work/video-game-waterfall-game-awards) specify source-year validation, queued scopes, identity and corrections.
+**Proposed Go/GCP adapter; reviewed September 8, 2026.** Use The Game Awards as a primary authority for its own nominations and results. The source review read public pages; it did not ingest production data, run a live graph query or establish a public API contract. [Selected source observations (JSON)](/assets/video-game-waterfall/the-game-awards-observations.json)
 
-The official [2022 archive](https://thegameawards.com/rewind/year-2022) corroborates Elden Ring's existing Best Game Direction result. The [2025 performance page](https://thegameawards.com/nominees/best-performance) exposes a critical identity case: multiple people nominated for the same game/category/year need **separate nominee-entry results**. Game + category + year alone is not a sufficient `Game_Award` key. Winner/nominee is a mutable outcome, not part of that key.
+Use this adapter to enrich admitted games, feed the [person-credit probe](#how-the-game-adapter-looks-for-results) from explicitly named performance/music entries, and optionally seed an explicitly reviewed year/category batch. Both modes use the same finite plan, shared budgets and [game publication gate](#game-publication-gate).
 
-Official category pages are reusable URLs; bind each snapshot to its verified ceremony year. Archive winners pages do not supply complete historical nominees. Resolve named people independently, preserve joint billing, and never copy a game's win to every credited person. Best Adaptation and esports/creator subjects require their correct type/scope; the award category cannot itself create a `BASED_ON` edge or game credit.
+#### What this adds to the waterfall
+
+The site has [category/nominee pages](https://thegameawards.com/nominees), [current results](https://thegameawards.com/categories) and [year-specific Rewind archives](https://thegameawards.com/rewind). Its value is broader than an award badge: performance and score categories explicitly connect named people to games, supporting the person adapter as well as the game's recognition records.
+
+| Source content | Useful output | Boundary |
+| --- | --- | --- |
+| Game nomination or win | Scoped `Game_Award` and game `HAS_AWARD` (weight 40) | Outcome belongs to that year's nominee entry; a game win does not award its whole crew |
+| Named performance recipient and game | Person `WON_AWARD` (30) or `NOMINATED_FOR` (35); a separately elected `WORKED_ON` credit (30) where the category supports participation | Resolve the person; keep the role broad unless the source proves voice, motion/performance capture or character detail |
+| Named score/music recipient and game | Award recipient link and scoped game-music contribution evidence | Do not infer that every named recipient composed an entire soundtrack or mint an album/work from a game title; exact music identities follow the existing music contracts |
+| Studio/publisher text on a nominee tile | Company identity and role-resolution candidates | Slash-separated names do not establish which company developed/published or legally received the award |
+| Best Adaptation | Named screen-work recognition and candidate cross-media context | Retain film/series/season scope; do not create a game node for the adaptation or infer an exact `BASED_ON` target from the category alone |
+| Esports/team/creator categories | Named subject and scoped recognition evidence | Keep subject kind explicit. Non-game subjects without a supported result contract remain pending; never force a person/team into `Video_Game` |
+| Exact-game award tile artwork | Optional game-source thumbnail candidate | Use only artwork for the exact game, never a performer headshot, event logo or adaptation poster; ingestion and publication gates still apply |
+
+No new relationship names or additional entity families are needed for the initial game/performance/music slice. All new game-domain relationships remain evidence context and excluded from scoring.
+
+#### Real examples checked on the official site
+
+| Observation | Proposed graph consequence after identity/election |
+| --- | --- |
+| [2022 archive: Elden Ring wins Best Game Direction](https://thegameawards.com/rewind/year-2022) | Corroborate the **existing** scoped award in our core fixture. Reuse that award UUID and its `HAS_AWARD` edge; another source is not another win |
+| [2025 Game of the Year: Clair Obscur: Expedition 33](https://thegameawards.com/nominees/game-of-the-year) | One game-scoped winning entry and its game recognition edge |
+| [2025 Best Performance: Jennifer English wins; Charlie Cox and Ben Starr are also nominated for the same game](https://thegameawards.com/nominees/best-performance) | **Three separate nominee-entry results**, not one shared result keyed only by game/category/year. Each named person links to their own result |
+| [2025 Best Score and Music: Lorien Testard wins for Clair Obscur: Expedition 33](https://thegameawards.com/nominees/best-score-and-music) | A named music-recognition entry linked to its game. Resolve any more specific music role/work separately |
+| [The same music page jointly lists Woodkid and Ludvig Forssell for Death Stranding 2](https://thegameawards.com/nominees/best-score-and-music) | Preserve one joint nominee entry with two named recipient references; this billing does not create a new `Music_Group` |
+| [2025 Best Adaptation: The Last of Us: Season 2](https://thegameawards.com/nominees/best-adaptation) | Retain the season-specific screen subject and pending owner routing; do not award the 2013 game or flatten the nomination onto a whole series without a scope contract |
+| [2025 Most Anticipated Game: Grand Theft Auto VI](https://thegameawards.com/nominees/most-anticipated-game) | An award record only; award year is not release year and anticipation does not establish a shipped release |
+
+The [Best Performance category](https://thegameawards.com/winners/best-performance) covers multiple performance forms. An award in that category alone cannot decide which form applies to a particular person. The inspected [2024 archive](https://thegameawards.com/rewind/year-2024) also shows why the parser needs category-specific templates: some music results bill a company where other years name an individual.
+
+#### Award identity: one record per nominee entry
+
+**A game + category + ceremony key would collapse the three same-game Best Performance nominees above.** The durable award-result identity is **award body + ceremony/year + canonical category + nominee entry**. A nominee entry is scoped to its canonical game and, where the nomination is for named people, the named person or joint recipient set and any explicitly distinguished performance/work scope.
+
+| Field | Contract |
+| --- | --- |
+| `award_body_key` | Stable registered authority key, here `the_game_awards` |
+| `ceremony_key`, `award_year` | Ceremony scope confirmed from the source; Wikidata ceremony QID is an optional crosswalk |
+| `category_key`, `category_label` | Versioned authority/category mapping plus literal source label; category QID is optional |
+| `award_entry_key` | Immutable local registry key for this nominee entry. Provider entry ID is an alias if actually supplied; do not use a page position or an invented API ID |
+| `subject_kind` | `game`, `person_game` or `recipient_group_game` for this initial graph slice; other kinds remain typed pending evidence |
+| `game_entity_id`, recipient references | Canonical game and independently resolved named recipients. Structured recipient/qualifier records remain in SQL, not nested graph objects |
+| `result` | `nominee`, `winner` or unresolved outcome; outcome is **not** part of identity |
+| Provenance | Source URL, verified source year, category/entry locator, retrieved snapshot/hash, observed timestamp, coverage scope and chosen-fact references |
+
+Nomination → winner updates the **same** result UUID, retains nomination history, and makes the winner state current through elected replay. A corrected recipient label or resolved alias must reconcile the existing registry entry, not mint a second result. Resolve/correlate source aliases before allocation; ambiguous co-nominees remain pending. Do not erase separate performance entries just because they share a game or person.
+
+The existing 2022 award in the [core fixture](/guides/open-work/video-game-waterfall-examples) keeps UUID `0c4b3bfe-c29a-5ae7-9edf-6068ef7ce7c3`. Its historical `fixture_ref` suffix `winner` is a sample reference only and must not become the runtime identity recipe. The updated `award_entry_key` is outcome-independent. Official-site observations are companion evidence; this documentation pass does not pretend they have been ingested or elected into the core fixture.
+
+```json
+{
+  "labels": ["Entity", "Game_Award", "Winner"],
+  "properties": {
+    "uuid": "0c4b3bfe-c29a-5ae7-9edf-6068ef7ce7c3",
+    "name": "The Game Awards 2022 — Best Game Direction — Elden Ring",
+    "award_body_key": "the_game_awards",
+    "ceremony_key": "the_game_awards:2022",
+    "category_key": "best-game-direction",
+    "award_entry_key": "the_game_awards:2022:best-game-direction:game:8d718f08-fad1-5f49-9b39-a3ed7678612b",
+    "subject_kind": "game",
+    "award_year": 2022,
+    "result": "winner"
+  }
+}
+```
+
+This is a partial property illustration using the core fixture's simulated internal IDs. It inherits the common timestamps, source/fact and projection envelope. The pending game's public visibility gate also hides the scoped award node and all its incident relationships, including named recipient edges.
+
+#### Complete award node and game edge
+
+**Node and HAS_AWARD edge locked — September 9:** the core simulation now includes the complete `Game_Award` node and its `HAS_AWARD` edge, with the required `award_evidence_record_ids` resolving to an exact scoped record in [the full fixture](/assets/video-game-waterfall/graph-simulation.json). Names and source assertions are real; UUIDs, timestamps, election/replay state and descriptions are illustrative. The award node description is editorial expected text, not a model receipt. The approved stored fields are fixed in [Node Types](/guides/ontology/nodes#game-award-properties) and [Edge Types](/guides/ontology/edges#game-has-award); extra website/display-label fields are outside this lock. Visual layout and runtime implementation remain pending.
+
+The award node remains hidden. Its card resolves the associated game's processed image through `game_entity_id`; no `image_url` is stored on this node and no successful media receipt is invented.
+
+**Node**
+
+```json
+{
+  "labels": [
+    "Entity",
+    "Game_Award",
+    "Winner"
+  ],
+  "properties": {
+    "uuid": "0c4b3bfe-c29a-5ae7-9edf-6068ef7ce7c3",
+    "name": "The Game Awards 2022 — Best Game Direction — Elden Ring",
+    "ceremony_qid": "Q110028874",
+    "category_qid": "Q104117222",
+    "award_year": 2022,
+    "result": "winner",
+    "created_at": 1788868800000,
+    "updated_at": 1788955200000,
+    "source": "wikidata",
+    "description": "Elden Ring won Best Game Direction at The Game Awards 2022.",
+    "award_body_key": "the_game_awards",
+    "ceremony_key": "the_game_awards:2022",
+    "category_key": "best-game-direction",
+    "award_entry_key": "the_game_awards:2022:best-game-direction:game:8d718f08-fad1-5f49-9b39-a3ed7678612b",
+    "subject_kind": "game",
+    "game_entity_id": "8d718f08-fad1-5f49-9b39-a3ed7678612b",
+    "visibility": false
+  }
+}
+```
+
+**Elden Ring → HAS_AWARD → scoped award result**
+
+```json
+{
+  "from": "8d718f08-fad1-5f49-9b39-a3ed7678612b",
+  "type": "HAS_AWARD",
+  "to": "0c4b3bfe-c29a-5ae7-9edf-6068ef7ce7c3",
+  "properties": {
+    "uuid": "3ef567fe-9be3-570d-af5e-76e50e14d2b6",
+    "created_at": 1788868800000,
+    "updated_at": 1788955200000,
+    "source": "video_game",
+    "source_urls": [
+      "https://www.wikidata.org/w/index.php?title=Q64826862&oldid=2519463538"
+    ],
+    "evidence_ids": [
+      "Q64826862$48B48A6C-CFC6-47E0-800A-9DF7BD75E2B4"
+    ],
+    "chosen_fact_ids": [
+      "0d8f35da-dd82-5454-8c4f-26dd259d57b9"
+    ],
+    "projection_revision": 2,
+    "policy_version": "games-v1",
+    "active": true,
+    "weight": 40,
+    "layer": "evidence",
+    "excluded_from_scoring": true,
+    "description": "Elden Ring received Best Game Direction at The Game Awards 2022.",
+    "description_generated_at": 1788868800000,
+    "award_result": "winner",
+    "award_evidence_record_ids": [
+      "954681ab-749f-5975-a378-9d53e3a0ff61"
+    ]
+  }
+}
+```
+
+The edge's `source="video_game"` is the writing lane; its source/evidence record retains the Wikidata P166 statement and P585/P805 qualifiers binding the exact category and 2022 ceremony. `award_result` is the existing fixture's denormalized outcome and must stay consistent with the award node in the same elected projection. `active=true` is internal graph state and does not override `visibility=false` or the inherited game publication gate. This game-only entry creates no individual recipient edge. The [official 2022 archive](https://thegameawards.com/rewind/year-2022) separately corroborates the result; it remains companion evidence rather than a claimed elected source in this fixture.
+
+**Locked description step:** reuse suitable supported text or queue typed `game_award` / `award_description` using shared GLM 5.3 FLASH, nested effort `low`, at most two model attempts and one factual sentence ≤127 Unicode code points. Preserve the exact entry/recipient/outcome scope; description work uses retained facts, original budgets and shared movie/music logging without browsing or recursive dispatch. Missing/invalid text keeps the optional award pending. [Full readiness, correction and generation rules](/guides/ontology/nodes#game-award-properties).
+
+#### Two integration modes, both bounded
+
+**Enrich an admitted game/person:** the game award stage or role-triggered person probe reads exact matches from already retained award snapshots first. A small approved set of year/category pages can fill missing evidence within the existing root. Processing one game's award may observe unrelated nominees, but cannot enqueue those other games or their people. A game worker only schedules its predeclared later evidence/replay stages.
+
+**Optional reviewed award seed batch:** a trusted user/admin event supplies an explicit year, category/page allowlist and caps. The root coordinator may freeze at most 20 distinct games from that bounded set and queue the same hidden-node game flow. Award-listed people are identity-only endpoints; they cannot launch the person adapter or a filmography. This is an additional controlled entry, not an archive crawl or a recurring automation created by this review.
+
+| Queue concern | Required contract |
+| --- | --- |
+| Job scope | Shared Go/AlloyDB queue and Pub/Sub wakeup. A finite root `award_seed` scope is distinct from a game worker's non-discovering `award_evidence` scope |
+| Pilot limits | One explicitly selected ceremony/year per seed; at most 3 source pages, 200 parsed entries and 20 admitted games, all inside the existing root network/byte/job/identity budgets. The shared 50-candidates/page and all lower remaining root caps still apply; 200 is a parsing ceiling. Truncate with coverage receipts |
+| Reuse | Cache the same year/category snapshot across admitted games; aliases, extra categories and additional recipient rows do not create duplicate game jobs |
+| Durable steps | Source snapshot → parsed candidate entries → canonical identity/fact election → queued award_description and edge describe when needed → award/credit replay → consistent game-owned publication |
+| Failures | Shared Universe structured logs, attempts/stages and typed failure classifier; unavailable sources, wrong-year or incomplete parsing cannot become no-awards success; coverage reasons do not add `error_code` values |
+| Stop rule | No next/previous-year navigation, “related game” browsing, nominee-to-person-probe call, company catalog callback or award→game→award rediscovery |
+
+A provider capability must describe the public page formats actually supported by the Go adapter. This review verified readable category/archive content, not a public API. Do not invent endpoint IDs or assume the site's interactive search is a stable API. A page that returns a loading shell is an extraction failure/pending capability, not an empty category; use the shared permitted retrieval path and bounded parsing strategy.
+
+#### Source-year and correction rules
+
+The category pages inspected on September 8, 2026 still explicitly identify their entries as **2025**. Their URLs contain no year. Cache by verified ceremony year + category + snapshot revision, validate the year inside every fetched payload, and reject/quarantine a rollover response that does not match the requested manifest. Never derive award year from the clock, a homepage promotion or the game release date.
+
+The Rewind pages inspected expose **winners**. They can corroborate a winner but cannot prove the complete historical nominee set. Missing nominees there must not retract stored nominations. Parse the award section only; presenters, musical guests, premieres and recap highlights are not award recipients or game credits by association.
+
+Complete, year/category-scoped replacement can retire only evidence from its own source scope. A changed winner uses elected correction and generation-fenced replay; it does not allocate a second award identity. A loading page, missing category, changed template or partial extraction is never a complete empty replacement.
 
 ### Game thumbnails and cover art
 
@@ -745,8 +916,16 @@ _Hamlet: a second real game-node portrait from [Steam](https://store.steampowere
 | IGDB `cover` | Cover identifier, image ID, dimensions and image URL; portrait variants including `cover_small` (maximum 90 × 128), `cover_big` (maximum 264 × 374), and `_2x` variants | Resolve by the stored numeric game ID. Prefer the matching base-game/localization cover. API use requires credentials and the commercial partnership described above. [Cover fields](https://api-docs.igdb.com/#cover) · [Image variants](https://api-docs.igdb.com/#images) |
 | MobyGames covers | Front-cover scans, with platform/release context; screenshots and promotional images are also available | Bronze lists cover images; Silver adds original full-size images. Choose a front cover, not a back cover, disc, compilation or unrelated edition. Keep the required MobyGames attribution. [Tier capabilities](https://www.mobygames.com/api/subscribe/) |
 | **Steam library portrait** (primary) / official publisher press kit | `library_600x900.jpg` (300×450, 2:3) by app ID; `header.jpg` (460×215) as a letterboxed landscape fallback; explicitly supplied press-kit artwork | Use the exact known app ID. **The library path is convention-derived — `appdetails` does not return it** — and the `header_image` the API _does_ return now carries a content-hash path segment, so treat the hash-less library URL as an observed candidate that may migrate: fetch-verify at ingest, record `image_observed_at`, and never assume it exists. Prefer title artwork to an arbitrary screenshot. [Steam asset formats](https://partner.steamgames.com/doc/store/assets?l=english) |
-| The Game Awards exact-game tile | Game artwork on a verified award entry, when the image really depicts that game | Optional candidate under the source/media policy. Exclude performer portraits, event branding and adaptation stills; route through the same `game-thumbnail/` pipeline. [Adapter rules](/guides/open-work/video-game-waterfall-game-awards#artwork-and-publication) |
+| The Game Awards exact-game tile | Game artwork on a verified award entry, when the image really depicts that game | Optional candidate under the source/media policy. Exclude performer portraits, event branding and adaptation stills; route through the same `game-thumbnail/` pipeline. [Adapter rules](#artwork-and-publication) |
 | Wikidata-linked Commons file | An image or logo when present, with a separately inspectable file license | Optional fallback only; an item may have a logo rather than cover art. Wikidata's CC0 metadata does not establish image reuse rights. |
+
+<a id="artwork-and-publication" />
+
+**Award card artwork locked September 9:** reuse the associated `Video_Game`'s published image via `game_entity_id`. The award card's `image_url` is resolved display data from the game's existing processed asset in `game-thumbnail/`, with the same shared renderer and 2:3 portrait frame. No independent award image property, upload, source lookup or media job is added. This also applies to named-person and joint-recipient entries. [Authoritative Node Types contract](/guides/ontology/nodes#game-award-card-artwork).
+
+Award cards retain their own elected readiness and the inherited game publication/media gate. Refresh or invalidate their media projection/cache when the game's canonical identity or published artwork revision changes. An otherwise eligible card may show the shared placeholder during an image delivery failure; a pending game keeps its award hidden. No raw source URL fallback or award-triggered game enrichment is permitted. The reviewed node/edge fields and artwork are locked; visual layout and runtime implementation remain pending.
+
+Award tile images are optional **source candidates**, inspected for the exact game and correct asset kind. The same site uses portraits for performers and stills for adaptations, so page proximity is insufficient. When source policy permits an exact-game tile, the game media worker ingests it through the shared file pipeline into `game-thumbnail/`; no raw award CDN URL or IMDb fallback is published. An award result alone cannot reveal a pending game. The [game publication gate](/guides/open-work/video-game-waterfall#game-publication-gate) still requires game-owned parameters, successful game artwork ingestion and matching required-stage receipts.
 
 For an IGDB-enabled game snapshot, request the cover in that exact lookup, for example the body `fields name,cover.id,cover.image_id,cover.width,cover.height,cover.url; where id = 119133; limit 1;` on `POST /v4/games`. This is an illustrative request for Elden Ring, not a claimed authenticated API response. Build the documented image variant from the returned `image_id`; never invent it. Every candidate is judged against the locked 2:3 frame. An IGDB `cover_big_2x` (528×748, ≈0.71) is close but not 2:3 and is contained, not cropped; a landscape header is letterboxed inside the frame. Never crop away the title to force a fit, and never serve a card at a different ratio.
 
@@ -867,7 +1046,7 @@ The edge is `Video_Game → HAS_AWARD → Game_Award`, with `source="video_game"
 
 **Fixed queued sequence:** the bounded `award_evidence` stage retains exact entry evidence; resolve canonical identity and elect facts; reuse suitable text or have the original coordinator queue typed `game_award` / `award_description` and required edge `describe` work; the `game_recognition` owner replays the resolved node and edge; public projection waits for consistent result/labels/descriptions and the associated game's published media revision. Node description generation uses shared GLM 5.3 FLASH at nested effort `low`, one factual sentence ≤127 Unicode code points, at most two total model attempts and deduplication by root + award UUID + input fact revision. No new budget, archive crawl or recursive game/person/company dispatch is permitted.
 
-Record actual model/prompt/input/fact provenance and outcomes using the shared movie/music stage/attempt logging. A missing outcome or invalid description keeps only the optional award and its public links pending; it does not block an independently valid game. Outcome correction refreshes the same entry and related projections under one fenced recognition revision; stale text or labels cannot remain public. Partial or winners-only coverage cannot retract nominations. Retraction does not wait for text generation. [Complete source-backed simulation](/guides/open-work/video-game-waterfall-game-awards#complete-award-node-and-game-edge).
+Record actual model/prompt/input/fact provenance and outcomes using the shared movie/music stage/attempt logging. A missing outcome or invalid description keeps only the optional award and its public links pending; it does not block an independently valid game. Outcome correction refreshes the same entry and related projections under one fenced recognition revision; stale text or labels cannot remain public. Partial or winners-only coverage cannot retract nominations. Retraction does not wait for text generation. [Complete source-backed simulation](#complete-award-node-and-game-edge).
 
 **Acceptance checks:** nomination → win and correction back preserve UUIDs while updating every affected outcome/description projection; two named nominees for one game stay separate entries; node and edge evidence references resolve to the exact retained ceremony/category claim; invalid text keeps the award pending; hidden games expose no award path; artwork reuse creates zero media jobs/uploads; all retries obey original budgets and reject stale input revisions.
 
@@ -1250,7 +1429,6 @@ The adversarial checks below remain requirements; their executable case IDs and 
 
 ### Required adversarial checks
 
-- Official award pages preserve year/category/nominee-entry identity: three people nominated for one game produce separate results, a joint nomination stays one entry, and winners-only archives never retract historical nominees. Award evidence cannot discover unrelated games or reveal an unpublished game.
 - All ten supplied role families remain probe-eligible from original current/past work titles, including specialist titles omitted by role reduction. Several roles, unchanged refreshes and aliases produce one probe per person/root.
 - A relevant person with no IMDb ID can match an explicit portfolio game credit. Generic titles, same-name candidates and company employment alone never manufacture game credits; esports participation is not a development credit.
 - Probe failure/not-entitled/partial coverage cannot become a cached no-match. Role/evidence/capability changes are reconsidered only within authorized runs; retries preserve original budgets.
@@ -1283,6 +1461,21 @@ The adversarial checks below remain requirements; their executable case IDs and 
 - Movie/music regression fixtures retain their original dispatch, tier, limits, graph weights and projection behavior.
 - A game-release description uses only one correlated release scope, stays ≤127 Unicode code points and preserves source date precision/status. Unknown territory and missing date parts remain unstated. Empty/invalid output, timeout and exhausted model budget leave the optional release/link pending; a stale description cannot overwrite a newer release-date/status revision or change the release UUID. The parent game can publish independently, and no generation/retry launches another waterfall.
 - `USES_ENGINE` examples resolve every `engine_use_record_ids` and `evidence_ids` entry to the same exact game/engine evidence. A missing version emits no version field; correcting a version preserves the edge UUID and other scoped support. Engine product pages, trailers or middleware do not create inferred game-use edges. Both node and edge descriptions gate public readiness, with no new root on metadata/description/replay work.
+
+<a id="acceptance-cases" />
+
+### The Game Awards acceptance cases
+
+- The complete locked node and HAS_AWARD JSON stay synchronized with their Node Types/Edge Types references and the machine contract; every award-evidence reference resolves to the same game/entry/source qualifiers.
+- An outcome correction preserves node/edge UUIDs, refreshes descriptions and labels together with award_result, and keeps inconsistent public revisions hidden; stale generation cannot restore the earlier winner.
+- Award artwork resolves the published game asset with zero additional media jobs/uploads; an unpublished game or invalid award description exposes no award card or incident public path.
+
+- The three named 2025 performance nominees for one game remain separate result identities; one winner does not turn the other two nominees into winners.
+- The joint score nomination stays one nominee entry with independently resolved recipient references; a slash-separated company billing does not create a developer/publisher or recipient claim.
+- The 2022 official Elden Ring result resolves to the existing fixture award identity, preserving source-specific evidence and the same game UUID.
+- A 2025 job receiving a 2026 category body cannot overwrite 2025 results; a winners-only archive cannot retract earlier nominees.
+- Best Adaptation keeps screen/season scope; creator/team categories never mint fake game subjects; Most Anticipated Game does not set a release date.
+- Game/person scoped lookup creates zero unrelated roots; an approved seed batch obeys all root caps; a failed snapshot keeps publication and evidence states honest. Award evidence alone cannot reveal an unpublished game.
 
 ### Coverage and rollout
 
