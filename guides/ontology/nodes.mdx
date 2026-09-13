@@ -1272,7 +1272,7 @@ Adding the `Entity` label later would require a deliberate shared-place canonica
 
 ### Stage_Award
 
-**Labels:** `Stage_Award`, optionally `:Nominee` or `:Winner`.
+**Labels:** `Stage_Award` and `Entity` (same shape as `Film_TV_Award:Entity` and `Game_Award:Entity`, so `uuid` lookups and the `Entity(embeddings)` vector index cover it), optionally `:Nominee` or `:Winner`.
 
 **Canonical Go type:** none; a proposed stage-owned support record and bounded support replay.
 
@@ -1281,6 +1281,12 @@ Adding the `Entity` label later would require a deliberate shared-place canonica
 | Property | Type / requirement | Source basis and mapping rule |
 | --- | --- | --- |
 | `entity_type` | string · R | Proposed support graph vocabulary `Stage_Award`; no automatic canonical entity admission |
+| `award_entry_key` | string · R | **The MERGE key** — `body_key::year::category_slug::person::<person_entity_id>::<production_entity_id>`; outcome excluded so a nomination-to-win updates the same node. Indexed (`Stage_Award(award_entry_key)`). |
+| `uuid` / `row_id` | string · R | Both set to the `stage_awards` ledger row id on create — one durable id for graph and SQL |
+| `name` | string · R | Deterministic display projection: `<Body> <year> — <category> — <recipient>` |
+| `description` | string · R | Deterministic sentence ≤127 chars — `<Recipient> won|was nominated for <category> for <production>.` |
+| `poster_url` | string · O | The production's re-hosted GCS poster — the card image, same property `Stage_Production` carries |
+| `embeddings` / `embedding_model` / `embedding_dimensions` | float32[] / string / int · O | Vector over `name + ". " + description` (plain prose, no field labels); model + dims stamped alongside per the vector rule |
 | `awarding_body` / `awarding_body_key` | string, string · R | **T/A** public series name plus controlled namespace, initially `tony` or `olivier` |
 | `award_year` | integer · R | **T/A** award edition year, independently of the production's opening year |
 | `category_name` | string · R | **T/A** category label with its original sponsor wording retained in evidence |
@@ -1308,6 +1314,7 @@ Award nodes may retain unresolved source context for discovery/admin use, but pu
   {
     "labels": [
       "Stage_Award",
+      "Entity",
       "Winner"
     ],
     "properties": {
@@ -1385,6 +1392,7 @@ Award nodes may retain unresolved source context for discovery/admin use, but pu
   {
     "labels": [
       "Stage_Award",
+      "Entity",
       "Nominee"
     ],
     "properties": {
