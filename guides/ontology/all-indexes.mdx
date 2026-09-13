@@ -1,482 +1,75 @@
 ---
 title: "Indexes"
-description: "The single canonical reference for every index in the Orbiter FalkorDB graph — scalar and vector, the full copy-paste Cypher to create them, vector search patterns and health tooling, and the 2026-07-06 audit additions"
+description: "The current Orbiter Universe FalkorDB indexes and the copy-paste Cypher to create them"
 sidebarTitle: "Indexes"
 ---
 
-Every index in the Orbiter FalkorDB graph — scalar (btree) and vector (HNSW) — is created by a single Xano function: **`tool/create-indexes`** — **#4669**. This page is the canonical, up-to-date list of what belongs in that function and why, plus how vector search works and how to keep it healthy.
-
 <Note>
-  **Last reviewed & updated: 2026-07-09.** The former _All Indexes_ and _Vector Indexes_ pages were combined here on 2026-07-06 (the old vector-indexes URL redirects here); the 2026-07-06 audit additions (plus the Event set and both Gemini vector indexes) were **materialized on live, sandbox, and staging** and verified OPERATIONAL via `CALL db.indexes()` read-back on all three. `tool/create-indexes` **#4669 v2.1** is synced to this list, and the retired `expertise_embedding` index is dropped everywhere (removed from the spec per Mark — see the Cleanup queue). **The Gemini standard is 1536-dim** (moved from 3072 on 2026-07-06): `expert_embeddings` \+ `embeddings` were dropped and recreated @1536 and every stored Gemini vector was prefix-truncated \+ L2-renormalized in place on all three data sources (#13114 v2 emits 1536-dim normalized vectors; migration endpoint `api:rlSvC4qe/migrate-gemini-vectors-1536` #8839).
+  **Last updated: 2026-09-13**
 </Note>
 
-## `tool/create-indexes` — #4669
+## NEW UNIVERSE INDEXES
 
-**Location:** Xano workspace 3, function `tool/create-indexes`, id `#4669`.
-
-**Shape (v2.1, 2026-07-06):** data-driven — a statements array (kept in lockstep with the copy & paste block below) looped through `mvp/falkor/send-cypher`, with per-statement verdicts (`created` / `already_existed` / `failed`), finishing with `CALL db.indexes()` returned alongside the summary. v2.0 was the data-driven rewrite; v2.1 moved the Gemini vector statements to 1536. Adding an index = adding one line to the array \+ this page.
-
-**Idempotency:** FalkorDB's `CREATE INDEX` is idempotent — re-running is safe. Run #4669 after provisioning a new FalkorDB instance or after a graph reset, and on every new data source **before** any node writes.
-
-```text
-Xano workspace 3 → functions → tool/create-indexes (#4669) → Run
-```
-
-## The label-scoping rule (read before proposing indexes)
-
-FalkorDB indexes are **per-label**: a query uses an index only when the indexed label appears in the MATCH/MERGE pattern. `MATCH (p:Person {uuid: $u})` does **not** use `Entity(uuid)` even though the node carries both labels — this is why `C_Suite(uuid)` exists, and why the 2026-07-06 additions below add per-label coverage for `Person`, `Company`, and the legacy non-`Entity` labels. When writing new Cypher, prefer including `Entity` in the pattern (`MATCH (p:Entity:Person {uuid})`) so the base-label indexes apply; when a pattern can't, make sure the label it does use is indexed on the lookup key.
-
-## Copy & paste — create all indexes
-
-The complete target set. Every statement is idempotent — safe to paste into any Cypher runner (or `mvp/falkor/send-cypher`) one statement per call, in any order. This is the list #4669 must match.
+One idempotent script that provisions every index the Universe graph needs. Paste it into any FalkorDB graph (a fresh environment, a rebuilt graph, or an existing one): a statement whose index already exists returns "already indexed" and changes nothing. Indexes do not enforce uniqueness. Verify with `CALL db.indexes()` afterwards.
 
 ```cypher
-// ── Base-label (Entity) scalar ─────────────────────────────────────────────
-CREATE INDEX FOR (n:Entity) ON (n.uuid)
-CREATE INDEX FOR (n:Entity) ON (n.name)
-CREATE INDEX FOR (n:Entity) ON (n.imdb_url)
-CREATE INDEX FOR (n:Entity) ON (n.region_key)
-CREATE INDEX FOR (n:Entity) ON (n.city_key)
-CREATE INDEX FOR (n:Entity) ON (n.announced_date)
-CREATE INDEX FOR (n:Entity) ON (n.mbid)                    // NEW 2026-07-06 audit — live on all 3 sources
+// ── Identity keys on the shared Entity label ──────────────────────────────
+CREATE INDEX FOR (n:Entity) ON (n.uuid);
+CREATE INDEX FOR (n:Entity) ON (n.entity_id);
+CREATE INDEX FOR (n:Entity) ON (n.merge_key);
+CREATE INDEX FOR (n:Entity) ON (n.canonical_identity_key);
+CREATE INDEX FOR (n:Entity) ON (n.city_key);
+CREATE INDEX FOR (n:Entity) ON (n.region_key);
+CREATE INDEX FOR (n:Entity) ON (n.thesis_id);
 
-// ── Per-label scalar (patterns that don't carry :Entity) ───────────────────
-CREATE INDEX FOR (n:C_Suite) ON (n.uuid)
-CREATE INDEX FOR (n:Person) ON (n.uuid)                    // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Person) ON (n.master_person_id)        // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Company) ON (n.uuid)                   // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Company) ON (n.name)                   // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Organization) ON (n.uuid)              // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Funding_Round) ON (n.uuid)             // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Funding_Round) ON (n.announced_date)   // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Film_TV) ON (n.imdb_url)               // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Film_TV_Award) ON (n.uuid)             // NEW 2026-07-06 audit — live on all 3 sources
-CREATE INDEX FOR (n:Film_TV_Award) ON (n.year)             // NEW 2026-07-06 cypher-audit follow-up — live on all 3 sources
+// ── Labels whose patterns never name Entity ───────────────────────────────
+CREATE INDEX FOR (n:Funding_Round) ON (n.uuid);
+CREATE INDEX FOR (n:Company) ON (n.uuid);
+CREATE INDEX FOR (n:Event) ON (n.uuid);
+CREATE INDEX FOR (n:Event) ON (n.event_key);
+CREATE INDEX FOR (n:MediaAppearance) ON (n.media_key);
+CREATE INDEX FOR (n:MediaAppearance) ON (n.uuid);
+CREATE INDEX FOR (n:Release) ON (n.row_id);
+CREATE INDEX FOR (n:Release) ON (n.uuid);
+CREATE INDEX FOR (n:Place) ON (n.row_id);
+CREATE INDEX FOR (n:Place) ON (n.uuid);
 
-// ── Known model — Person extensions + artifacts (materialized 2026-04-11) ──
-CREATE INDEX FOR (n:Person) ON (n.deceased_at)
-CREATE INDEX FOR (n:Person) ON (n.tombstone)
-CREATE INDEX FOR (n:Person) ON (n.merged_into)
-CREATE INDEX FOR (n:Person) ON (n.merge_in_progress_at)
-CREATE INDEX FOR (n:Introduction) ON (n.resulting_knows_uuid)
-CREATE INDEX FOR (n:Household) ON (n.address_hash)
-CREATE INDEX FOR (n:Household) ON (n.end)
-CREATE INDEX FOR (n:MergeEvent) ON (n.canonical_person_id)
-CREATE INDEX FOR (n:MergeEvent) ON (n.absorbed_person_id)
-CREATE INDEX FOR (n:MergeEvent) ON (n.merged_at)
+// ── Vector indexes (Gemini 1536-dim, cosine) ─────────────────────────────
+CREATE VECTOR INDEX FOR (n:Entity) ON (n.embeddings)
+OPTIONS {
+  dimension: 1536,
+  similarityFunction: 'cosine',
+  M: 16,
+  efConstruction: 200,
+  efRuntime: 10
+};
 
-// ── Event model (authored 2026-04-17; materialized 2026-07-06) ────────────
-CREATE INDEX FOR (n:Event) ON (n.event_url)
-CREATE INDEX FOR (n:Event) ON (n.event_key)
-CREATE INDEX FOR (n:Event) ON (n.series_slug)
-CREATE INDEX FOR (n:Event) ON (n.edition_year)
-CREATE INDEX FOR (n:Event) ON (n.start_date)
-CREATE INDEX FOR (n:Event) ON (n.status)
-CREATE INDEX FOR (n:Event) ON (n.industry)
-
-// ── Edge scalar ────────────────────────────────────────────────────────────
-CREATE INDEX FOR ()-[r:ATTENDED]-() ON (r.valid_from)
-CREATE INDEX FOR ()-[r:ATTENDED]-() ON (r.valid_to)
-CREATE INDEX FOR ()-[r:ATTENDED]-() ON (r.degree)
-CREATE INDEX FOR ()-[r:ATTENDED]-() ON (r.major)
-CREATE INDEX FOR ()-[r:ATTENDED]-() ON (r.field)
-CREATE INDEX FOR ()-[r:SPECIALIZES_IN]-() ON (r.match_score)
-CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.person_a_id, r.person_b_id)   // materializes as 2 (see composite note)
-CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.last_score_computed_at)
-CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.last_counts_updated_at)
-CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.strength_score)
-CREATE INDEX FOR ()-[r:BONDED]-() ON (r.source)
-CREATE INDEX FOR ()-[r:ESTRANGED]-() ON (r.source)
-CREATE INDEX FOR ()-[r:ESTRANGED]-() ON (r.valid_to)
-CREATE INDEX FOR ()-[r:PROFESSIONAL_TIE]-() ON (r.company_id)
-CREATE INDEX FOR ()-[r:KINSHIP]-() ON (r.relation)
-CREATE INDEX FOR ()-[r:ROMANTIC]-() ON (r.is_current)
-CREATE INDEX FOR ()-[r:RESIDED_AT]-() ON (r.move_out)
-CREATE INDEX FOR ()-[r:MENTOR]-() ON (r.valid_to)
-CREATE INDEX FOR ()-[r:SPONSORS]-() ON (r.tier)                       // Event model — live on all 3 sources
-CREATE INDEX FOR ()-[r:SPONSORS]-() ON (r.valid_from)                 // Event model — live on all 3 sources
-CREATE INDEX FOR ()-[r:ATTENDED_EVENT]-() ON (r.confidence)           // Event model — live on all 3 sources
-CREATE INDEX FOR ()-[r:REGISTERED_FOR]-() ON (r.registration_status)  // Event model — live on all 3 sources
-
-// ── Vector (HNSW) ──────────────────────────────────────────────────────────
-CREATE VECTOR INDEX FOR (n:Entity) ON (n.name_embedding)
-  OPTIONS {dimension: 1536, similarityFunction: 'cosine', M: 16, efConstruction: 200, efRuntime: 100}
-CREATE VECTOR INDEX FOR (n:Entity) ON (n.expert_embeddings)           // in #4669 v2.1 — 1536 since 2026-07-06 (was 3072)
-  OPTIONS {dimension: 1536, similarityFunction: 'cosine', M: 16, efConstruction: 200, efRuntime: 100}
-CREATE VECTOR INDEX FOR (n:Entity) ON (n.embeddings)                  // in #4669 v2.1 — 1536 since 2026-07-06 (was 3072)
-  OPTIONS {dimension: 1536, similarityFunction: 'cosine', M: 16, efConstruction: 200, efRuntime: 100}
-// Entity(expertise_embedding) — RETIRED: dropped from all three data sources on 2026-07-06.
-// Neither #4669 v2.1 nor ensure-vector-indexes #13129 v5 recreates it. Do NOT re-add.
+CREATE VECTOR INDEX FOR (n:Entity) ON (n.expert_embeddings)
+OPTIONS {
+  dimension: 1536,
+  similarityFunction: 'cosine',
+  M: 16,
+  efConstruction: 200,
+  efRuntime: 10
+};
 ```
 
-## 2026-07-06 audit additions — why each one exists
+<Accordion title="Conditional candidates (not in the block above)">
+  Each of these needs a query change or a `GRAPH.PROFILE` measurement first. Details are in the audit report (`~/Downloads/orbiter-universe-index-audit/`).
 
-All justified by the label-scoping rule \+ a census of every MATCH/MERGE pattern in the documented cyphers \+ live counts (2026-07-06: Person 8,276 · Company 13,306 · Funding\_Round 2,377 · Film\_TV\_Award 2,716 · mbid-bearing 2,934).
+  ```cypher
+  // Country MERGE identity; a few hundred nodes, seed route only
+  // CREATE INDEX FOR (n:Country) ON (n.name);
 
-| Index | The query it fixes | Before | Writers/readers on this path |
-| --- | --- | --- | --- |
-| `Funding_Round(uuid)` | `MERGE (fr:Funding_Round {uuid: $deal_id})` | full scan of 2,377 rounds per deal write — Funding\_Round nodes carry **no**`Entity` label, so nothing covered them | #12701 deal node writer, #12702 investor edges, #12856 cascade — the path the Fundable BigQuery sync will drive at ~146k-deal scale |
-| `Funding_Round(announced_date)` | `MATCH (c)-[:RAISED]->(e:Funding_Round) WHERE e.announced_date < $date` | `Entity(announced_date)` was created for exactly this filter but never applied — Funding\_Round lacks `Entity` | #12702 earlier-round / `FOLLOW_ON_INVESTED_IN` detection |
-| `Person(uuid)` | `MATCH (p:Person {uuid: $u})` | scans all 8,276 Person nodes; ~33 documented label-only sites | Known/KNOWS flows, merge (`absorbed:Person`), mentor \+ introduction cyphers |
-| `Person(master_person_id)` | `MERGE (p:Person {master_person_id: $id})` | scan per person create/update | #2601 add-person-node (the Person MERGE key), SAME\_AS bridge writers |
-| `Company(uuid)` | `MATCH (vc:Company {uuid}) SET vc:VC_Firm` | scans 13,306 Company nodes per edge write | #12702 investor edges, #2800 work edges, funding cyphers |
-| `Entity(mbid)` | `MERGE (n:Entity:Recording {mbid: $mbid})` | scan per music write; catalog cascades re-MERGE constantly | all 9 music envelope writers (#13090–#13105); one base-label index covers every music type, mirroring `Entity(imdb_url)` |
-| `Film_TV(imdb_url)` | `MERGE (f:Film_TV {imdb_url: $url})` | title writer's pattern omits `Entity`, so `Entity(imdb_url)` never fires | #2320 title writer, #2334 award flow |
-| `Film_TV_Award(uuid)` | `MATCH (a:Film_TV_Award {uuid})` | 2,716 legacy non-`Entity` nodes, zero coverage | #2334 award/edge writers |
-| `Film_TV_Award(year)` | `MATCH (a:Film_TV_Award {year: $y, award_type: …})` | the #2334 award MERGE keys on `year` \+ award fields — `Film_TV_Award(uuid)` cannot accelerate that MERGE | #2334 award MERGE \+ fallback read-back (4 sites found by the 2026-07-06 cypher audit) |
-| `Company(name)` | `MERGE (org:Organization:Company {name})` | volunteering MERGE pattern omits `Entity` | #4575 volunteering; also name-based label↔company matching |
-| `Organization(uuid)` | `MATCH (o:Organization {uuid})` | label-only pattern in certification/honor edges | #12578 certifications family |
+  // Entity purge tool seeks InvestmentThesis by investor_uuid
+  // CREATE INDEX FOR (n:InvestmentThesis) ON (n.investor_uuid);
 
-Cost: btree indexes only contain nodes that carry the label \+ property, so every addition is small (thousands of entries) with negligible write amplification — while each converts an O(label-size) scan into an index seek on a per-write hot path.
+  // expertise.go:112 filters the key inside an OR with IS NULL / toLower branches; split the lookup first
+  // CREATE INDEX FOR (n:DomainExpertise) ON (n.domain_key);
+  // CREATE INDEX FOR (n:SubDomainExpertise) ON (n.sub_domain_key);
 
-## Current state (verified live, 2026-07-06)
-
-Property-level counts from `CALL db.indexes()` — live, sandbox, and staging identical (verified after the 2026-07-06 materialization run):
-
-|  | Materialized (verified 2026-07-06, post-drop) |
-| --- | --: |
-| Node scalar | 35 |
-| Edge scalar | 23 |
-| Vector (HNSW) | 3 |
-| **Total** | **61** |
-
-### Vector indexes (3)
-
-| Label | Property | Dim | Status |
-| --- | --- | --: | --- |
-| `Entity` | `name_embedding` | 1536 | **Active on staging \+ live (deprecated).** OpenAI `text-embedding-3-small`; still the primary semantic lookup until the Gemini `embeddings` read cutover — writers keep writing it and the index stays up everywhere. Sandbox is the Gemini-only experiment surface (e.g. Country nodes). |
-| `Entity` | `expert_embeddings` | 1536 | Active — Gemini; the expertise-matching KNN target (#12926/#12746 locked spec). **Rebuilt @1536 on 2026-07-06** (was 3072); stored vectors prefix-truncated \+ renormalized. |
-| `Entity` | `embeddings` | 1536 | Active — Gemini migration vector (written by all current node writers; read cutover pending). **Rebuilt @1536 on 2026-07-06** (was 3072); stored vectors prefix-truncated \+ renormalized. |
-
-`Entity(expertise_embedding)` (1536) was the pre-locked-spec expertise vector — its only reader (`resolve-person-expertise` #12668) has been uncalled since 2026-06-19, and taxonomy writers stopped writing the property. **Dropped from live, sandbox, and staging on 2026-07-06** (the drop triggers a full Entity-index rebuild — ~90 s on live at 28.9k entities; the old index keeps serving until the rebuilt one is OPERATIONAL). #4669 v2.1 and #13129 v5 no longer create it.
-
-Runtime guarantee: `vectors/ensure-vector-indexes` **#13129 v5** idempotently ensures this page’s vector set (`name_embedding`, `expert_embeddings`, `embeddings` — all @1536) in the current data source before music/embedding writes; `tool/create-indexes` **#4669 v2.1** owns the full set for fresh-graph provisioning. Both are in lockstep with this page as of 2026-07-06.
-
-## Known additions (materialized 2026-04-11)
-
-Person (`deceased_at`, `tombstone`, `merged_into`, `merge_in_progress_at`), Introduction (`resulting_knows_uuid`), Household (`address_hash`, `end`), MergeEvent (`canonical_person_id`, `absorbed_person_id`, `merged_at`), KNOWS ×5, facet edges ×8 — full rationale in [Known → Schema design → Indexes](/guides/known/schema-design#indexes).
-
-<Note>
-  **Composite → split-property behavior.** #4669 ships one composite statement for KNOWS (`ON (r.person_a_id, r.person_b_id)`); FalkorDB materializes it as two independent RANGE indexes. Operationally equivalent for the canonical-pair lookup (index intersection). Kept as declared intent for future FalkorDB versions. FalkorDB does not support unique constraints on relationships — `KNOWS` uniqueness stays enforced at the application layer (`canonicalize_pair` \+ directed `MERGE` \+ the nightly dedupe cron).
-</Note>
-
-## Event additions (materialized 2026-07-06)
-
-The 7 Event node \+ 4 Event edge statements (authored 2026-04-17) were materialized on all three data sources on 2026-07-06 (zero-cardinality labels index instantly). `uuid` / `name` / `name_embedding` on Event stay covered via `Entity` because the event writer's pattern includes `Entity`.
-
----
-
-# Vector search
-
-Everything below was formerly the _Vector Indexes_ page.
-
-<Info>
-  **🔒 Embedding standard — read this before writing any vector code.** Every Orbiter vector, on every surface, is **`gemini-embedding-001` · 1536-dim · cosine · L2-normalized** (updated 2026-07-06 — was 3072). Gemini pre-normalizes only its 3072 output, so a 1536 vector **must be L2-normalized before it is stored or compared**; on the Xano side the shared wrapper `vectors/create-gemini-vectors` #13114 v2 requests `dimensions: 1536` and normalizes in-function — route every embed through it. The stored vectors (AlloyDB) and the query vector (generated by AlloyDB _or_ OpenRouter) **must** match on model, dimension, and normalization — mismatch doesn't error, it silently returns wrong results. This applies to the AlloyDB vector layer; the FalkorDB indexes documented on this page are a separate store (also 1536 — see the vector-index table above).
-
-  ---
-
-  **1 · AlloyDB \+ ScaNN — one-time setup (put this in your migrations)**
-
-  ```sql
-  -- Extension: alloydb_scann cascades the pgvector `vector` type automatically
-  CREATE EXTENSION IF NOT EXISTS alloydb_scann CASCADE;
-  
-  -- Column: 1536-dim (Orbiter standard since 2026-07-06). ~6 KB raw — still far past
-  -- the ~2 KB TOAST threshold, so it lives out-of-line; set STORAGE EXTERNAL to store
-  -- it WITHOUT compression (float data is high-entropy; the default EXTENDED just wastes CPU).
-  ALTER TABLE people ADD COLUMN biography_embedding vector(1536);
-  ALTER TABLE people ALTER COLUMN biography_embedding SET STORAGE EXTERNAL;
-  
-  -- ScaNN index — cosine distance. Build it AFTER the table has data.
-  CREATE INDEX people_bio_scann ON people
-    USING scann (biography_embedding cosine)
-    WITH (num_leaves = 1000, quantizer = 'SQ8');
+  // specialties.go:146 compares toLower(n.name) over all of Entity; needs a stored normalized name_key first
+  // CREATE INDEX FOR (n:DomainExpertise) ON (n.name_key);
+  // CREATE INDEX FOR (n:SubDomainExpertise) ON (n.name_key);
   ```
-
-  - **Distance keyword is `cosine`** — _not_ `vector_cosine_ops` (that's pgvector HNSW/IVFFlat syntax, which we do **not** use).
-  - **`num_leaves` ≈ √(row count)** is the starting rule (1000 ≈ 1M rows); `quantizer = 'SQ8'` is the default (\< 1–2 % recall loss).
-  - **Build after loading rows** — ScaNN partitions the data, so `num_leaves` must be ≤ row count. On large tables use `CREATE INDEX CONCURRENTLY` (non-blocking, slower) and raise `maintenance_work_mem` first.
-  - Never store the raw vector without `STORAGE EXTERNAL`, and never index it with pgvector HNSW/IVFFlat — ScaNN's inline metadata filtering is the load-bearing requirement (at 1536 pgvector's 2000-dim cap no longer bites, but ScaNN stays the locked choice).
-
-  **2 · Generate a vector inside GCP (Go / pgx)** — AlloyDB embeds server-side, no external call:
-
-  ```go
-  // embedding() returns the model default 3072 — cut to the 1536 MRL prefix and
-  // L2-normalize IN SQL so it matches every other Orbiter vector (see the standard).
-  const embedSQL = `SELECT l2_normalize(subvector(embedding('gemini-embedding-001', $1)::vector, 1, 1536))`
-  
-  var vec pgvector.Vector // []float32, len 1536
-  if err := pool.QueryRow(ctx, embedSQL, text).Scan(&vec); err != nil {
-      return fmt.Errorf("embed %q: %w", text, err)
-  }
-  // …then INSERT vec into the vector(1536) column
-  ```
-
-  **3 · Query — cosine KNN with ScaNN re-ranking on** (do it inside a txn so the GUCs are `SET LOCAL`):
-
-  ```go
-  // re-ranking matters at 1536-dim: gather candidates on quantized vectors,
-  // then re-score the finalists on full precision.
-  tx.Exec(ctx, `SET LOCAL scann.pre_reordering_num_neighbors = 200`) // default 50×LIMIT
-  tx.Exec(ctx, `SET LOCAL scann.num_leaves_to_search       = 100`)  // recall vs latency
-  
-  const q = `
-    SELECT id, biography_embedding <=> $1 AS distance
-    FROM people
-    WHERE country = $2                       -- inline metadata filter (ScaNN-only!)
-    ORDER BY biography_embedding <=> $1
-    LIMIT 20`
-  rows, err := tx.Query(ctx, q, queryVec, "US")
-  ```
-
-  - **`<=>`** is cosine distance (lower = closer). Match it to the index's `cosine` build.
-  - **`scann.pre_reordering_num_neighbors`** is the re-ranking knob — recommended for ≥ 500-dim vectors; raise it for higher recall. **`scann.num_leaves_to_search`** trades recall for latency (ratio to `num_leaves` ≈ recall).
-  - Add `WHERE` filters freely — ScaNN pushes them _into_ the index traversal. That inline-filtering ability is the whole reason we're on ScaNN and not HNSW.
-
-  ---
-
-  **Creating vectors via OpenRouter (must stay search-compatible with §2)**
-
-  When a vector is produced **outside GCP** — Xano, an app server, or embedding a user's search query — call OpenRouter's OpenAI-compatible endpoint with the **same model and dimension** so it lands in the same space as the AlloyDB-stored vectors:
-
-  ```bash
-  curl https://openrouter.ai/api/v1/embeddings \
-    -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "model": "google/gemini-embedding-001",
-      "input": "text to embed",
-      "dimensions": 1536
-    }'
-  ```
-
-  Response is OpenAI-shaped — the vector is `data[0].embedding`:
-
-  ```json
-  { "data": [ { "embedding": [0.013, -0.041, "…1536 floats — NOT unit-norm at 1536; normalize before use" ], "index": 0 } ],
-    "model": "google/gemini-embedding-001", "usage": { "prompt_tokens": 5 } }
-  ```
-
-  **Compatibility rules — break any one and search silently degrades:**
-
-  | Rule | Why |
-  | --- | --- |
-  | **Same model** — `google/gemini-embedding-001` (OpenRouter) ≡ `gemini-embedding-001` (AlloyDB) | Same underlying model = same vector space |
-  | **`dimensions: 1536` — send it explicitly** (the API default is 3072) | Must equal the `vector(1536)` column. Stored **and** query vectors must use the identical `dimensions`. |
-  | **Do NOT send `task_type`** | OpenRouter's OpenAI-compatible endpoint doesn't expose it and AlloyDB's `embedding()` doesn't set one — setting it on one side only pushes queries into a different sub-space |
-  | **L2-normalize every 1536 vector** | Gemini returns unit-normalized vectors only at full 3072 — a 1536 vector arrives un-normalized. AlloyDB-side: `l2_normalize(subvector(…))` in SQL (§2). Xano-side: #13114 v2 normalizes in-function. Both sides must do it. |
-  | **Metric = cosine end-to-end** | Index built `cosine`, query uses `<=>` |
-
-  ---
-
-  **Never mix** `gemini-embedding-001` vectors with `-002` or `gemini-embedding-2` — different space; switching models means re-embedding the whole corpus.
-</Info>
-
-## How vector search works in FalkorDB
-
-FalkorDB uses **HNSW (Hierarchical Navigable Small World)** indexes under the hood. Indexes are created explicitly via `CREATE VECTOR INDEX` (see the copy-paste block above) and maintained automatically as you write `vecf32` properties to nodes.
-
-Queries go through the `db.idx.vector.queryNodes()` procedure:
-
-```cypher
-CALL db.idx.vector.queryNodes(
-  'Entity',              // label to search
-  'name_embedding',      // vecf32 property
-  3,                     // k — number of nearest neighbors
-  vecf32($embedding)     // query vector
-)
-YIELD node, score
-```
-
-- **`score`** is cosine distance — lower is better (0 = identical, 1 = orthogonal).
-- The procedure returns up to `k` nodes sorted by ascending score.
-- Filtering (e.g. by node type) happens **after** the vector search in a `WHERE` clause.
-
-## Keeping the index healthy
-
-<Warning>
-  **A node can have a valid `vecf32` and still be invisible to search.** Writing a `vecf32` property only adds the node to the HNSW index if a healthy index for that label/property **already exists** in the data source at write time. A node written into a source whose index is missing/unhealthy gets a perfectly good vector that is **never indexed** — `IS NOT NULL` is true, `vec.cosineDistance` works, but `queryNodes` never returns it. This was the root cause of the 2026-06-17 incident where music nodes had embeddings but `"who is …"` returned nothing on `staging`.
-</Warning>
-
-**Incremental maintenance is reliable — once the index exists.** With a healthy index, every write path indexes on write (verified across `MERGE … SET vector … SET :Entity`, `:Entity` in the MERGE label set, and stub-then-backfill). So this class of failure is a **provisioning/state gap, not a writer-code bug.** The fixes below all target index _state_.
-
-<Steps>
-  <Step title="Provision the index before seeding">
-    Run **`tool/create-indexes` (#4669)** on every data source (`sandbox` / `staging` / `live`) **before** any node writes, and at the top of any seed/migration. It is idempotent. New data source → indexes first, then seed.
-  </Step>
-  <Step title="Verify (or rebuild) after every bulk operation">
-    Snapshot/restore, data-source copy, and large backfills can land `vecf32` properties **without** populating HNSW. After any seed-to-new-source or copy, run a coverage check or a one-time rebuild as a gate — don't assume the copy carried the index.
-  </Step>
-  <Step title="Detect drift with a per-node self-probe — never full enumeration">
-    `queryNodes` is **approximate** (HNSW, `efRuntime` ≈ 100). Trying to list every member from a single probe vector silently omits the farthest nodes, producing **false "missing" counts**. The ground-truth membership test is to query a node with **its own** vector — an indexed node returns itself at score ≈ 0:
-
-    ```cypher
-    // is THIS node in the index? indexed ⇒ returns itself@~0
-    CALL db.idx.vector.queryNodes('Entity', 'name_embedding', 1, vecf32($node_own_vector))
-    YIELD node, score
-    WHERE node.uuid = $node_uuid
-    RETURN score
-    ```
-  </Step>
-  <Step title="Repair">
-    **Drop \+ recreate** the index for a full backfill (≈1s for ~25k vectors; brief search-degradation window on live):
-
-    ```cypher
-    DROP VECTOR INDEX FOR (n:Entity) ON (n.name_embedding)
-    CREATE VECTOR INDEX FOR (n:Entity) ON (n.name_embedding)
-      OPTIONS {dimension: 1536, similarityFunction: 'cosine', M: 16, efConstruction: 200, efRuntime: 100}
-    ```
-
-    For a few stragglers, force a per-node re-index by `null`-then-restoring the **same** value (a same-value re-set is a no-op and won't trigger reindexing):
-
-    ```cypher
-    MATCH (n {uuid: $uuid}) SET n.name_embedding = null;
-    MATCH (n {uuid: $uuid}) SET n.name_embedding = vecf32($same_vector)
-    ```
-
-    Backfill is async — `queryNodes` returns empty for a few seconds after `CREATE`, then populates.
-  </Step>
-</Steps>
-
-<Note>
-  A rare residual: a handful of otherwise-valid nodes can resist both rebuild and re-set (a FalkorDB HNSW edge case — observed on 2 old `VC_Firm` nodes, 2 of ~25k). If business-critical, recreate the node (re-enrich) so it inserts fresh; otherwise it's safe to leave.
-</Note>
-
-## Automated monitoring & tooling
-
-The steps above are wired into three live Xano artifacts so this failure mode can't recur silently.
-
-<Card icon="clock-rotate-left">
-  ```text
-  vector-index-health-check — task #183
-  ```
-
-  **Runs daily on `live`** (first fire 2026-06-18 00:00 UTC). Samples 300 `Entity.name_embedding` nodes and self-probes each for index membership. **Read-only** (`repair=false`) — it never mutates graph data; it only writes a `log_crash` alert row (phase `node_stamp`) **when more than 5 of the sample are unindexed**, which tolerates the rare HNSW-edge-case stragglers while catching systemic drift. ~3 min runtime, then idle. Leave it enabled.
-</Card>
-
-<Card icon="globe">
-  ```text
-  POST /api:rlSvC4qe/vector-index-health   →  vectors/audit-vector-index #13128
-  ```
-
-  Data-source-aware via `X-Data-Source`. Self-probes a sample (or an explicit `uuids` list) and reports `{ total_with_vector, checked, missing_count, missing[], repaired[] }`. Pass `repair: true` to re-index any miss via the `null`→restore trick. **This is the canonical, reliable membership check** — use it instead of ad-hoc `queryNodes` enumeration.
-</Card>
-
-```bash
-# audit a sample on staging (read-only)
-curl -X POST https://xh2o-yths-38lt.n7c.xano.io/api:rlSvC4qe/vector-index-health \
-  -H "Content-Type: application/json" -H "X-Data-Source: staging" -H "X-Branch: v1" \
-  -d '{"sample": 300}'
-
-# audit + auto-heal specific nodes on live
-curl -X POST https://xh2o-yths-38lt.n7c.xano.io/api:rlSvC4qe/vector-index-health \
-  -H "Content-Type: application/json" -H "X-Data-Source: live" -H "X-Branch: v1" \
-  -d '{"uuids": ["<uuid1>", "<uuid2>"], "repair": true}'
-```
-
-<Card icon="wrench">
-  ```text
-  vectors/ensure-vector-indexes — #13129
-  ```
-
-  Idempotent — checks `db.indexes()` and creates missing Entity vector indexes. Wired (non-fatal) into the entry of all six MusicBrainz seed endpoints (`seed/artist`, `seed/recording`, `seed/release-group`, `seed/work`, `seed/label`, `seed/event`), so seeding into a fresh data source provisions the index **before** the first node write. **v5 (2026-07-06)** ensures exactly this page's set — `name_embedding` @1536, `expert_embeddings` @1536, `embeddings` @1536 — and does not ensure the removed `expertise_embedding`.
-</Card>
-
-## Embedding properties by node type
-
-All embeddings are type `vecf32`.
-
-| Vector property | Dim / model | Who carries it |
-| --- | --- | --- |
-| `name_embedding` | 1536 · OpenAI `text-embedding-3-small` | Person, Company (School / VC\_Firm / Organization / Music\_Label), City, Region/State, Film\_TV, Film\_TV\_Award, Certification, Funding\_Round, Event, music nodes, contextFounded — the legacy-primary semantic vector. **Exceptions:** Country nodes are Gemini-only as of 2026-07-06, and the expertise taxonomy writers no longer write it. |
-| `expert_embeddings` | 1536 · Gemini `gemini-embedding-001` (L2-normalized) | `DomainExpertise` \+ `SubDomainExpertise` — the expertise-matching KNN target (locked spec #12926/#12746, embed text `"{name}: {description}"`). 3072→1536 migrated 2026-07-06. |
-| `embeddings` | 1536 · Gemini `gemini-embedding-001` (L2-normalized) | The migration vector: written forward by the business node writers (#2601/#2758/#2602/#4659 via #13125), all 9 music writers, and the Country writers. Read cutover pending. 3072→1536 migrated 2026-07-06. |
-
-`expertise_embedding` — **removed 2026-07-06**: no writers, no readers (legacy resolver #12668 uncalled since 2026-06-19). Older Domain/SubDomain nodes still carry the stale property until a cleanup pass strips it; the index drop is in the Cleanup queue.
-
-## Live usage — expertise matching
-
-The primary vector search in production matches incoming expertise signals against existing `SubDomainExpertise` nodes (locked spec, #12926 person / #12746 company). It searches the Gemini **`expert_embeddings`** vector:
-
-```cypher
-CALL db.idx.vector.queryNodes(
-  'Entity', 'expert_embeddings', 3, vecf32({{$var.embedding}})
-)
-YIELD node, score
-WHERE score < 0.45
-  AND 'SubDomainExpertise' IN labels(node)
-RETURN node.uuid AS uuid, node.name AS name, score
-ORDER BY score ASC
-```
-
-**Key details:**
-
-- Searches across the `Entity` label (all node types), then filters to `SubDomainExpertise` in the `WHERE` clause — use `'Label' IN labels(node)`, never `labels(node) = '…'`.
-- Returns the 3 nearest neighbors with a cosine distance threshold of **\< 0.45**.
-- The `score` feeds the `match_score` / weight formula on the resulting `HAS_EXPERTISE` / `SPECIALIZES_IN` edge (see [Edge Weights](/guides/ontology/edge-weights)).
-
-## Common patterns
-
-### Deduplication via vector similarity
-
-Before creating a new node, query for existing nodes with similar embeddings. If the top result scores below a threshold, merge instead of creating a duplicate.
-
-```cypher
-CALL db.idx.vector.queryNodes('Entity', 'name_embedding', 1, vecf32($embedding))
-YIELD node, score
-WHERE score < 0.15
-  AND 'Person' IN labels(node)
-RETURN node.uuid AS existing_uuid, score
-```
-
-### Skills and specialties matching
-
-Person `skills` and Company `specialties` are matched against the `SubDomainExpertise` taxonomy via the same vector pipeline — each signal is embedded and searched against `expert_embeddings`; the resulting edges carry the original source text.
-
-- **Person skills** → `HAS_EXPERTISE` edge
-- **Company specialties** → `SPECIALIZES_IN` edge
-
-Both edge types target the same `SubDomainExpertise` nodes, enabling cross-entity queries:
-
-```cypher
-// People whose expertise matches a company's specialties
-MATCH (c:Company {uuid: $company_uuid})-[:SPECIALIZES_IN]->(d:SubDomainExpertise)<-[:HAS_EXPERTISE]-(p:Person)
-RETURN p.name, d.name AS shared_domain
-```
-
-## Distance metric
-
-FalkorDB vector indexes use **cosine distance**. Score interpretation (Orbiter conventions, not FalkorDB defaults):
-
-| Score Range | Meaning |
-| --- | --- |
-| `< 0.15` | Near-duplicate — likely the same entity |
-| `0.15 – 0.30` | Very similar — strong semantic match |
-| `0.30 – 0.45` | Related — used as the expertise matching threshold |
-| `> 0.45` | Weak or no match — typically filtered out |
-
----
-
-## FalkorDB index gotchas
-
-- **Label scoping (the big one).** An index binds to one label; the pattern must name that label. `MATCH (p:Person {uuid})` cannot use `Entity(uuid)`. Prefer `(p:Entity:Person {…})` patterns in new Cypher.
-- **Not-equal filters (`<>`) are not index-accelerated.** Prefer positive predicates (`WHERE f.source = 'declared'`).
-- **`IS NULL` / `IS NOT NULL` ARE accelerated** by btree indexes — this is why indexing `valid_to` directly speeds up "currently valid" filters.
-- **Composite edge indexes split** into independent single-property indexes on our FalkorDB version.
-- **Vector indexes require populated embeddings** — creating against an empty label is fine; queries return nothing until vectors land.
-- **Btree indexes only contain nodes that carry the property** — per-label indexes on sparse properties are cheap; the real cost of over-indexing is write amplification and planner noise, not storage.
-- **Edge direction in index syntax:** always `()-[r:EDGE]-()` undirected.
-
-## Cleanup queue
-
-1. ~~Sync #4669~~ — **DONE 2026-07-06**: `tool/create-indexes` #4669 (v2.1) is the data-driven twin of the copy & paste block above.
-2. ~~Drop `Entity(expertise_embedding)` \+ update #13129~~ — **DONE 2026-07-06**: dropped on live, sandbox, and staging; `ensure-vector-indexes` #13129 (v5) ensures only the current 3-vector set.
-3. **`:Entity` hygiene backfill (proposal)** — 128 `Company` nodes, all 2,377 `Funding_Round`, all 2,716 `Film_TV_Award`, plus `Honor`/`Project` nodes lack the `Entity` base label; adding it would let base-label indexes and Entity-wide vector search cover them.
-4. **Strip the stale `expertise_embedding` property** from older Domain/SubDomain nodes (optional, cosmetic once the index is gone).
-
-## Related
-
-- [Known → Schema design → Indexes](/guides/known/schema-design#indexes) — workshop-committed source of truth for the Known additions
-- [Known → Cyphers](/guides/cyphers/known) — every Known cypher fragment that relies on these indexes
-- [Node Types](/guides/ontology/nodes) — property definitions for every indexed node
-- [Edge Types](/guides/ontology/edges) — property definitions for every indexed edge
+</Accordion>
