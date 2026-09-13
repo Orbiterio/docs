@@ -86,6 +86,8 @@ tags:
       Contact imports from external sources (LinkedIn CSV, Apple Contacts
       vCard, Nylas address books). Signed-URL upload, async processing,
       per-row report. Requires a verified WorkOS access token.
+  - name: Leverage Loops
+    description: Copilot suggestion requests in loop mode with their suggestions, actions, trajectories and follow-up questions. Requires a verified WorkOS access token.
   - name: Links
     description: Web links on persons/companies. Requires a verified WorkOS access token.
   - name: Memories
@@ -8282,6 +8284,418 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /leverage-loops:
+    get:
+      operationId: listLeverageLoops
+      tags:
+        - Leverage Loops
+      summary: List the caller's leverage loops
+      description: Newest activity first. Excludes archived loops unless `status=archived`. Each item embeds its resolved person and non-archived suggestions.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          description: Filter to one status (draft, submitted, processing, suggestion, archived). Empty excludes archived.
+          schema:
+            type: string
+        - name: query
+          in: query
+          description: Case-insensitive substring match on request_panel_title.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of leverage loops.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: createLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Create a draft leverage loop
+      description: The owner is the authenticated user. The loop starts in status `draft`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeverageLoopRequest'
+      responses:
+        '201':
+          description: The created loop.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /leverage-loops/{loop_id}:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    get:
+      operationId: getLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Get one leverage loop
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The loop with its suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: updateLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Update a leverage loop
+      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`.'
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLeverageLoopRequest'
+      responses:
+        '200':
+          description: The updated loop.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Delete a leverage loop and everything under it
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loops/{loop_id}/dispatch:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    post:
+      operationId: dispatchLeverageLoop
+      tags:
+        - Leverage Loops
+      summary: Submit a draft loop for suggestion generation
+      description: Moves the loop to `processing`, records usage and queues generation on the worker. A loop already past draft/submitted returns 409.
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: The loop in its processing state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /leverage-loops/{loop_id}/suggestions:
+    parameters:
+      - $ref: '#/components/parameters/LoopID'
+    get:
+      operationId: listLeverageLoopSuggestions
+      tags:
+        - Leverage Loops
+      summary: List a loop's suggestions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: archived
+          in: query
+          description: '`true` returns the archived suggestions instead of the live ones.'
+          schema:
+            type: boolean
+            default: false
+        - name: query
+          in: query
+          description: Case-insensitive substring match on header_text.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of suggestions, newest activity first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopSuggestionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: getLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Get one suggestion
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The suggestion with its person / company resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopSuggestionEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: updateLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Archive or restore a suggestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - archived
+              properties:
+                archived:
+                  type: boolean
+      responses:
+        '200':
+          description: The updated suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopSuggestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: deleteLeverageLoopSuggestion
+      tags:
+        - Leverage Loops
+      summary: Delete a suggestion and its actions, trajectories and questions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/actions:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopActions
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's actions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of live actions, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopActionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/trajectories:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopTrajectories
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's trajectories with their nodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of trajectories, oldest first, nodes embedded and hydrated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListLeverageLoopTrajectoriesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-suggestions/{suggestion_id}/questions:
+    parameters:
+      - $ref: '#/components/parameters/SuggestionID'
+    get:
+      operationId: listLeverageLoopQuestions
+      tags:
+        - Leverage Loops
+      summary: List a suggestion's follow-up questions
+      description: Every question, oldest first (not paged); rebuild the thread from parent_id.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The questions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopQuestionListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createLeverageLoopQuestion
+      tags:
+        - Leverage Loops
+      summary: Ask a follow-up question on a suggestion
+      description: 'Stores the question with `processing: true`; the answer is produced asynchronously. selected_nodes must name existing entities.'
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeverageLoopQuestionRequest'
+      responses:
+        '201':
+          description: The created question.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopQuestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /leverage-loop-questions/{question_id}/nodes:
+    get:
+      operationId: listLeverageLoopQuestionNodes
+      tags:
+        - Leverage Loops
+      summary: List the nodes pinned to a question
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of hydrated nodes, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSuggestionNodesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /edge-sync/rebuild:
     post:
       tags:
@@ -20012,6 +20426,540 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    LeverageLoopSuggestion:
+      type: object
+      required:
+        - id
+        - suggestion_request_id
+        - header_text
+        - node_targeted
+        - archived
+        - paths_to_person
+        - paths_to_company
+        - created_at
+        - updated_at
+      description: 'One leverage_loop_suggestion with its primary node flattened onto it: entity_type + node_uuid name the entity, person / company carry it.'
+      properties:
+        id:
+          type: string
+          format: uuid
+        suggestion_request_id:
+          type: string
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        header_text:
+          type: string
+        suggestion_context:
+          type:
+            - string
+            - 'null'
+        entity_type:
+          type:
+            - string
+            - 'null'
+        node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        node_targeted:
+          type: boolean
+        archived:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/NodeCompany-2'
+            - type: 'null'
+        paths_to_person:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        paths_to_company:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoop:
+      type: object
+      required:
+        - id
+        - copilot_mode
+        - status
+        - request_panel_title
+        - request_header_title
+        - modified
+        - leverage_loop_suggestions
+        - leverage_loop_suggestion_count
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        copilot_mode:
+          type: string
+          description: Always `loop` on this surface.
+        status:
+          type: string
+        request_panel_title:
+          type: string
+        request_header_title:
+          type: string
+        request_context:
+          type:
+            - string
+            - 'null'
+        class_slug:
+          type:
+            - string
+            - 'null'
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        number_of_results:
+          type:
+            - integer
+            - 'null'
+        deliver_format:
+          type:
+            - string
+            - 'null'
+        llm_summary_context:
+          description: Raw JSON (array of strings) or null.
+        modified:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        leverage_loop_suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopSuggestion'
+        leverage_loop_suggestion_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PageMeta:
+      type: object
+      description: Envelope meta for keyset lists. nextCursor is empty on the last page.
+      properties:
+        requestId:
+          type: string
+        total:
+          type: integer
+          format: int64
+        nextCursor:
+          type: string
+    ListLeverageLoopsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoop'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    CreateLeverageLoopRequest:
+      type: object
+      properties:
+        request_panel_title:
+          type: string
+          maxLength: 500
+        request_header_title:
+          type: string
+          maxLength: 500
+        request_context:
+          type:
+            - string
+            - 'null'
+        class_slug:
+          type:
+            - string
+            - 'null'
+          maxLength: 100
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The person the loop is about. Omit for a generic loop.
+        number_of_results:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          maximum: 200
+        deliver_format:
+          type:
+            - string
+            - 'null'
+          description: One of suggestions, csv, pdf, create collection.
+    LeverageLoopEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoop'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateLeverageLoopRequest:
+      type: object
+      description: Partial update; absent fields are unchanged.
+      properties:
+        request_panel_title:
+          type: string
+          maxLength: 500
+        request_header_title:
+          type: string
+          maxLength: 500
+        request_context:
+          type:
+            - string
+            - 'null'
+        status:
+          type: string
+          description: One of draft, submitted, processing, suggestion, archived.
+        number_of_results:
+          type: integer
+          minimum: 1
+          maximum: 200
+        deliver_format:
+          type: string
+    ListLeverageLoopSuggestionsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    LeverageLoopSuggestionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoopSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    LeverageLoopAction:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - action_context
+        - draft_email
+        - warm_intro
+        - message
+        - archived
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        action_context:
+          type: string
+        draft_email:
+          type: boolean
+        warm_intro:
+          type: boolean
+        message:
+          type: boolean
+        archived:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ListLeverageLoopActionsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopAction'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SuggestionNode:
+      type: object
+      required:
+        - id
+        - entity_type
+        - node_uuid
+        - label
+        - node_targeted
+        - paths_to_person
+        - paths_to_company
+        - created_at
+        - updated_at
+      description: A stored node plus the entity it points at, in the Discover node shape. Exactly one entity block is non-null; all are null when the entity no longer resolves.
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+          format: uuid
+        label:
+          type: array
+          items:
+            type: string
+        node_targeted:
+          type: boolean
+        person:
+          oneOf:
+            - $ref: '#/components/schemas/ContextPerson'
+            - type: 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/NodeCompany-2'
+            - type: 'null'
+        live_event:
+          oneOf:
+            - $ref: '#/components/schemas/LiveEvent'
+            - type: 'null'
+        film_tv:
+          oneOf:
+            - $ref: '#/components/schemas/FilmTv'
+            - type: 'null'
+        film_tv_award:
+          oneOf:
+            - $ref: '#/components/schemas/FilmTvAward'
+            - type: 'null'
+        funding_round:
+          oneOf:
+            - $ref: '#/components/schemas/FundingRound'
+            - type: 'null'
+        music_group:
+          oneOf:
+            - $ref: '#/components/schemas/MusicGroup'
+            - type: 'null'
+        music_recording:
+          oneOf:
+            - $ref: '#/components/schemas/MusicRecording'
+            - type: 'null'
+        paths_to_person:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        paths_to_company:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePath'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoopTrajectory:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - trajectory_context
+        - leverage_loop_trajectory_nodes
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        trajectory_context:
+          type: string
+        leverage_loop_trajectory_nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionNode'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ListLeverageLoopTrajectoriesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopTrajectory'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    LeverageLoopQuestion:
+      type: object
+      required:
+        - id
+        - leverage_loop_suggestion_id
+        - question
+        - processing
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        leverage_loop_suggestion_id:
+          type: string
+          format: uuid
+        parent_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        user_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        question:
+          type: string
+        answer:
+          type:
+            - string
+            - 'null'
+        processing:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LeverageLoopQuestionListEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CreateLeverageLoopQuestionRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          maxLength: 5000
+        parent_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: An earlier question on the same suggestion to thread under.
+        selected_nodes:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Entity ids to pin as context for the question.
+    LeverageLoopQuestionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoopQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListSuggestionNodesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionNode'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
     Rebuild:
       type: object
       required:
@@ -22704,6 +23652,34 @@ components:
     PersonID:
       in: path
       name: person_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      description: Page size (default 50, max 200).
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from the previous page's `meta.nextCursor`. Omit for the first page.
+      schema:
+        type: string
+    LoopID:
+      name: loop_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SuggestionID:
+      name: suggestion_id
+      in: path
       required: true
       schema:
         type: string
