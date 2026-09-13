@@ -8113,6 +8113,43 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /discover/{discover_id}/candidates:
+    get:
+      tags:
+        - Discover
+      summary: List a discover's Deep Discover candidates
+      description: |
+        Returns every entity the Deep Discover web lane found for this
+        discover, kept or not: what the engines returned, its anchor, the
+        relevance score and reason, and where it landed (`status`, and after
+        the fan-in, `bucket`). Empty when the request did not set
+        `deep_research` or the lane has not run yet. Auth-gated but not
+        owner-scoped. Unknown ids return 404.
+      operationId: listDiscoverDeepCandidates
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: discover_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The discover's candidates, kept first, best score first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeepCandidateListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /discover-context-nodes:
     get:
       tags:
@@ -18836,9 +18873,66 @@ components:
         deep_research:
           type: boolean
           description: |
-            Widens the context set and asks the model for a more thorough
-            synthesis. Costs more tokens and latency.
+            Widens the context set, asks the model for a more thorough
+            synthesis, and also runs the Deep Discover web lane: entity search
+            beyond the Universe, reported through the record's `deep` block and
+            the candidates endpoint. Costs more tokens and
+            latency.
           default: false
+    DeepProgress:
+      type: object
+      required:
+        - found
+        - enriching
+        - ready
+        - leads
+        - timed_out
+      description: |
+        Where the lane's candidates are. `found` excludes what the relevance
+        gate rejected; `enriching` are seeded and awaiting Universe;
+        `ready` have local rows; `leads` were kept but could never be added.
+      properties:
+        found:
+          type: integer
+        enriching:
+          type: integer
+        ready:
+          type: integer
+        leads:
+          type: integer
+        timed_out:
+          type: integer
+    DeepLane:
+      type: object
+      required:
+        - status
+        - trigger
+        - message
+        - progress
+      description: |
+        The Deep Discover web lane as the client should show it. Poll the
+        record while `status` is `queued`, `running`, `enriching` or
+        `completing`; `complete` and `failed` are terminal. `trigger` is
+        `request` when the caller set `deep_research`, `miss` when the graph
+        answer cited nothing and the lane opened on its own. `message` is the
+        one line to show for the current state. What the lane finds is not
+        here: on completion the record's `answer` is rewritten as the sum of
+        the graph research and the web findings, and the entities it added
+        appear among the response nodes.
+      properties:
+        status:
+          type: string
+        trigger:
+          type: string
+        message:
+          type: string
+        progress:
+          oneOf:
+            - $ref: '#/components/schemas/DeepProgress'
+            - type: 'null'
+          description: |
+            Candidate counts, loaded by the detail endpoint only; null on
+            create and update responses.
     DiscoverRecord:
       type: object
       required:
@@ -18848,6 +18942,7 @@ components:
         - team_ids
         - archived
         - processing
+        - deep
         - created_at
         - updated_at
       description: |
@@ -18874,6 +18969,10 @@ components:
           type:
             - string
             - 'null'
+          description: |
+            The final answer, null until one exists. A graph miss that opens
+            the web lane writes nothing here; show the search from `deep`
+            until the lane completes and writes the aggregated answer.
         team_ids:
           type: array
           items:
@@ -18883,7 +18982,19 @@ components:
           type: boolean
         processing:
           type: boolean
-          description: True while the research pipeline is in flight.
+          description: |
+            True while the research pipeline is in flight, including a web
+            lane that opened on a graph miss.
+        deep:
+          oneOf:
+            - $ref: '#/components/schemas/DeepLane'
+            - type: 'null'
+          description: |
+            The Deep Discover web lane, null when it never opened. It opens
+            when the request sets `deep_research`, or automatically when the
+            graph answer cited nothing and the Universe had nothing to say.
+            While it runs `answer` may be null; when it completes the answer
+            and the response nodes carry what it found.
         created_at:
           type: string
           format: date-time
@@ -18937,6 +19048,100 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/DiscoverRecord'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DeepCandidate:
+      type: object
+      required:
+        - id
+        - entity_type
+        - name
+        - anchor_kind
+        - anchor
+        - source_url
+        - snippet
+        - source_engines
+        - score
+        - reason
+        - kept
+        - status
+        - bucket
+        - entity_id
+        - created
+        - created_at
+        - updated_at
+      description: |
+        One entity the Deep Discover web lane found. `anchor_kind` is
+        `domain`, `linkedin_company`, `linkedin_person` or `none`; `status`
+        is `rejected`, `lead`, `shadow`, `pending`, `polling`, `ready`,
+        `timed_out` or `failed`; `bucket`, set by the fan-in, is `in_answer`,
+        `in_graph`, `net_new` or `lead`. `entity_id` is the Universe id once
+        the entity was seeded.
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          description: persons or companies.
+        name:
+          type: string
+        anchor_kind:
+          type: string
+        anchor:
+          type: string
+        source_url:
+          type: string
+        snippet:
+          type: string
+        source_engines:
+          type: array
+          items:
+            type: string
+        score:
+          type:
+            - number
+            - 'null'
+        reason:
+          type:
+            - string
+            - 'null'
+        kept:
+          type: boolean
+          description: True when the relevance gate scored it at or above the keep threshold.
+        status:
+          type: string
+        bucket:
+          type:
+            - string
+            - 'null'
+        entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        created:
+          type: boolean
+          description: True when seeding created the entity in Universe rather than matching one.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DeepCandidateListEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeepCandidate'
         error:
           type: 'null'
         meta:
@@ -19062,7 +19267,16 @@ components:
       required:
         - id
         - name
-      description: The company a node points at, with the authenticated user's company contact (my_company).
+        - logo
+        - domain
+        - tagline
+        - short_description
+        - my_company
+      description: |
+        The company a node points at, with the authenticated user's company
+        contact (my_company). Carries everything the company card renders:
+        tagline under the name, short_description as the about text. Nullable
+        fields are always present, null when unknown.
       properties:
         id:
           type: string
@@ -19077,8 +19291,18 @@ components:
           type:
             - string
             - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        short_description:
+          type:
+            - string
+            - 'null'
         my_company:
-          $ref: '#/components/schemas/MyCompany'
+          oneOf:
+            - $ref: '#/components/schemas/MyCompany'
+            - type: 'null'
     LiveEvent:
       type: object
       required:
@@ -19676,9 +19900,9 @@ components:
         - error
         - meta
       description: |
-        A page of discover graph nodes (one kind — context or response, per the
-        route). Pagination (page / pageSize / total) lives in meta; data is the
-        bare item array.
+        A page of discover graph nodes (one kind per route: context or
+        response; entities the web lane adds are response nodes). Pagination
+        (page / pageSize / total) lives in meta; data is the bare item array.
       properties:
         data:
           type: array
