@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export const SampleSuggestionData = () => {
+export const SampleSuggestionData = ({ palette = null } = {}) => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
   const [version, setVersion] = useState('earlier');
@@ -144,15 +144,15 @@ export const SampleSuggestionData = () => {
   #orbiter-moonshot .orb-section { margin-top: var(--orb-section-gap); }
   #orbiter-moonshot .orb-section-title { display: flex; align-items: center; gap: 9px; padding-left: 12px; font-size: 11px; line-height: 18px; letter-spacing: 2.5px; font-weight: 750; margin-bottom: 10px; }
   #orbiter-moonshot .orb-section-title svg { width: 12px; height: 12px; color: #b6c6e8; flex: none; }
-  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 1px solid var(--orb-why-border); box-shadow:inset 3px 0 0 var(--orb-why-accent); border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
+  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 2px solid var(--orb-why-border); border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
   #orbiter-moonshot .orb-why-box p + p { margin-top: 22px; }
   #orbiter-moonshot .orb-trajectory-section { margin-top: 12px; }
   #orbiter-moonshot .orb-trajectory-note { padding: 12px 14px; background: var(--orb-trajectory); border: 1px solid var(--orb-trajectory-border); border-radius: calc(var(--orb-radius) - 2px); color: #dce8e7; font-size: 14px; line-height: 20px; }
   #orbiter-moonshot .orb-connections { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 20px; margin-top: 10px; }
   #orbiter-moonshot .orb-actions { display: grid; gap: 5px; }
-  #orbiter-moonshot .orb-action { min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 14px; background: var(--orb-action); border: 1px solid #2a5477; border-radius: calc(var(--orb-radius) - 2px); font-size: 14px; line-height: 20px; }
-  #orbiter-moonshot .orb-draft-button { flex: none; color: #cbd5ec; border: 1px solid #364872; background: #1e2b47; padding: 4px 11px; border-radius: 4px; font-size: 10px; line-height: 15px; letter-spacing: 1px; font-weight: 700; }
-  #orbiter-moonshot .orb-draft-button:hover, #orbiter-moonshot .orb-draft-button[aria-expanded="true"] { background: #2b3c61; border-color: #6685b7; }
+  #orbiter-moonshot .orb-action { min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 14px; background: var(--orb-action); border: 1px solid var(--orb-action-border, #2a5477); border-radius: calc(var(--orb-radius) - 2px); font-size: 14px; line-height: 20px; }
+  #orbiter-moonshot .orb-draft-button { flex: none; color: var(--orb-action-accent, #cbd5ec); border: 1px solid var(--orb-action-border, #364872); background: var(--orb-action-button, #1e2b47); padding: 4px 11px; border-radius: 4px; font-size: 10px; line-height: 15px; letter-spacing: 1px; font-weight: 700; }
+  #orbiter-moonshot .orb-draft-button:hover, #orbiter-moonshot .orb-draft-button[aria-expanded="true"] { background: var(--orb-action-button, #2b3c61); border-color: var(--orb-action-accent, #6685b7); }
   #orbiter-moonshot .orb-opportunity > .orb-more { right: 24px; }
   #orbiter-moonshot .orb-collapsed { margin-top: 24px; background: var(--orb-panel); border: 1px solid var(--orb-border); border-radius: var(--orb-radius); position: relative; }
   #orbiter-moonshot .orb-summary { width: 100%; padding: 8px 20px; min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; background: transparent; border-radius: inherit; color: var(--orb-text); text-align: left; font-size: 14px; line-height: 20px; font-weight: 700; }
@@ -215,7 +215,8 @@ export const SampleSuggestionData = () => {
       .sample-suggestion-workspace { width:100%; }
       .sample-suggestion-toolbar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:12px; margin-bottom:12px; font-size:13px; }
       .sample-suggestion-toolbar label { display:flex; align-items:center; gap:8px; }
-      .sample-suggestion-toolbar select, .sample-suggestion-toolbar button { background:#101929; color:#e8efff; border:1px solid #364b70; border-radius:6px; padding:7px 10px; font:inherit; cursor:pointer; }
+      .sample-suggestion-toolbar select, .sample-suggestion-toolbar button, .sample-suggestion-toolbar a { background:#101929; color:#e8efff; border:1px solid #364b70; border-radius:6px; padding:7px 10px; font:inherit; cursor:pointer; text-decoration:none; }
+      .sample-palette-name { color:#bfc3ce; margin-right:auto; }
       #orbiter-moonshot { --orb-reference:url('/images/suggestion-delivery/current-ui.png'); padding:0; }
       #orbiter-moonshot .orb-frame { padding:12px; border-radius:24px 24px 0 0; }
       #orbiter-moonshot .orb-opportunity { background:var(--orb-page); padding:0; border-radius:11px; }
@@ -241,6 +242,7 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-being, #orbiter-moonshot .orb-connections .orb-being { background-position:-726px -477px; }
       #orbiter-moonshot .orb-section-title { padding-left:0; gap:5px; font-size:10px; letter-spacing:1.7px; line-height:18px; font-weight:600; }
       #orbiter-moonshot .sample-label-icon { color:#a5bcff; font-size:13px; letter-spacing:0; }
+      #orbiter-moonshot #sample-why .sample-label-icon { color:var(--orb-why-accent); }
       #orbiter-moonshot .orb-why-box { padding:16px 18px; font-size:14px; line-height:22px; border-radius:5px; }
       #orbiter-moonshot .orb-why-headline { margin:0 0 16px; color:#f1f3f8; font-size:16px; line-height:24px; font-weight:700; }
       #orbiter-moonshot .orb-why-headline::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:var(--orb-why-accent); }
@@ -248,23 +250,24 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-section .sample-label-icon { color:var(--orb-trajectory-accent); }
       #orbiter-moonshot .sample-sequencing-section .sample-label-icon { color:var(--orb-sequencing-accent); }
+      #orbiter-moonshot .sample-action-section .sample-label-icon { color:var(--orb-action-accent, #a5bcff); }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
       #orbiter-moonshot .orb-trajectory-panel { position:relative; }
       #orbiter-moonshot .orb-trajectory-summary { display:flex; align-items:center; justify-content:space-between; gap:14px; width:100%; padding:12px 14px; color:#dce8e7; background:var(--orb-trajectory); border:1px solid var(--orb-trajectory-border); border-radius:5px; text-align:left; font-size:14px; line-height:22px; font-weight:700; }
       #orbiter-moonshot .orb-trajectory-summary .sample-arrow-circle { flex:none; }
       #orbiter-moonshot .orb-trajectory-summary .sample-arrow-circle, #orbiter-moonshot .orb-trajectory-toggle { color:var(--orb-trajectory-accent); border-color:var(--orb-trajectory-border); }
-      #orbiter-moonshot .orb-trajectory-summary:hover, #orbiter-moonshot .orb-trajectory-toggle:hover { border-color:#507c7c; }
+      #orbiter-moonshot .orb-trajectory-summary:hover, #orbiter-moonshot .orb-trajectory-toggle:hover { border-color:var(--orb-trajectory-accent); }
       #orbiter-moonshot .orb-trajectory-toggle { position:absolute; top:10px; right:14px; }
       #orbiter-moonshot .orb-trajectory-toggle::before { content:''; position:absolute; inset:-8px; }
       #orbiter-moonshot .orb-trajectory-summary:focus-visible, #orbiter-moonshot .orb-trajectory-toggle:focus-visible { outline:2px solid #a8c5ff; outline-offset:3px; }
       #orbiter-moonshot .orb-trajectory-route:first-child h4 { padding-right:42px; }
       #orbiter-moonshot .orb-trajectory-route + .orb-trajectory-route { margin-top:18px; }
       #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#dce8e7; font-size:14px; line-height:20px; font-weight:700; }
-      #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#507c7c; }
+      #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:var(--orb-trajectory-border); }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
       #orbiter-moonshot .orb-sequencing-panel { position:relative; }
       #orbiter-moonshot .orb-sequencing-toggle { position:absolute; top:13px; right:14px; width:24px; height:24px; color:var(--orb-sequencing-accent); border-color:var(--orb-sequencing-border); }
-      #orbiter-moonshot .orb-sequencing-toggle:hover { border-color:#8d7753; }
+      #orbiter-moonshot .orb-sequencing-toggle:hover { border-color:var(--orb-sequencing-accent); }
       #orbiter-moonshot .orb-sequencing-toggle::before { content:''; position:absolute; inset:-10px; }
       #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 54px 16px 38px; background:var(--orb-sequencing); border:1px solid var(--orb-sequencing-border); border-radius:5px; color:#e5dfd5; font-size:14px; line-height:22px; }
       #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list { list-style:none; padding:13px 54px 13px 18px; }
@@ -279,12 +282,12 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-action { padding:7px 14px; min-height:38px; font-size:13px; border-radius:5px; }
       #orbiter-moonshot .orb-draft-button { padding:3px 8px; font-size:10px; font-weight:400; line-height:15px; letter-spacing:.5px; border-radius:3px; }
       #orbiter-moonshot .orb-action-controls { display:flex; align-items:center; gap:14px; flex:none; margin-left:auto; }
-      #orbiter-moonshot .orb-action-toggle { color:#b7d0e6; border-color:#38566b; position:relative; }
+      #orbiter-moonshot .orb-action-toggle { color:var(--orb-action-accent, #b7d0e6); border-color:var(--orb-action-border, #38566b); position:relative; }
       #orbiter-moonshot .orb-action-toggle::before { content:''; position:absolute; inset:-6px; }
-      #orbiter-moonshot .orb-action-toggle:hover { background:#284b5c; border-color:#729ab7; }
+      #orbiter-moonshot .orb-action-toggle:hover { background:var(--orb-action-button, #284b5c); border-color:var(--orb-action-accent, #729ab7); }
       #orbiter-moonshot .orb-action-toggle:focus-visible { outline:2px solid #a8c5ff; outline-offset:3px; }
-      #orbiter-moonshot .orb-action-options { display:grid; gap:5px; margin:5px 0 8px 18px; padding-left:10px; border-left:1px solid #2a5477; }
-      #orbiter-moonshot .orb-action-option { background:#102630; border-color:#274352; padding-right:52px; }
+      #orbiter-moonshot .orb-action-options { display:grid; gap:5px; margin:5px 0 8px 18px; padding-left:10px; border-left:1px solid var(--orb-action-border, #2a5477); }
+      #orbiter-moonshot .orb-action-option { background:var(--orb-action-option, #102630); border-color:var(--orb-action-border, #274352); padding-right:52px; }
       #orbiter-moonshot .orb-more { width:37px; border:1px solid #293957; background:var(--orb-panel); color:#f5f7fc; font-size:10px; line-height:11px; letter-spacing:3px; padding:0 0 1px 3px; }
       #orbiter-moonshot .orb-opportunity>.orb-more, #orbiter-moonshot .orb-collapsed>.orb-more { right:22px; background:#1d2944; }
       #orbiter-moonshot .orb-summary { padding:11px 16px; min-height:47px; font-weight:600; }
@@ -300,8 +303,8 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-close { font-size:20px; }
       @media(max-width:700px) { #orbiter-moonshot .orb-connections .orb-person { width:367px; } #orbiter-moonshot .orb-person { max-width:100%; } #orbiter-moonshot .orb-frame { padding:8px; } #orbiter-moonshot .orb-header { padding:9px 10px; } #orbiter-moonshot .sample-content { padding:10px 8px; } #orbiter-moonshot .orb-role { white-space:normal; } #orbiter-moonshot .orb-action { flex-wrap:wrap; padding:10px; } #orbiter-moonshot .orb-action p { flex-basis:100%; } #orbiter-moonshot .orb-draft-button { margin-left:auto; padding:6px 9px; } }
     `}</style>
-    <div className="sample-suggestion-toolbar" aria-label="Sample design controls"><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
-    <div id="orbiter-moonshot" aria-label="Sample suggestion board"><div className="orb-frame">
+    <div className="sample-suggestion-toolbar" aria-label="Sample design controls">{palette && <span className="sample-palette-name">Palette preview: {palette.name}</span>}<a href="/palettes.html" target="_blank" rel="noreferrer">Palette options</a><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
+    <div id="orbiter-moonshot" style={palette?.colors} aria-label="Sample suggestion board"><div className="orb-frame">
       <article className="orb-opportunity">
         <header className="orb-header"><span className="orb-badge"><span aria-hidden="true">♧</span> MOONSHOT</span><h2 className="orb-heading" {...edit(data.title,value => setField('title',value))} /><button className="orb-collapse" type="button" aria-expanded={open.main} aria-controls="sample-main" aria-label={(open.main ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity'} onClick={() => toggle('main')}>{arrow(open.main)}</button></header>
         <div className="sample-content" id="sample-main" hidden={!open.main}>
