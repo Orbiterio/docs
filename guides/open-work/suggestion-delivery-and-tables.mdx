@@ -18,7 +18,7 @@ When implementation begins, manually populated sample packages will test creatio
 
 [Sample Suggestion Data](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data) is the canonical source for both complete POST bodies, including the supplied email addresses and mobile numbers. The contract and table designs on this page now use the same version 2 schema.
 
-[Add Required Entities](/guides/open-work/suggestion-delivery-and-tables/add-required-entities) lists the five people and one company whose entity IDs are needed for the sample packages, with all six supplied LinkedIn or website references.
+[Add Required Entities](/guides/open-work/suggestion-delivery-and-tables/add-required-entities) lists the eight people and four companies/organizations whose entity IDs are needed for the ready and placeholder suggestions. Six identity links have been supplied; six remain to be confirmed.
 
 <CardGroup cols={2}>
   <Card title="Leverage Loop UI" icon="arrows-rotate" href="/guides/open-work/suggestion-delivery-and-tables/leverage-loop-ui">
@@ -92,6 +92,7 @@ Use Go constants and `ValidX()` service validators for enum-like values, backed 
 | `suggestion_type` | `outcome`, `leverage_loop`, `leverage_outcome`, `serendipity` |
 | `origin` | `user_requested`, `agent_generated` |
 | Delivery `status` | `complete`, `partial`, `failed`. `in_progress` is not accepted; a delivery contains a terminal result. |
+| Suggestion `content_status` | `ready` or `placeholder`. Describes whether supporting content is supplied; independent of terminal batch status, dismissal, and accordion state. |
 | Request `status` | `active`, `archived` |
 | `suggestion_mode` | `new_connection` or `reconnect` for serendipity; null for other types. |
 | `entity_type` | `person`, `company`, plus types explicitly supported by the shared entity taxonomy. Never use legacy `org` for a company. |
@@ -110,8 +111,8 @@ Send one raw JSON envelope per batch, with `Content-Type: application/json`. The
 | Level | Required shape |
 | --- | --- |
 | Batch | `schema_version`, `batch_id`, `request_suggestion_id`, `org_id`, `requested_by`, `suggestion_type`, `beneficiary_contact_id`, `origin`, `trigger_source`, `status`, `generated_at`, `suggestions[]` |
-| Suggestion | `source_ref`, `rank`, `entity_id`, `entity_type`, `suggestion_mode`, `badge`, `why`, `score`, `trajectories[]`, `suggested_sequencing[]`, `key_people`, `hooks`, `paths[]`, `evidence[]`, `entities[]`, `action_groups[]`, `actions[]` |
-| WHY | `headline` string and `body[]` paragraph strings. Preserve paragraph boundaries. |
+| Suggestion | `source_ref`, `rank`, `entity_id`, `entity_type`, `content_status`, `suggestion_mode`, `badge`, `why`, `score`, `trajectories[]`, `suggested_sequencing[]`, `key_people`, `hooks`, `paths[]`, `evidence[]`, `entities[]`, `action_groups[]`, `actions[]` |
+| WHY | For `ready`: nonempty `headline` string and nonempty `body[]` of nonempty paragraph strings. For `placeholder`: null. Preserve paragraph boundaries. |
 | Trajectory | `ref`, `rank`, `connector_entity_ids[]`, `body[]`, `path_refs[]` |
 | Sequencing step | `rank`, `headline`, `body[]`, `trajectory_refs[]` |
 | Entity entry | `entity_id`, `entity_type`, `role` |
@@ -121,6 +122,8 @@ Send one raw JSON envelope per batch, with `Content-Type: application/json`. The
 | Evidence | `evidence_type`, nullable `source_system`, `ref_id`, `snippet`, `weight` |
 
 Nullable fields remain present with null values. Required arrays use `[]` when empty. `key_people` and `hooks` allow null as in the samples. WHY and drafts are plain text, not trusted HTML. `score` remains an object and may be `{}`.
+
+A `placeholder` is a named candidate with supporting content not yet supplied. Preserve its `source_ref`, rank, typed target, and `entities[]` registry, including the beneficiary for Leverage Loop and any `target_org` used in its header. Require `why`, `badge`, `key_people`, and `hooks` to be null, `score` to be `{}`, and `trajectories`, `suggested_sequencing`, `paths`, `evidence`, `action_groups`, and `actions` to be empty arrays. Store `why: null` as SQL NULL. Placeholder rows count toward `suggestion_count`; do not create empty child rows for those arrays. The batch's `complete` status means delivery is final, not that every candidate has ready content. A later populated version arrives in a new immutable batch with a new batch ID.
 
 Every object containing an explicit `entity_id` also contains `entity_type`: the suggested entity, entity entries, introduction recipients, hooks, and path hops. ID-only links such as `target_entity_id`, `connector_entity_ids[]`, and `recipient_entity_ids[]` resolve through the owning suggestion's typed `entities[]` entries. The same entity may have multiple roles, but its type must be consistent throughout the batch.
 
@@ -146,6 +149,7 @@ The UI uses array index zero by default. It shows a fixed field for one value an
 
 | Design behavior | Persisted source |
 | --- | --- |
+| Empty named suggestion bars | `suggestion.content_status = placeholder`, rank, target, and typed `suggestion_entity` rows. Hydrate names; expanding shows an empty content area with no generated WHY or action controls. |
 | WHY headline and paragraphs | `suggestion.why` JSONB |
 | Charlie and Kyle as separate routes | Two `suggestion_trajectory` rows, each with its own connectors and body paragraphs |
 | Closed trajectory summary | Names resolved from typed connector IDs, in trajectory rank order; no duplicated name string needed |
@@ -165,7 +169,7 @@ All proposed tables are owned by the `suggestions` feature in Orbiter Backend’
 | --- | --- | --- |
 | `request_suggestion` | One request. Local organization owner, requester attribution, type, beneficiary, and active/archive status. Created from the package when absent. Create new; the inspected backend has no table to ALTER. | POST mechanism |
 | `suggestion_batch` | One delivery. Sender's batch ID, scope, request link, v2 version, terminal status, counts, timestamps, and normalized payload digest for replay conflicts. | POST mechanism |
-| `suggestion` | One candidate per batch. Typed entity, badge, structured WHY, score, key people, hooks, and reserved dismissal fields. No aggregate trajectory columns. | POST mechanism |
+| `suggestion` | One row per candidate within a batch, including placeholders. Typed entity, content status, badge, nullable structured WHY, score, key people, hooks, and reserved dismissal fields. No aggregate trajectory columns. | POST mechanism |
 | `suggestion_entity` | One entity/role per suggestion, with `entity_type` and original array position. Same ID can have multiple roles. | POST mechanism |
 | `suggestion_path` | One structured path, preserving its local `ref`, rank, score, and ordered typed hops. | POST mechanism |
 | `suggestion_evidence` | One evidence item, with position to preserve the original order. | POST mechanism |
@@ -201,13 +205,15 @@ Authenticate the service separately from user routes. Validate the Google-signed
 
 Expose configuration for the expected audience and service-account subject; fail closed when either is missing. Mount this group separately from WorkOS user-session middleware. A developer may obtain a token by impersonating that permitted service account through the normal development credentials flow.
 
+The Leverage Loop sample creates three suggestions; the Outcome sample creates four. For Leverage Loop:
+
 ```json Batch created — HTTP 201
 {
   "data": {
     "batch_id": "{batch UUID}",
     "batch_seq": 1,
     "status": "complete",
-    "suggestion_count": 1,
+    "suggestion_count": 3,
     "created": true
   },
   "error": null,
@@ -222,6 +228,8 @@ An identical replay returns HTTP 200 with the same stored values and `created: f
 For the implementation test, reconstruct the package through the repository or a database query after the POST. A dedicated HTTP GET endpoint is not needed to prove creation. Preserve explicit nulls, empty arrays, refs, text, and ordering. Return timestamps as UTC RFC3339 values and compare them by instant; use UTC `Z` timestamps in fixtures. Load children in batches, not one query per action/entity.
 
 A future UI read endpoint must verify the authenticated user’s current membership in the selected organization and join children through the owning batch. It must not expose another organization’s records. The later feed filters to `status = complete` and `dismissed_at IS NULL`, orders by `(batch_seq DESC, rank ASC)`, and uses cursor pagination. Partial and failed batches remain available for authorized detail inspection; never silently mark them complete.
+
+Within a visible batch, return both ready and placeholder suggestions in rank order. Preserve null WHY and empty arrays on reads; do not drop placeholder cards or treat them as archived. The design's `ARCHIVED 1` counter has no corresponding supplied record and does not add a row to these fixtures.
 
 ### Errors and retries
 
@@ -247,7 +255,7 @@ Record authenticated validation/conflict failures in `ingest_error` outside a ro
 4. Build a typed entity map per suggestion and verify type consistency across the batch. Resolve the candidate, beneficiary, action targets, connectors, key people, hook targets, path-hop entities, and introduction recipients through it. Beneficiaries, connectors, email/SMS targets, and introduction participants must be people.
 5. Resolve route `path_refs`, sequencing `trajectory_refs`, group `trajectory_ref`, and action `group_ref` within the same suggestion. Every group must have at least one action. Refs never resolve to another suggestion or batch.
 6. Validate action-specific parameters and recipient arrays. For introduction steps, resolve every recipient ID to exactly one typed `params.recipients[]` entry and verify the two-party workflow described above.
-7. Require `why.headline` and nonempty `why.body[]`; preserve text. Allow empty scores, paths, and evidence. Trajectories, sequencing, and non-null key people are Outcome-family fields; Leverage Loop uses empty trajectories/sequencing and null key people. `hooks` may appear on any type, each with `entity_id`, `entity_type`, `angle`, and `text`. Nonempty path hops carry entity type and match the declared `hop_count`.
+7. Require `content_status` to be `ready` or `placeholder`. Ready suggestions require a nonempty `why.headline` and nonempty `why.body[]` of nonempty paragraphs; preserve text. Placeholders require the null/empty content shape in the envelope contract while retaining normal entity and rank validation. Ready suggestions may also have empty scores, paths, and evidence. Trajectories, sequencing, and non-null key people are Outcome-family fields; Leverage Loop uses empty trajectories/sequencing and null key people. `hooks` may appear on any ready suggestion type, each with `entity_id`, `entity_type`, `angle`, and `text`. Nonempty path hops carry entity type and match the declared `hop_count`.
 
 Do not fabricate path records from prose. The supplied Charlie/Kyle narratives have no verified path data; their `path_refs`, `paths`, and `evidence` stay empty.
 
@@ -337,8 +345,8 @@ Counts are per package when both its request ID and batch ID are new.
 | --- | ---: | ---: |
 | `request_suggestion` | 1 | 1 |
 | `suggestion_batch` | 1 | 1 |
-| `suggestion` | 1 | 1 |
-| `suggestion_entity` | 2 | 4 |
+| `suggestion` | 3 | 4 |
+| `suggestion_entity` | 6 | 8 |
 | `suggestion_path` | 0 | 0 |
 | `suggestion_evidence` | 0 | 0 |
 | `suggestion_trajectory` | 0 | 2 |
@@ -349,6 +357,8 @@ Counts are per package when both its request ID and batch ID are new.
 
 With no earlier batches in either scope, each fixture receives `batch_seq = 1`; sequences are per scope, not global. A new batch ID in the same scope creates another batch and increments only that scope’s sequence. Reusing the same matching request ID does not create another parent request.
 
+Leverage Loop has one ready suggestion and two placeholders; Outcome has one ready suggestion and three placeholders. The seven suggestions reference twelve unique entities, with fourteen entity/role rows because Katelyn appears in all three Leverage Loop registries. Placeholder suggestions create no action, group, trajectory, sequencing, path, or evidence rows.
+
 Kyle's email action must read back Gmail first and `kyle@beinghuman.studio` second. His SMS action must read back `+13234526998` first and `+6588333422` second. The introduction action must retain independent email arrays for Ethan and Katelyn and all three draft stages.
 
 ### Required acceptance cases
@@ -356,6 +366,8 @@ Kyle's email action must read back Gmail first and `kyle@beinghuman.studio` seco
 | Case | Expected result |
 | --- | --- |
 | Both complete fixtures | Exact v2 content round-trip and the row counts above. |
+| Five placeholder suggestions | Persist alongside the two ready suggestions; return their ranks, entity registries, null WHY, and empty content arrays. Counts are 3 for Leverage Loop and 4 for Outcome. |
+| Missing/unknown `content_status`, ready with null/empty WHY, or placeholder with populated content | 400 with a field path; no result rows. |
 | Missing `entity_type`, wrong entity type, dangling local ref, or cross-suggestion ref | 400 with a field path; no batch or child rows. |
 | Empty email/phone choices, invalid email, or non-E.164 number | 400; no result rows. |
 | Wrong org/requester/beneficiary/type for a new batch, or archived request | Rejected; no result rows. |
@@ -429,7 +441,8 @@ CREATE TABLE suggestions.suggestion (
   entity_type text NOT NULL,
   suggestion_mode text,
   badge text,
-  why jsonb NOT NULL,
+  content_status text NOT NULL,
+  why jsonb,
   score jsonb NOT NULL DEFAULT '{}',
   key_people uuid[],
   hooks jsonb,
@@ -646,5 +659,6 @@ Future exclusion reads must include a permanent personal `relationship_ended` su
 | Existing-table ALTER for the request | New request table in the inspected backend; reconcile any intervening implementation first |
 | Ambiguous WorkOS IDs | Local backend organization and user UUIDs linked to WorkOS |
 | Status always forced complete / replay checks only complete | Store all terminal statuses; compare payload digest for every committed batch |
+| Named empty suggestions omitted / WHY always required | Persist `content_status` and nullable WHY; validate ready and placeholder content separately |
 
 There is no automatic rewrite of existing Xano or v1 data in this scope. If v1 tables or consumers exist in the implementation environment, plan an additive migration and explicit mapping before switching them. The new docs and examples do not claim that migration has run.

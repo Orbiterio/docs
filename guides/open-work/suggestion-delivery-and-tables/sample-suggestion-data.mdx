@@ -5,9 +5,9 @@ icon: "code"
 mode: "wide"
 ---
 
-These samples match the current [Leverage Loop UI](/guides/open-work/suggestion-delivery-and-tables/leverage-loop-ui) and [Outcome UI](/guides/open-work/suggestion-delivery-and-tables/outcome-ui). Each envelope contains one complete suggestion, with the exact WHY, outreach, and draft copy used in the prototypes.
+These samples match the current [Leverage Loop UI](/guides/open-work/suggestion-delivery-and-tables/leverage-loop-ui) and [Outcome UI](/guides/open-work/suggestion-delivery-and-tables/outcome-ui). Leverage Loop contains three suggestions; Outcome contains four. Each envelope includes one ready suggestion with the prototype's WHY, outreach, and draft copy, plus the empty suggestion bars in their displayed order.
 
-Use [Add Required Entities](/guides/open-work/suggestion-delivery-and-tables/add-required-entities) to resolve the five people and one company referenced by these payloads before the eventual POST test.
+Use [Add Required Entities](/guides/open-work/suggestion-delivery-and-tables/add-required-entities) to resolve the eight people and four companies/organizations referenced by these payloads before the eventual POST test.
 
 <Tabs>
   <Tab title="Leverage Loop design">
@@ -37,8 +37,9 @@ Fill the existing local org/user and entity UUIDs, mint request/batch UUIDv7 IDs
 | `entity_id` and `entity_type` | Every entity object pairs its ID with its type, including the suggested entity, `entities[]`, and introduction recipients. These examples use `person` and `company`. |
 | `requested_by` | The requesting user's `user_id`. Required for these user-requested samples. It supplies the new parent request’s attribution, or must match the requester on an existing request. |
 | `org_id` | The owning organization and access scope. The requesting user must belong to it. |
+| `content_status` | `ready` for populated suggestions; `placeholder` for a named suggestion whose supporting content has not been supplied. Separate from batch delivery status and accordion open/closed state. |
 | `badge` | Displays LEVERAGE LOOP or MOONSHOT. It is a display label, separate from `suggestion_mode`, which remains null for these types. |
-| `why.headline` and `why.body[]` | Headline with a short underline, followed by one paragraph per array item. |
+| `why.headline` and `why.body[]` | Headline with a short underline, followed by one paragraph per array item. `why` is null for a placeholder. |
 | `trajectories[]` | One route per connector, ordered by rank. Connector names supply the route headings and the closed summary, “Charlie Anderson & Kyle Jackson.” |
 | `suggested_sequencing[]` | Ordered steps. The closed accordion shows the first step’s headline, “Start with Charlie.” |
 | `action_groups[]` and `actions[].group_ref` | One action bar per group. The lowest-ranked action in that group is always visible; the chevron reveals the remaining actions in rank order. |
@@ -52,7 +53,23 @@ Suggestion ranks order cards within the batch; group ranks order action bars; ac
 
 **User identity:** `requested_by` is the user ID for the request, so there is no second `user_id` field. It identifies the requester, while `org_id` controls ownership and visibility. An agent-generated batch may have `requested_by: null`, as in the parent contract. The suggested person, beneficiary, and connectors are graph entities and are not the requesting user.
 
-Names, profile titles, bios, avatars, and company logos are still resolved from entity IDs. The Leverage Loop header combines the suggested person and beneficiary; the Outcome header combines its target and the entity with role `target_org`. Open/closed state, Midnight colors, and chevrons belong to the UI, not the stored recommendation.
+Names, profile titles, bios, avatars, and company logos are still resolved from entity IDs. The Leverage Loop header combines the suggested person and beneficiary; the Outcome header combines its target and the entity with role `target_org`, when present. A company-only target such as The Lighthouse or AI LA uses its own display name. Open/closed state, Midnight colors, and chevrons belong to the UI, not the stored recommendation.
+
+### Empty suggestions
+
+| Package | Rank | Suggestion | Content status |
+| --- | ---: | --- | --- |
+| Leverage Loop | 1 | Introduce Ethan Jacks to Katelyn | `ready` |
+| Leverage Loop | 2 | Introduce Rebekah Jefferis to Katelyn | `placeholder` |
+| Leverage Loop | 3 | Introduce Bilawal Sidhu to Katelyn | `placeholder` |
+| Outcome | 1 | Ryan Reynolds / Maximum Effort | `ready` |
+| Outcome | 2 | Seth Rogen / Point Grey Pictures | `placeholder` |
+| Outcome | 3 | The Lighthouse | `placeholder` |
+| Outcome | 4 | AI LA | `placeholder` |
+
+Placeholders retain their rank, target, and typed entity registry. They have `why: null`, `score: {}`, null `badge`, `key_people`, and `hooks`, and empty trajectory, sequencing, path, evidence, action-group, and action arrays. Their rows still count toward `suggestion_count`. Opening one shows an empty content area; the UI must not synthesize WHY text or offer outreach actions. A ready suggestion can also be collapsed, so closing a card never changes `content_status`.
+
+Both packages use delivery `status: "complete"` because the supplied package is final, even though some candidates are placeholders. Recommendation rows remain immutable: filling a placeholder later requires a new batch ID. The prototype's **ARCHIVED 1** counter has no supplied archived suggestion behind it and is not a fabricated eighth suggestion in these packages.
 
 In Leverage Loop, email and introduction composers show **Send** on the right; SMS composers show **QRCODE** on the right. Those are composer controls, not separate recommendation action types. Outcome’s current prototype still uses Copy draft. These samples carry draft content, not send status, QR images, opt-in responses, or credentials.
 
@@ -75,7 +92,7 @@ The contact values above were supplied for these examples. Entity references rem
 
 ## LEVERAGE LOOP
 
-The suggestion is Ethan Jacks; Katelyn Gallanty is the beneficiary. The `make_intro` action’s target remains Katelyn, preserving the parent contract’s meaning: introduce `suggestion.entity_id` to `target_entity_id`.
+Ethan Jacks is the ready suggestion; Rebekah Jefferis and Bilawal Sidhu are placeholders. Katelyn Gallanty is the beneficiary of all three. The populated `make_intro` action’s target remains Katelyn, preserving the parent contract’s meaning: introduce `suggestion.entity_id` to `target_entity_id`.
 
 ```json LEVERAGE LOOP wrap
 {
@@ -96,6 +113,7 @@ The suggestion is Ethan Jacks; Katelyn Gallanty is the beneficiary. The `make_in
       "rank": 1,
       "entity_id": "{entity ID for Ethan Jacks}",
       "entity_type": "person",
+      "content_status": "ready",
       "suggestion_mode": null,
       "badge": "LEVERAGE LOOP",
       "why": {
@@ -267,6 +285,68 @@ The suggestion is Ethan Jacks; Katelyn Gallanty is the beneficiary. The `make_in
           }
         }
       ]
+    },
+    {
+      "source_ref": "candidate-rebekah-jefferis",
+      "rank": 2,
+      "entity_id": "{entity ID for Rebekah Jefferis}",
+      "entity_type": "person",
+      "content_status": "placeholder",
+      "suggestion_mode": null,
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "{entity ID for Rebekah Jefferis}",
+          "entity_type": "person",
+          "role": "target"
+        },
+        {
+          "entity_id": "{entity ID for Katelyn Gallanty}",
+          "entity_type": "person",
+          "role": "beneficiary"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "candidate-bilawal-sidhu",
+      "rank": 3,
+      "entity_id": "{entity ID for Bilawal Sidhu}",
+      "entity_type": "person",
+      "content_status": "placeholder",
+      "suggestion_mode": null,
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "{entity ID for Bilawal Sidhu}",
+          "entity_type": "person",
+          "role": "target"
+        },
+        {
+          "entity_id": "{entity ID for Katelyn Gallanty}",
+          "entity_type": "person",
+          "role": "beneficiary"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
     }
   ]
 }
@@ -274,7 +354,7 @@ The suggestion is Ethan Jacks; Katelyn Gallanty is the beneficiary. The `make_in
 
 ## OUTCOME
 
-Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Kyle are separate trajectories, followed by three sequencing steps and their own action groups.
+Ryan Reynolds / Maximum Effort is the ready suggestion. Charlie and Kyle are separate trajectories, followed by three sequencing steps and their own action groups. Seth Rogen / Point Grey Pictures, The Lighthouse, and AI LA follow as placeholders at ranks 2–4.
 
 ```json OUTCOME wrap
 {
@@ -295,6 +375,7 @@ Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Ky
       "rank": 1,
       "entity_id": "{entity ID for Ryan Reynolds}",
       "entity_type": "person",
+      "content_status": "ready",
       "suggestion_mode": null,
       "badge": "MOONSHOT",
       "why": {
@@ -475,6 +556,89 @@ Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Ky
           }
         }
       ]
+    },
+    {
+      "source_ref": "candidate-seth-rogen",
+      "rank": 2,
+      "entity_id": "{entity ID for Seth Rogen}",
+      "entity_type": "person",
+      "content_status": "placeholder",
+      "suggestion_mode": null,
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "{entity ID for Seth Rogen}",
+          "entity_type": "person",
+          "role": "target"
+        },
+        {
+          "entity_id": "{entity ID for Point Grey Pictures}",
+          "entity_type": "company",
+          "role": "target_org"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "candidate-the-lighthouse",
+      "rank": 3,
+      "entity_id": "{entity ID for The Lighthouse}",
+      "entity_type": "company",
+      "content_status": "placeholder",
+      "suggestion_mode": null,
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "{entity ID for The Lighthouse}",
+          "entity_type": "company",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "candidate-ai-la",
+      "rank": 4,
+      "entity_id": "{entity ID for AI LA}",
+      "entity_type": "company",
+      "content_status": "placeholder",
+      "suggestion_mode": null,
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "{entity ID for AI LA}",
+          "entity_type": "company",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
     }
   ]
 }
@@ -483,7 +647,8 @@ Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Ky
 
 ## Validation and implementation notes
 
-- Every object containing `entity_id` must also contain `entity_type`. People use `person`; Maximum Effort uses `company`. Repeated references to the same ID must have the same type. Additional entity types must use the shared entity taxonomy.
+- Every object containing `entity_id` must also contain `entity_type`. People use `person`; the four companies/organizations use `company`. Repeated references to the same ID must have the same type. Additional entity types must use the shared entity taxonomy.
+- Every suggestion requires `content_status`. `ready` requires a nonempty WHY headline and paragraph array. `placeholder` requires null WHY and the empty content shape described above; entity IDs, types, ranks, and reference validation still apply. Do not reject a placeholder merely because it has no actions or WHY, or relax the WHY requirement for a ready suggestion.
 - Every `entity_id`, `beneficiary_contact_id`, `target_entity_id`, and member of an entity ID array must resolve after placeholder substitution. Every referenced person/company is declared with its type in the owning suggestion’s `entities[]` list. ID-only references such as `recipient_entity_ids[]` resolve against these typed entries; introduction recipients also have their type alongside their ID.
 - Email option arrays contain unique, nonempty email strings. Mobile option arrays contain unique strings matching `^\+[1-9]\d{1,14}$`. Array order is significant and is preserved by storage and reads.
 - Every introduction step’s recipient ID must resolve to exactly one `params.recipients[]` entry. The final introduction step references both the suggested person and beneficiary, each with their own email options. User selections and opt-in responses are execution state, not mutations to these immutable recommendation arrays.
@@ -493,6 +658,6 @@ Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Ky
 - Version 2 uses `entity_type` instead of the version 1 entity-list field `entity_kind`, mapping `org` to `company`. It also replaces the single `trajectory_text`, aggregate `trajectory_entity_ids`, and `trajectory_path_refs` with per-route `body`, `connector_entity_ids`, and `path_refs`. Existing version 1 consumers need an explicit mapping or migration.
 - Backend adoption requires `draft_sms` in the Go action validator and the v2 table designs in the [build guide](/guides/open-work/suggestion-delivery-and-tables#schema). Drafts, ordered email/mobile arrays, per-person introduction recipient options, and introduction steps are stored in `suggestion_action.params` JSONB; handlers validate their required shape. The new request and result tables live in the `suggestions` schema. These documentation changes do not apply a database migration.
 
-The collapsed Rebekah, Bilawal, Seth Rogen, The Lighthouse, and AI LA bars are design placeholders. They are not included as completed generated suggestions because their WHY and outreach data have not been supplied.
+The five empty bars are included as placeholder suggestion records. No WHY narratives, contact options, graph paths, or actions have been invented for them.
 
 [Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).
