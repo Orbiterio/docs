@@ -1,0 +1,61 @@
+---
+title: "Add Required Entities"
+description: "The five people and one company referenced by the Leverage Loop and Outcome sample packages, with identity links and entity ID placeholders."
+icon: "users"
+mode: "wide"
+---
+
+The current [sample packages](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data) reference **six unique entities: five people and one company**. The supplied list covers Charlie Anderson, Katelyn Gallanty, Ethan Jacks, and Ryan Reynolds. **Kyle Jackson and Maximum Effort are also required.**
+
+<Danger>
+**Planning only.** This page is the entity preparation list for the proposed Universe-to-Backend POST test. It does not create or enrich any entities. Resolve existing records first; add a missing entity through the normal entity workflow when that work is authorized.
+</Danger>
+
+## Required people
+
+The four LinkedIn URLs below were supplied by Mark as identity references. Their presence here does not establish that the corresponding entity already exists in Universe or Backend. Kyle's profile link has not been supplied.
+
+| Person | LinkedIn reference | Sample and role | Entity ID placeholder |
+| --- | --- | --- | --- |
+| Charlie Anderson | [charliethedp](https://www.linkedin.com/in/charliethedp/) | Outcome: connector, trajectory, sequencing, email, and SMS | `{entity ID for Charlie Anderson}` |
+| Katelyn Gallanty | [katelynhgallanty](https://www.linkedin.com/in/katelynhgallanty/) | Leverage Loop: beneficiary, introduction participant, email, and SMS | `{entity ID for Katelyn Gallanty}` |
+| Ethan Jacks | [ethanjacks](https://www.linkedin.com/in/ethanjacks/) | Leverage Loop: suggested person, introduction participant, email, and SMS | `{entity ID for Ethan Jacks}` |
+| Ryan Reynolds | [vancityreynolds](https://www.linkedin.com/in/vancityreynolds/) | Outcome: suggested person and key person | `{entity ID for Ryan Reynolds}` |
+| **Kyle Jackson** | **Not supplied yet** | Outcome: second connector, trajectory, sequencing, email, and SMS | `{entity ID for Kyle Jackson}` |
+
+All five use `entity_type: "person"`. Charlie's reference is the cinematographer profile supplied above; match that identity when resolving the sample's Charlie Anderson record.
+
+## Required company
+
+| Company | Identity reference | Sample and role | Entity ID placeholder |
+| --- | --- | --- | --- |
+| **Maximum Effort** | **Company profile or website not supplied yet** | Outcome: `target_org`, used with Ryan Reynolds in the card header | `{entity ID for Maximum Effort}` |
+
+Maximum Effort uses `entity_type: "company"`. Its graph entity ID is distinct from the package's `org_id`, which is the local Backend organization that owns the suggestion.
+
+## ID preparation
+
+1. Resolve each listed identity against existing entity records. Reuse its canonical UUID; avoid duplicate records for people or companies already present.
+2. Record the resolved UUID for every placeholder above. Use the same UUID everywhere that entity appears, including the entity registry, target, beneficiary, connectors, key people, and introduction recipients.
+3. Keep `entity_type` beside every explicit `entity_id` object. ID-only references resolve through the typed `entities[]` entries in their owning suggestion.
+4. Keep the supplied email and E.164 mobile arrays from [Sample Suggestion Data](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#recipient-options), in their existing order. LinkedIn URLs identify the records to resolve; they do not replace entity IDs or recipient contact options.
+5. Before the eventual POST test, replace all six entity placeholders. The sample JSON uses two entities for Leverage Loop and four for Outcome; each entity must be declared in the appropriate suggestion's `entities[]` list.
+
+These LinkedIn links are preparation references, not new fields in the v2 suggestion envelope. No real entity UUIDs have been filled in by this documentation update, and entity existence has not been checked.
+
+## Other IDs in the package
+
+| Field | Preparation |
+| --- | --- |
+| `org_id` | An existing local `organizations.organizations.id` UUID for the owning personal or company workspace. |
+| `requested_by` | An existing local `users.users.id` UUID for a current member of that workspace. This is the requesting user, not one of the graph entities by implication. |
+| `request_suggestion_id` | A sender-supplied UUIDv7. The proposed receiver creates its minimal parent attribution row if absent; no separate request setup is required. |
+| `batch_id` | A sender-supplied UUIDv7 per package, retained unchanged for retries. |
+
+## Outside the current entity list
+
+The collapsed Rebekah Jefferis, Bilawal Sidhu, Seth Rogen / Point Grey Pictures, The Lighthouse, and AI LA bars are design placeholders and are not in either completed sample payload. They do not add entity requirements for this test.
+
+Company names appearing only in bios or prose—such as Adobe, Being Human, MediaBridge Capital Advisors, and Grant Drive Group—also do not have entity ID references in these samples. Their display data may be part of normal profile hydration, but they are not additional required entities in the current delivery schema.
+
+[Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).
