@@ -23,8 +23,8 @@ export const SampleSuggestionData = () => {
       ]
     },
     trajectory: [
-      { id:'charlie', title:'Through Charlie Anderson', text:'All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.' },
-      { id:'kyle', title:'Through Kyle Jackson', text:'Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.' }
+      { id:'charlie', title:'Charlie Anderson', text:'All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.' },
+      { id:'kyle', title:'Kyle Jackson', text:'Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.' }
     ],
     actions: ['Reach out to Charlie Anderson about showing Ryan', 'Reach out to Kyle Jackson about Maximum Effort']
   });
@@ -221,7 +221,8 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
       #orbiter-moonshot .orb-trajectory-route + .orb-trajectory-route { margin-top:18px; }
-      #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 5px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
+      #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
+      #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
       #orbiter-moonshot .sample-action-section .orb-section-title { margin-bottom:6px; }
       #orbiter-moonshot .orb-actions { gap:6px; }
