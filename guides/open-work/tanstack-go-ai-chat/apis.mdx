@@ -1,0 +1,181 @@
+---
+title: "Tanstack Go AI Chat APIs"
+description: "Every endpoint in the Xano Tanstack AI Chat group — what it does, what tables it touches — and the proposed Go API spec for the orbiter-backend rebuild."
+icon: "code"
+---
+
+<Warning>
+**Snapshot 2026-09-14 — Xano workspace 3, group `Tanstack AI Chat` (ID 1286, canonical `6TC-_sTf`).** Of 48 endpoints, **15 are implemented** and **33 are Phase-2 contract shells** returning `NOT_IMPLEMENTED`. Status is marked per endpoint.
+</Warning>
+
+Proposed Go routes follow orbiter-backend conventions: `/v1/` prefix, `{data, error, meta}` envelope, `RequireWorkOS` auth, owner from session. The `suggestions` and `relationships` features already exist on `main` — request/result endpoints extend `suggestions` (`suggestions.suggestion_request`, Xano name kept) and `relationships`; the remaining surface is a proposed `copilot` feature for threads/messages. See [table mapping](/guides/open-work/tanstack-go-ai-chat).
+
+<Info>
+**Name collision:** Xano "outcomes" (suggestion requests/results) is not the Go `outcomes` feature (`outcomes.investment_theses` = investor profiles). Chat outcome endpoints are proposed under `/v1/copilot/outcomes/*` to keep them out of that feature.
+</Info>
+
+## Threads — shared transport
+
+The thread endpoints serve every surface. `thread_id` carries a surface prefix (`meeting_prep:<key>`, `leverage_loops:<request_id>`, `outcomes:<request_id>`) that the handler parses to route messages into the right transcript table.
+
+### Existing Xano APIs
+
+| Endpoint | What it does | Tables | Status |
+| --- | --- | --- | --- |
+| `POST /threads/ensure` | Find-or-create a `conversation` row by surface + thread key | `conversation` R/W | Implemented |
+| `GET /threads` | List the user's threads | `conversation` R | Shell |
+| `GET /threads/{thread_id}/messages` | Hydrate messages — resolves surface from `thread_id`, queries the matching transcript table | `conversation` + `copilot_chat_messages` / `leverage_loop_conversations` / `outcome_conversations` R | Implemented |
+| `POST /threads/{thread_id}/messages` | Append messages; dedupes on (request, role, content) before insert; creates the surface conversation if missing | `conversation` R/W + transcript tables R/W | Implemented |
+| `PATCH /threads/{thread_id}` | Rename / archive thread metadata | `conversation` W | Shell |
+| `DELETE /threads/{thread_id}` | Delete/archive a thread | `conversation` W | Shell |
+
+### Proposed Go spec — `internal/features/copilot`
+
+| Route | What it should do | Tables |
+| --- | --- | --- |
+| `POST /v1/copilot/threads/ensure` | Find-or-create by (`user_id`, `surface`, `surface_key`) — no prefix parsing; caller passes structured fields | `copilot.conversations` R/W |
+| `GET /v1/copilot/threads` | Paginated list, optional `surface` filter | `copilot.conversations` R |
+| `GET /v1/copilot/threads/{id}/messages` | Cursor-paginated messages via `conversation_id` — one table regardless of surface | `copilot.conversations`, `copilot.messages` R |
+| `POST /v1/copilot/threads/{id}/messages` | Append batch of messages; service-layer dedupe; owner check via conversation | `copilot.conversations` R/W, `copilot.messages` R/W |
+| `PATCH /v1/copilot/threads/{id}` | Update `title`/`archived_at` | `copilot.conversations` W |
+| `DELETE /v1/copilot/threads/{id}` | Soft-delete/archive (200 + null-data envelope) | `copilot.conversations` W |
+
+## How I Know
+
+Relationship interviews: a multi-turn LLM interview whose state persists on the person relationship row.
+
+### Existing Xano APIs
+
+| Endpoint | What it does | Tables | Status |
+| --- | --- | --- | --- |
+| `POST /how-i-know/interview` | Runs one turn of the 8–14-turn relationship interview; looks up the target contact, calls OpenRouter, returns assistant content | `contacts` R; otherwise stateless | Implemented |
+| `GET /how-i-know/relationships/{master_person_id}` | Read transcript, summary, completion flag, nuggets for the auth user + person | `master_person_relationship` R | Implemented |
+| `PUT /how-i-know/relationships/{master_person_id}` | Upsert running/final interview state (add if absent, edit if present); `interview_complete` gate for final save | `master_person_relationship` R/W, `contacts` R | Implemented |
+
+### Proposed Go spec
+
+| Route | What it should do | Tables |
+| --- | --- | --- |
+| `POST /v1/copilot/how-i-know/interview` | Same stateless turn: load target context, call LLM client, return content. No persistence | `persons.contacts`, `persons.persons` R |
+| `GET /v1/copilot/how-i-know/relationships/{person_id}` | Read interview state for (`user_id`, `person_id`) | `relationships.relationships` R |
+| `PUT /v1/copilot/how-i-know/relationships/{person_id}` | Upsert transcript/summary/nuggets/complete with `transcript_version` optimistic check | `relationships.relationships` R/W, `persons.contacts` R |
+
+## Leverage Loops (`leverage_outcome`)
+
+<Info>
+**Renamed flow.** These endpoints are the `leverage_outcome` mode — an outcome request *for a specific person* ("I want to help Katelyn hire a chief of staff"), carrying a beneficiary `master_person_id`/contact. `POST /leverage-loops/interview` is that mode's interview; `leverage_loop` itself has no AI chat, only a button. See [Migration Planning](/guides/open-work/tanstack-go-ai-chat/migration-planning).
+</Info>
+
+Draft → interview → context patch → dispatch lifecycle on `suggestion_request` rows with `copilot_mode = "loop"`.
+
+### Existing Xano APIs
+
+| Endpoint | What it does | Tables | Status |
+| --- | --- | --- | --- |
+| `POST /leverage-loops/classify` | Classify loop intent with target-person context | — | Shell |
+| `POST /leverage-loops/drafts` | Create or update a loop draft request row | `suggestion_request` R/W | Implemented |
+| `PATCH /leverage-loops/drafts/{request_id}/context` | Persist title, running summary, request context | `suggestion_request` R/W | Implemented |
+| `POST /leverage-loops/interview` | LLM interview turn — rebuilds legacy OpenLang Native #8584 / OpenUI05 #8580 behavior; returns content only | — | Implemented, stateless |
+| `POST /leverage-loops/dispatch` | Validate ownership, `copilot_mode="loop"`, not archived; writes dispatch context into `llm_summary_context`, flips status | `suggestion_request` R/W | Implemented |
+| `GET /leverage-loops/requests` | List drafts by status | `suggestion_request` R | Shell |
+| `GET /leverage-loops/results/{result_id}/actions` | Actions attached to loop result cards | result tables | Shell |
+| `GET /leverage-loops/results/{result_id}/trajectories` | Trajectories attached to loop result cards | result tables | Shell |
+
+### Proposed Go spec
+
+<Note>
+**Decided:** the `leverage_outcome` chat flow folds into `/v1/copilot/outcomes/*` — the draft body carries the beneficiary `person_id`/`contact_id`. `/v1/leverage-loops/*` stays exclusively the button-only leverage loop already on `main`. Results land in the **unified** `suggestion*` tables, not `leverage_loop_*`.
+</Note>
+
+| Route | What it should do | Tables |
+| --- | --- | --- |
+| `resolve_outcome` *(harness tool)* | Intent classification — runs in the TanStack AI route, not Go; `[HELPING TARGET]` + relationship context assembled server-side from `persons`/`relationships` | `suggestions.suggestion_request`, `persons.*`, `relationships.relationships` R |
+| `POST /v1/copilot/outcomes/drafts` | Create/update draft — `leverage_outcome` = outcome + beneficiary `person_id` for the person it's for | `suggestions.suggestion_request` R/W |
+| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Persist `request_panel_title`, `request_context`, `llm_summary_context` with `context_version` check | `suggestions.suggestion_request` R/W |
+| `POST /v1/copilot/outcomes/dispatch` | Owner check + status guard, record dispatch context, set status | `suggestions.suggestion_request` R/W |
+| `GET /v1/copilot/outcomes/requests` | List by status, cursor pagination; Leverage Loops view = `copilot_mode IN (leverage_loop, leverage_outcome)` | `suggestions.suggestion_request` R |
+| `GET /v1/copilot/outcomes/results/{id}/actions` | Actions on the result's suggestions | `suggestions.suggestion`, `suggestion_action_group`, `suggestion_action` R |
+| `GET /v1/copilot/outcomes/results/{id}/trajectories` | Trajectories on the result's suggestions | `suggestions.suggestion`, `suggestion_trajectory` R |
+
+## Outcomes
+
+Same lifecycle as leverage loops plus classification, clarifications, file attach, pitch profiles, and result reads. `copilot_mode = "outcome"` (or `serendipity`).
+
+### Existing Xano APIs
+
+| Endpoint | What it does | Tables | Status |
+| --- | --- | --- | --- |
+| `POST /outcomes/classify` | Keyword-rule lambda → `class_slug` + confidence (`find_talent`, `find_investors`, `find_customers`, `find_cofounder`, `find_partners`, `find_collaborators`, `find_journalists`, …) | — | Implemented, stateless |
+| `POST /outcomes/clarifications` | Generate clarification options for ambiguous prompts | — | Shell |
+| `POST /outcomes/contact-actions` | Record an action taken from a rendered contact card | `suggestion_request` / results W | Shell |
+| `POST /outcomes/dispatch` | Submit a request after approval — class override, requested_n, constraints, tool_calls | `suggestion_request` R/W | Implemented |
+| `POST /outcomes/drafts` | Create/update an outcome draft | `suggestion_request` W | Shell |
+| `PATCH /outcomes/drafts/{request_id}/context` | Persist running summary, title, request context | `suggestion_request` W | Shell |
+| `PATCH /outcomes/drafts/{request_id}/submit-metadata` | Persist result count + delivery format before submit | `suggestion_request` R/W | Implemented |
+| `POST /outcomes/files` | Upload/attach bounded file or deck content to a draft | `suggestion_request` + file table W | Shell |
+| `POST /outcomes/interview` | LLM interview turn — rebuilds legacy Anything Engine #8411 | — | Implemented, stateless |
+| `POST /outcomes/find-talent/interview` | LLM interview turn — rebuilds legacy Anything Engine #8484 | — | Implemented, stateless |
+| `GET /outcomes/pitch-profiles/latest` | Most recent pitch profile, optional `outcome_class` filter | pitch profile table R | Shell |
+| `POST /outcomes/pitch-profiles/summarize` | Rewrite pitch summary after Modify-tab edits | pitch profile table W | Shell |
+| `GET /outcomes/pitch-profiles/{request_id}` | Readiness + profile fields for a request | pitch profile table R | Shell |
+| `PATCH /outcomes/pitch-profiles/{request_id}` | Write/update profile fields | pitch profile table W | Shell |
+| `GET /outcomes/requests` | Active/archived requests + contact-card dedupe records | `suggestion_request` R | Shell |
+| `GET /outcomes/results` | Result cards by request | result tables R | Shell |
+| `GET /outcomes/results/{result_id}/nodes` | Nodes attached to result cards | result tables R | Shell |
+| `GET /outcomes/results/{result_id}/actions` | Actions attached to result cards | result tables R | Shell |
+| `GET /outcomes/results/{result_id}/trajectories` | Trajectories attached to result cards | result tables R | Shell |
+
+### Proposed spec — harness + Go split
+
+<Note>
+**Decided:** classify/interview/clarifications do **not** become Go endpoints. The loop runs in the TanStack AI server route as tools; Go owns persistence, dispatch, and results. See [Migration Planning — Chat harness](/guides/open-work/tanstack-go-ai-chat/migration-planning).
+</Note>
+
+**Harness tools** (TypeScript server route — replace Xano's LLM endpoints):
+
+| Tool | Replaces | Calls |
+| --- | --- | --- |
+| `resolve_outcome` | `POST /outcomes/classify` | LLM classify against canonical registry — no Go call |
+| `update_context` | `PATCH .../context`, `PATCH .../submit-metadata` | `PATCH /v1/copilot/outcomes/drafts/{id}/context` |
+| `submit_outcome_request` | `POST /outcomes/dispatch` | `POST /v1/copilot/outcomes/dispatch` (Phase I: persist + `submitted`) |
+| `re_route` / `handoff_to_akira` / `draft_intro` | — | Route correction / out-of-scope exit / Sonnet intro drafts |
+| interview turns | `POST /outcomes/interview`, `POST /outcomes/find-talent/interview`, `POST /outcomes/clarifications` | The `chat()` loop itself — OpenUI Lang out, no Go call |
+
+**Go endpoints:**
+
+| Route | What it should do | Tables |
+| --- | --- | --- |
+| `POST /v1/copilot/outcomes/drafts` | Create/update draft — optional `class_slug` pre-seeded from `resolve_outcome` | `suggestions.suggestion_request` R/W |
+| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Persist summary/title/context + `number_of_results`/constraints w/ `context_version` check (called by `update_context`; `deliver_format` removed — Phase III) | `suggestions.suggestion_request` R/W |
+| `POST /v1/copilot/outcomes/dispatch` | Owner + status guard; persist dispatch context; set `status=submitted` (called by `submit_outcome_request`) — Phase II adds Universe payload | `suggestions.suggestion_request` R/W |
+| `POST /v1/copilot/outcomes/contact-actions` | Record card action against the request/result | `suggestions.suggestion_request`, `suggestions.suggestion` R/W |
+| `POST /v1/copilot/outcomes/files` | Attach file to draft — reuse `files` feature upload + link table | `files.files`, `files.request_files` *(proposed)* W |
+| `GET /v1/copilot/outcomes/requests` | List by status, cursor pagination | `suggestions.suggestion_request` R |
+| `GET /v1/copilot/outcomes/results` | Result cards by `request_id` | `suggestions.suggestion` R |
+| `GET /v1/copilot/outcomes/results/{id}/nodes` | Card node children | `suggestions.suggestion_node` R |
+| `GET /v1/copilot/outcomes/results/{id}/actions` | Card actions | `suggestions.suggestion`, `suggestion_action_group`, `suggestion_action` R |
+| `GET /v1/copilot/outcomes/results/{id}/trajectories` | Card trajectories | `suggestions.suggestion`, `suggestion_trajectory` R |
+| `GET /v1/pitch-profiles/latest` | Latest profile for caller — **`files` feature route** (decided: not `copilot`) | `files.pitch_profiles` R |
+| `POST /v1/pitch-profiles/{id}/summarize` | Rewrite summary post-edit | `files.pitch_profiles`, `files.pitch_profile_narratives` R/W |
+| `GET /v1/pitch-profiles/{request_id}` | Readiness + fields | `files.pitch_profiles` R |
+| `PATCH /v1/pitch-profiles/{request_id}` | Update fields w/ `profile_version` check | `files.pitch_profiles` R/W |
+
+## Other contract groups — shells only
+
+All shells; proposed tables are inference from the contract, flagged accordingly.
+
+| Endpoint | What it does | Proposed Go tables |
+| --- | --- | --- |
+| `GET /context/self` | Caller's person/company ids + minimal context | `users.users`, `persons.persons` R |
+| `GET /context/people/{id}` | Prose/YAML person context for AI tools | `persons.persons`, `persons.contacts` R |
+| `GET /context/companies/{id}` | YAML company context | `companies.companies` R |
+| `GET /people/search` | Person search for chat pickers | `persons.persons` R |
+| `GET /network/summary` | Bounded network context for opening prompts | graph read *(TBD)* |
+| `GET/POST/PATCH/DELETE /memories[/{id}]` | Chat memory CRUD with ownership checks | `copilot.memories` *(proposed)* R/W |
+| `POST /meeting-prep/contexts`, `GET /meeting-prep/contexts/{id}/status`, `POST /meeting-prep/interview` | Meeting-prep context by `nylas_event_id` + interview turns | `copilot.conversations`, `nylas_grants.calendars` R, `copilot.meeting_contexts` *(proposed)* W |
+
+## Notes
+
+- Four `api.request` calls to OpenRouter (`/chat/completions`) across the interview endpoints — the Go rebuild puts these behind the platform LLM client, not inline handlers.
+- Shell endpoints have full input contracts in Xano already — the Go DTOs can be generated from them nearly 1:1.
+- `threads/{id}/messages` POST is the only multi-table writer: conversation ensure + per-surface transcript dedupe/insert. In Go this becomes one service method over `copilot.conversations` + `copilot.messages`.
