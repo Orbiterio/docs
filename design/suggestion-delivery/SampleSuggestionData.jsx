@@ -14,7 +14,7 @@ export const SampleSuggestionData = () => {
       { id:'kyle', name:'Kyle Jackson', role:'Founder @ Being Human', logo:'being', company:'Being Human', bio:'Kyle Jackson currently serves as Founder at Being Human.' }
     ],
     why: {
-      headline: 'Orbiter can turn Maximum Effort’s relationships across film, brands, and sports into its next deal.',
+      headline: 'Orbiter.io can turn Maximum Effort’s relationships across film, brands, and sports into its next deal.',
       current: ['Ryan Reynolds perfectly embodies the "Networked Operator" profile: he\'s built a $14+ billion business empire across seven industries and three continents. His 70+ million social media following and systematic approach to digital relationship building could provide unprecedented visibility for Orbiter.io\'s success stories.'],
       earlier: [
         "Maximum Effort is a relationship business wearing a production company's clothes. A small team in New York operates across film and TV development, brand marketing, sports, and adtech simultaneously: a Paramount first-look studio slate, campaign work for Aviation Gin, Mint Mobile and Match, Welcome to Wrexham, and an ongoing services relationship with MNTN, where Reynolds remains chief creative officer.",
