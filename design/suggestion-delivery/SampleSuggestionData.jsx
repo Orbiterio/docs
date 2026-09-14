@@ -40,13 +40,11 @@ export const SampleSuggestionData = () => {
     'charlie-email': { subject:'Showing Orbiter to Ryan', message:'Hey Charlie,\n\nWe’ve been thinking about how Orbiter could help the Maximum Effort team connect the dots across their relationships in entertainment, brands, and sports.\n\nGiven your work with Ryan, we’d love your take on whether it would be useful to show him what we’re building. Would you be up for a quick walkthrough first?\n\nThanks!' },
     'kyle-email': { subject:'Orbiter × Maximum Effort', message:'Hey Kyle,\n\nWe’re exploring how Orbiter could help Maximum Effort surface opportunities across the team’s relationships—from brand partnerships to entertainment and sports.\n\nI’d love your perspective on the fit and who at Maximum Effort would be best to speak with. Would you have time for a quick conversation?\n\nThanks!' },
     'charlie-sms': { message:'Hey Charlie! Could I give you a quick walkthrough of Orbiter.io? I’d love your take on whether it could be useful for Ryan and the Maximum Effort team.' },
-    'kyle-sms': { message:'Hey Kyle! I’d love your perspective on Orbiter.io for Maximum Effort. Who would be best to speak with on the team? Have a few minutes to catch up?' },
-    'charlie-call': { message:'1. Walk Charlie through how Orbiter.io connects opportunities across relationships.\n\n2. Ask where he sees a fit for Ryan and Maximum Effort, drawing on his work on the Mint Mobile commercials.\n\n3. Ask whether he would be comfortable making an introduction, and agree on a next step.' },
-    'kyle-call': { message:'1. Share what is already in motion with Charlie.\n\n2. Ask who at Maximum Effort would be best placed to evaluate Orbiter.io.\n\n3. Explore Kyle’s connection if Charlie’s route is unavailable, and coordinate one introduction.' }
+    'kyle-sms': { message:'Hey Kyle! I’d love your perspective on Orbiter.io for Maximum Effort. Who would be best to speak with on the team? Have a few minutes to catch up?' }
   });
   const draftKey = activeDraft ? activeDraft.personId + '-' + activeDraft.channel : null;
   const draftPerson = activeDraft ? data.people.find(person => person.id === activeDraft.personId) : null;
-  const draftTitle = activeDraft ? (activeDraft.channel === 'call' ? 'Call prep for ' : activeDraft.channel === 'sms' ? 'SMS to ' : 'Email to ') + draftPerson.name : '';
+  const draftTitle = activeDraft ? (activeDraft.channel === 'sms' ? 'SMS to ' : 'Email to ') + draftPerson.name : '';
   const toggle = key => setOpen(previous => ({ ...previous, [key]: !previous[key] }));
   const edit = (text, save, enabled = editing) => ({ children:text, contentEditable:enabled ? 'plaintext-only' : false, suppressContentEditableWarning:true, onBlur:event => { if(enabled) save(event.currentTarget.textContent); } });
   const setField = (key, value) => setData(previous => ({ ...previous, [key]:value }));
@@ -76,7 +74,7 @@ export const SampleSuggestionData = () => {
   };
   const copyDraft = async () => {
     const draft = drafts[draftKey];
-    try { await navigator.clipboard.writeText((activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus(activeDraft.channel === 'call' ? 'Talking points copied.' : 'Draft copied.'); }
+    try { await navigator.clipboard.writeText((activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus('Draft copied.'); }
     catch { const field = document.getElementById('sample-message'); if(field) { field.focus(); field.select(); } setCopyStatus('Message selected. Press ⌘C or Ctrl+C to copy.'); }
   };
   return <div className="sample-suggestion-workspace not-prose">
@@ -324,19 +322,19 @@ export const SampleSuggestionData = () => {
                   </div>
                 </div>
                 <div className="orb-action-options" id={'sample-actions-' + person.id} hidden={!openActions[person.id]}>
-                  {[{ channel:'sms', title:'Text ' + person.name, button:'DRAFT SMS' }, { channel:'call', title:'Call ' + person.name, button:'PREPARE CALL' }].map(option => <div className="orb-action orb-action-option" key={option.channel}>
-                    <p>{option.title}</p>
-                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-' + option.channel} aria-label={option.channel === 'sms' ? 'Draft SMS to ' + person.name : 'Prepare call with ' + person.name} aria-expanded={draftKey === person.id + '-' + option.channel} aria-controls="sample-composer" onClick={() => openDraft(person.id,option.channel)}>{option.button}</button>
-                  </div>)}
+                  <div className="orb-action orb-action-option">
+                    <p>Text {person.name}</p>
+                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-sms'} aria-label={'Draft SMS to ' + person.name} aria-expanded={draftKey === person.id + '-sms'} aria-controls="sample-composer" onClick={() => openDraft(person.id,'sms')}>DRAFT SMS</button>
+                  </div>
                 </div>
               </div>)}
             </div>
             {activeDraft && <section className="orb-composer" key={draftKey} id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}>
               <div className="orb-composer-heading"><h3 id="sample-composer-title">{draftTitle}</h3><button type="button" className="orb-close" aria-label="Close draft" onClick={closeDraft}>×</button></div>
               {activeDraft.channel === 'email' && <><label htmlFor="sample-subject">Subject</label><input id="sample-subject" autoFocus value={drafts[draftKey].subject} onChange={event => setDraft('subject',event.target.value)} /></>}
-              <label htmlFor="sample-message">{activeDraft.channel === 'call' ? 'Talking points' : 'Message'}</label>
+              <label htmlFor="sample-message">Message</label>
               <textarea id="sample-message" autoFocus={activeDraft.channel !== 'email'} value={drafts[draftKey].message} onChange={event => setDraft('message',event.target.value)} />
-              <div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>{activeDraft.channel === 'call' ? 'Copy talking points' : 'Copy draft'}</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div>
+              <div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div>
             </section>}
           </section>
         </div>
