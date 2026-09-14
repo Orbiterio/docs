@@ -135,6 +135,12 @@ export const SuggestionStyles = () => <style>{`  #orbiter-moonshot {
     #orbiter-moonshot .orb-collapse { width: 36px; height: 36px; }
   }
   @media (prefers-reduced-motion: reduce) { #orbiter-moonshot * { transition: none !important; } }
+      #orbiter-moonshot .orb-recipient-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:10px; margin-bottom:10px; }
+      #orbiter-moonshot .orb-composer .orb-recipient-field label { margin-top:0; }
+      #orbiter-moonshot .orb-recipient-field select { width:100%; border:1px solid #354668; border-radius:6px; background:#111a2b; color:var(--orb-text); padding:10px 12px; font:inherit; font-size:15px; line-height:1.55; }
+      #orbiter-moonshot .orb-recipient-field input[readonly] { color:#c6d0e4; }
+      #orbiter-moonshot .orb-recipient-field select:focus-visible { outline:2px solid #a8c5ff; outline-offset:2px; }
+      @media(max-width:580px) { #orbiter-moonshot .orb-recipient-field select { font-size:16px; } }
       .sample-suggestion-workspace { width:100%; }
       .sample-suggestion-toolbar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:12px; margin-bottom:12px; font-size:13px; }
       .sample-suggestion-toolbar label { display:flex; align-items:center; gap:8px; }

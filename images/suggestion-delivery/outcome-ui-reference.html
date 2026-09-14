@@ -143,6 +143,12 @@
     #orbiter-moonshot .orb-collapse { width: 36px; height: 36px; }
   }
   @media (prefers-reduced-motion: reduce) { #orbiter-moonshot * { transition: none !important; } }
+      #orbiter-moonshot .orb-recipient-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); gap:10px; margin-bottom:10px; }
+      #orbiter-moonshot .orb-composer .orb-recipient-field label { margin-top:0; }
+      #orbiter-moonshot .orb-recipient-field select { width:100%; border:1px solid #354668; border-radius:6px; background:#111a2b; color:var(--orb-text); padding:10px 12px; font:inherit; font-size:15px; line-height:1.55; }
+      #orbiter-moonshot .orb-recipient-field input[readonly] { color:#c6d0e4; }
+      #orbiter-moonshot .orb-recipient-field select:focus-visible { outline:2px solid #a8c5ff; outline-offset:2px; }
+      @media(max-width:580px) { #orbiter-moonshot .orb-recipient-field select { font-size:16px; } }
       .sample-suggestion-workspace { width:100%; }
       .sample-suggestion-toolbar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:12px; margin-bottom:12px; font-size:13px; }
       .sample-suggestion-toolbar label { display:flex; align-items:center; gap:8px; }
@@ -473,6 +479,96 @@ const referenceDrafts = {
     "message": "Hey Kyle! I’d love your perspective on Orbiter.io for Maximum Effort. Who would be best to speak with on the team? Have a few minutes to catch up?"
   }
 };
+const referenceContacts = {
+  "katelyn": {
+    "entity_id": "{entity ID for Katelyn Gallanty}",
+    "entity_type": "person",
+    "name": "Katelyn Gallanty",
+    "emails": [
+      "katelyn@orbiter.io"
+    ],
+    "mobile_phones": [
+      "+15165273108"
+    ]
+  },
+  "ethan": {
+    "entity_id": "{entity ID for Ethan Jacks}",
+    "entity_type": "person",
+    "name": "Ethan Jacks",
+    "emails": [
+      "ethan@mediabridgecap.com"
+    ],
+    "mobile_phones": [
+      "+16175922739"
+    ]
+  },
+  "kyle": {
+    "entity_id": "{entity ID for Kyle Jackson}",
+    "entity_type": "person",
+    "name": "Kyle Jackson",
+    "emails": [
+      "kyledeanjackson@gmail.com",
+      "kyle@beinghuman.studio"
+    ],
+    "mobile_phones": [
+      "+13234526998",
+      "+6588333422"
+    ]
+  },
+  "charlie": {
+    "entity_id": "{entity ID for Charlie Anderson}",
+    "entity_type": "person",
+    "name": "Charlie Anderson",
+    "emails": [
+      "canderson@adobe.com"
+    ],
+    "mobile_phones": [
+      "+14106271480"
+    ]
+  }
+};
+// Shared recipient controls for the standalone references.
+const referenceRecipientSelections = {};
+function createReferenceRecipients(personIds, channel) {
+  const element = document.createElement('div');
+  element.className = 'orb-recipient-fields';
+  const controls = [];
+  personIds.forEach(personId => {
+    const person = referenceContacts[personId];
+    const options = person[channel === 'sms' ? 'mobile_phones' : 'emails'];
+    const key = channel + ':' + personId;
+    const selected = options.includes(referenceRecipientSelections[key]) ? referenceRecipientSelections[key] : options[0];
+    const field = document.createElement('div');
+    field.className = 'orb-recipient-field';
+    const label = document.createElement('label');
+    label.htmlFor = 'recipient-' + channel + '-' + personId;
+    label.textContent = (channel === 'sms' ? 'Mobile' : 'To') + ' — ' + person.name;
+    const input = document.createElement(options.length > 1 ? 'select' : 'input');
+    input.id = label.htmlFor;
+    if (options.length > 1) {
+      options.forEach(value => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        input.append(option);
+      });
+      input.addEventListener('change', () => {
+        referenceRecipientSelections[key] = input.value;
+        const status = element.closest('.orb-composer')?.querySelector('.orb-copy-status');
+        if (status) status.textContent = '';
+      });
+    } else {
+      input.type = channel === 'sms' ? 'tel' : 'email';
+      input.readOnly = true;
+    }
+    input.value = selected;
+    controls.push(input);
+    field.append(label, input);
+    element.append(field);
+  });
+  return { element, values: () => controls.map(input => input.value) };
+}
+
 // Plain JavaScript for the exported HTML. Drafts are local and are never sent.
 (() => {
   const board = document.getElementById('orbiter-moonshot');
@@ -509,6 +605,8 @@ const referenceDrafts = {
     composer.innerHTML = '<div class="orb-composer-heading"><h3 id="sample-composer-title"></h3><button class="orb-close" type="button" aria-label="Close draft">×</button></div>';
     composer.querySelector('h3').textContent = (channel === 'sms' ? 'SMS to ' : 'Email to ') + name;
     composer.querySelector('button').addEventListener('click', () => closeDraft());
+    const recipients = createReferenceRecipients([personId], channel);
+    composer.append(recipients.element);
     const addField = (labelText, field, tag) => {
       const label = document.createElement('label');
       label.htmlFor = 'sample-' + field;
@@ -526,7 +624,7 @@ const referenceDrafts = {
     footer.innerHTML = '<button class="orb-copy" type="button">Copy draft</button><span class="orb-copy-status" role="status" aria-live="polite"></span>';
     footer.querySelector('button').addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText((channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message);
+        await navigator.clipboard.writeText('To: ' + recipients.values().join(', ') + '\n' + (channel === 'email' ? 'Subject: ' + draft.subject + '\n' : '') + '\n' + draft.message);
         footer.querySelector('span').textContent = 'Draft copied.';
       } catch {
         composer.querySelector('textarea').focus();
@@ -536,7 +634,7 @@ const referenceDrafts = {
     });
     composer.append(footer);
     board.querySelector('.sample-action-section').append(composer);
-    composer.querySelector('input, textarea').focus();
+    composer.querySelector('#sample-subject, #sample-message').focus();
   };
   const togglePanel = button => {
     const id = button.getAttribute('aria-controls');

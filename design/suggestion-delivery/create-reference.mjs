@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { sampleContacts } from './sample-contacts.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 await mkdir(new URL('.preview/', import.meta.url), { recursive:true });
@@ -17,6 +18,7 @@ const { markup, drafts } = await import(renderer.href + '?t=' + Date.now());
 const style = markup.match(/<style>([\s\S]*?)<\/style>/)[1].replace("url('/images/suggestion-delivery/current-ui.png')", "url('./current-ui.png')");
 const body = markup.replace(/<style>[\s\S]*?<\/style>/, '').replace(/></g, '>\n<');
 const runtime = await readFile(new URL('reference-runtime.js', import.meta.url), 'utf8');
+const recipientRuntime = await readFile(new URL('recipient-reference-runtime.js', import.meta.url), 'utf8');
 const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -37,6 +39,8 @@ ${body}
 </main>
 <script>
 const referenceDrafts = ${JSON.stringify(drafts, null, 2).replace(/</g, '\\u003c')};
+const referenceContacts = ${JSON.stringify(sampleContacts, null, 2).replace(/</g, '\\u003c')};
+${recipientRuntime}
 ${runtime}</script>
 </body>
 </html>

@@ -2,14 +2,15 @@ import React, { useRef, useState } from 'react';
 import { defaultPalette } from './palettes.js';
 import { SuggestionStyles } from './SuggestionStyles.jsx';
 import { leverageData, leverageDrafts } from './leverage-data.js';
+import { RecipientFields } from './RecipientFields.jsx';
 
 const Arrow = ({ open }) => <span className={'sample-chevron' + (open ? ' sample-chevron-up' : '')} aria-hidden="true" />;
 const asset = name => '/assets/leverage-loop/' + name + '.png';
 export const contactActions = [
-  { key: 'email', name: 'Ethan Jacks', channel: 'email' },
-  { key: 'sms', name: 'Ethan Jacks', channel: 'sms' },
-  { key: 'katelyn-email', name: 'Katelyn Gallanty', channel: 'email' },
-  { key: 'katelyn-sms', name: 'Katelyn Gallanty', channel: 'sms' }
+  { key: 'email', personId: 'ethan', name: 'Ethan Jacks', channel: 'email' },
+  { key: 'sms', personId: 'ethan', name: 'Ethan Jacks', channel: 'sms' },
+  { key: 'katelyn-email', personId: 'katelyn', name: 'Katelyn Gallanty', channel: 'email' },
+  { key: 'katelyn-sms', personId: 'katelyn', name: 'Katelyn Gallanty', channel: 'sms' }
 ];
 
 export const LeverageLoop = ({ showControls = true } = {}) => {
@@ -22,10 +23,12 @@ export const LeverageLoop = ({ showControls = true } = {}) => {
   const [introStep, setIntroStep] = useState('katelyn');
   const [drafts, setDrafts] = useState(leverageDrafts);
   const [copyStatus, setCopyStatus] = useState('');
+  const [recipientSelections, setRecipientSelections] = useState({});
   const triggerRef = useRef(null);
   const draftKey = activeDraft === 'intro' ? introStep : activeDraft;
   const draft = drafts[draftKey];
   const draftContact = contactActions.find(action => action.key === activeDraft);
+  const recipientIds = activeDraft === 'intro' ? (introStep === 'introduction' ? ['katelyn', 'ethan'] : [introStep]) : draftContact ? [draftContact.personId] : [];
   const toggle = key => setOpen(previous => ({ ...previous, [key]: !previous[key] }));
   const edit = (text, save, enabled = editing) => ({ children: text, contentEditable: enabled ? 'plaintext-only' : false, suppressContentEditableWarning: true, onBlur: event => { if (enabled) save(event.currentTarget.textContent); } });
   const setField = (key, value) => setData(previous => ({ ...previous, [key]: value }));
@@ -102,6 +105,7 @@ export const LeverageLoop = ({ showControls = true } = {}) => {
               <div className="orb-composer-heading"><h3 id="loop-composer-title">{activeDraft === 'intro' ? 'Double opt-in introduction' : (draftContact.channel === 'sms' ? 'SMS' : 'Email') + ' to ' + draftContact.name}</h3><button className="orb-close" type="button" aria-label="Close draft" onClick={closeDraft}>×</button></div>
               {activeDraft === 'intro' && <><div className="loop-draft-stages" role="group" aria-label="Introduction drafts">{[['katelyn', '1. Ask Katelyn'], ['ethan', '2. Ask Ethan'], ['introduction', '3. Introduction']].map(([key, label]) => <button type="button" key={key} aria-pressed={introStep === key} onClick={() => { setIntroStep(key); setCopyStatus(''); }}>{label}</button>)}</div><p className="loop-draft-hint">{introStep === 'introduction' ? 'Use this introduction after both Katelyn and Ethan agree to connect.' : 'Check with each person before making the introduction.'}</p></>}
               <div key={draftKey}>
+                <RecipientFields personIds={recipientIds} channel={draft.subject === undefined ? 'sms' : 'email'} selections={recipientSelections} onSelect={(key, value) => { setRecipientSelections(previous => ({ ...previous, [key]: value })); setCopyStatus(''); }} />
                 {draft.subject !== undefined && <><label htmlFor="loop-subject">Subject</label><input id="loop-subject" autoFocus value={draft.subject} onChange={event => setDraft('subject', event.target.value)} /></>}
                 <label htmlFor="loop-message">Message</label><textarea id="loop-message" autoFocus={draft.subject === undefined} value={draft.message} onChange={event => setDraft('message', event.target.value)} />
               </div>

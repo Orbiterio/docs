@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { defaultPalette } from './palettes.js';
 import { sampleDrafts } from './sample-drafts.js';
 import { SuggestionStyles } from './SuggestionStyles.jsx';
+import { RecipientFields } from './RecipientFields.jsx';
+import { selectedContactOption } from './sample-contacts.js';
 
 export const SampleSuggestionData = ({ palette = defaultPalette, showControls = true } = {}) => {
   const [editing, setEditing] = useState(false);
@@ -39,6 +41,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette, showControls = 
   const [activeDraft, setActiveDraft] = useState(null);
   const [openActions, setOpenActions] = useState({ charlie:false, kyle:false });
   const [copyStatus, setCopyStatus] = useState('');
+  const [recipientSelections, setRecipientSelections] = useState({});
   const [drafts, setDrafts] = useState(sampleDrafts);
   const draftKey = activeDraft ? activeDraft.personId + '-' + activeDraft.channel : null;
   const draftPerson = activeDraft ? data.people.find(person => person.id === activeDraft.personId) : null;
@@ -72,7 +75,8 @@ export const SampleSuggestionData = ({ palette = defaultPalette, showControls = 
   };
   const copyDraft = async () => {
     const draft = drafts[draftKey];
-    try { await navigator.clipboard.writeText((activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus('Draft copied.'); }
+    const recipient = selectedContactOption(activeDraft.personId, activeDraft.channel, recipientSelections);
+    try { await navigator.clipboard.writeText('To: ' + recipient + '\n' + (activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n' : '') + '\n' + draft.message); setCopyStatus('Draft copied.'); }
     catch { const field = document.getElementById('sample-message'); if(field) { field.focus(); field.select(); } setCopyStatus('Message selected. Press ⌘C or Ctrl+C to copy.'); }
   };
   return <div className="sample-suggestion-workspace not-prose">
@@ -135,6 +139,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette, showControls = 
             </div>
             {activeDraft && <section className="orb-composer" key={draftKey} id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}>
               <div className="orb-composer-heading"><h3 id="sample-composer-title">{draftTitle}</h3><button type="button" className="orb-close" aria-label="Close draft" onClick={closeDraft}>×</button></div>
+              <RecipientFields personIds={[activeDraft.personId]} channel={activeDraft.channel} selections={recipientSelections} onSelect={(key, value) => { setRecipientSelections(previous => ({ ...previous, [key]: value })); setCopyStatus(''); }} />
               {activeDraft.channel === 'email' && <><label htmlFor="sample-subject">Subject</label><input id="sample-subject" autoFocus value={drafts[draftKey].subject} onChange={event => setDraft('subject',event.target.value)} /></>}
               <label htmlFor="sample-message">Message</label>
               <textarea id="sample-message" autoFocus={activeDraft.channel !== 'email'} value={drafts[draftKey].message} onChange={event => setDraft('message',event.target.value)} />

@@ -43,6 +43,9 @@
       hint.textContent = introStep === 'introduction' ? 'Use this introduction after both Katelyn and Ethan agree to connect.' : 'Check with each person before making the introduction.';
       composer.append(stages, hint);
     }
+    const personIds = activeDraft === 'intro' ? (introStep === 'introduction' ? ['katelyn', 'ethan'] : [introStep]) : [action.personId];
+    const recipients = createReferenceRecipients(personIds, draft.subject === undefined ? 'sms' : 'email');
+    composer.append(recipients.element);
     const addField = (labelText, field, tag) => {
       const label = document.createElement('label');
       label.htmlFor = 'loop-' + field;
@@ -67,7 +70,7 @@
     });
     composer.append(footer);
     board.querySelector('.sample-action-section').append(composer);
-    composer.querySelector('input, textarea').focus();
+    composer.querySelector('#loop-subject, #loop-message').focus();
   };
   const togglePanel = button => {
     const id = button.getAttribute('aria-controls');

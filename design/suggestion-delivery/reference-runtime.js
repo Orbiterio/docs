@@ -34,6 +34,8 @@
     composer.innerHTML = '<div class="orb-composer-heading"><h3 id="sample-composer-title"></h3><button class="orb-close" type="button" aria-label="Close draft">×</button></div>';
     composer.querySelector('h3').textContent = (channel === 'sms' ? 'SMS to ' : 'Email to ') + name;
     composer.querySelector('button').addEventListener('click', () => closeDraft());
+    const recipients = createReferenceRecipients([personId], channel);
+    composer.append(recipients.element);
     const addField = (labelText, field, tag) => {
       const label = document.createElement('label');
       label.htmlFor = 'sample-' + field;
@@ -51,7 +53,7 @@
     footer.innerHTML = '<button class="orb-copy" type="button">Copy draft</button><span class="orb-copy-status" role="status" aria-live="polite"></span>';
     footer.querySelector('button').addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText((channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message);
+        await navigator.clipboard.writeText('To: ' + recipients.values().join(', ') + '\n' + (channel === 'email' ? 'Subject: ' + draft.subject + '\n' : '') + '\n' + draft.message);
         footer.querySelector('span').textContent = 'Draft copied.';
       } catch {
         composer.querySelector('textarea').focus();
@@ -61,7 +63,7 @@
     });
     composer.append(footer);
     board.querySelector('.sample-action-section').append(composer);
-    composer.querySelector('input, textarea').focus();
+    composer.querySelector('#sample-subject, #sample-message').focus();
   };
   const togglePanel = button => {
     const id = button.getAttribute('aria-controls');

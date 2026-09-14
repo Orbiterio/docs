@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, copyFile, cp } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { sampleContacts } from './sample-contacts.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const previewRoot = new URL('.preview-leverage/images/suggestion-delivery/', import.meta.url);
@@ -17,6 +18,7 @@ const { markup, drafts, actions } = await import(renderer.href + '?t=' + Date.no
 const styles = [...markup.matchAll(/<style>([\s\S]*?)<\/style>/g)].map(match => match[1]).join('\n').replace("url('/images/suggestion-delivery/current-ui.png')", 'none');
 const body = markup.replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<link[^>]+rel="preload"[^>]*\/>/g, '').replaceAll('/assets/leverage-loop/', './leverage-loop-assets/').replace(/></g, '>\n<');
 const runtime = await readFile(new URL('leverage-reference-runtime.js', import.meta.url), 'utf8');
+const recipientRuntime = await readFile(new URL('recipient-reference-runtime.js', import.meta.url), 'utf8');
 const serialize = value => JSON.stringify(value, null, 2).replace(/</g, '\\u003c');
 const html = `<!doctype html>
 <html lang="en">
@@ -39,6 +41,8 @@ ${body}
 <script>
 const referenceDrafts = ${serialize(drafts)};
 const referenceActions = ${serialize(actions)};
+const referenceContacts = ${serialize(sampleContacts)};
+${recipientRuntime}
 ${runtime}</script>
 </body>
 </html>
