@@ -5963,6 +5963,44 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      tags:
+        - Collections
+      summary: Ask a collection question
+      description: |
+        Saves a question about a collection and queues its answer. The question is
+        answered over the collection's members (people and companies, newest first,
+        capped) by a background worker; the response is the question with
+        `processing: true` and no answer yet. Poll `GET /collection-questions` until
+        `processing` is false, then read the answer nodes from
+        `GET /collection-question-nodes`. The caller must own or be a member of the
+        collection, and the collection must have members to answer over.
+      operationId: askCollectionQuestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskCollectionQuestionRequest'
+      responses:
+        '201':
+          description: The saved question, still processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionQuestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
   /collection-questions/{collection_question_id}:
@@ -6028,6 +6066,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /collection-question-nodes:
+    get:
+      tags:
+        - Collections
+      summary: Get a question's answer nodes
+      description: |
+        Returns the members the model named as the answer to a question, in the
+        order it named them, each hydrated into the shared node shape (person or
+        company card, targeting, the asker's relationship paths). Only the asker may
+        read them; a question that is not theirs returns 404. `paths_processing` is
+        true on a node until the asker's paths to it are stored.
+      operationId: listCollectionQuestionNodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: collection_question_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The question's answer nodes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCollectionQuestionNodesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -9591,7 +9665,10 @@ paths:
         contact in one request.
 
         With `person_id` (the form was prefilled by `POST /persons/url-lookup`)
-        that person is reused. Without it `full_name` is required and the
+        that person is reused. A supplied `full_name` fills an unnamed person
+        without replacing an existing name. Saving a person that still has
+        no name fails validation on `full_name` before adding a contact.
+        Without `person_id`, `full_name` is required and the
         typed identity (name, emails, phones, title, company name, profile
         URL) is sent to the enrichment provider's person get-add, which
         resolves or creates the canonical person; the row is then persisted
@@ -9645,7 +9722,7 @@ paths:
         - Persons
       summary: Look up a person by profile URL
       description: |
-        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). A LinkedIn URL is always sent to the enrichment provider's get-add, local hit or miss; a held person is overwritten with the provider's latest package. On a miss the person is resolved-or-created there, persisted, and returned with status created while enrichment completes in the background. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
+        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). A LinkedIn URL is always sent to the enrichment provider's get-add, local hit or miss; a held person is overwritten with the provider's latest package. On a miss the person is resolved-or-created there. Once a name is available it is persisted locally and returned with status created while enrichment completes in the background. An unresolved name returns pending_enrichment with found false and person null; no unnamed local person is created. A held unnamed person also stays pending until its name resolves. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
       security:
         - bearerAuth: []
       requestBody:
@@ -9831,7 +9908,7 @@ paths:
       tags:
         - Contacts
       summary: Add a contact
-      description: Add a person as a contact (copy-to-my)
+      description: Add a person as a contact (copy-to-my). A person without a stored name fails validation on full_name before any contact or copied details are written.
       security:
         - bearerAuth: []
       requestBody:
@@ -9883,6 +9960,8 @@ paths:
                     properties:
                       request_id:
                         type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -10177,7 +10256,7 @@ paths:
         - Companies
       summary: Look up a company by website domain
       description: |
-        Resolve a company from its website domain. The domain is always sent to the enrichment provider's get-add, local hit or miss; a held company is overwritten with the provider's latest package. On a miss the company is resolved-or-created there, persisted, and returned with status created. A seed the provider declines returns pending_enrichment.
+        Normalize a website URL or domain and call Logo.dev Describe first. A matching result returns immediately without database or Universe calls. Otherwise try the existing Universe lookup with an eight-second deadline. Reject mismatched domains before persisting or prefilling them. When Universe cannot supply a matching name, make one Firecrawl scrape of the original website with a five-second deadline. Website previews use its own branding and declared logo or favicon; the name and logo can be returned independently. A homepage logo or wordmark label corroborated by the copyright owner or visible site copy takes precedence over the copyright name; explicit organization and site names remain preferred. A different final or canonical domain is rejected. Preview ids are null until Add Company resolves the canonical entity. Website-published company profile URLs accompany the preview for Add Company. Exhausted lookups return manual_entry so the caller preserves the original domain and asks for a name instead of polling indefinitely.
       security:
         - bearerAuth: []
       requestBody:
@@ -16918,8 +16997,12 @@ components:
         - collection_id
         - question
         - llm_response
+        - sourcing
         - processing
-      description: One of the authenticated user's questions on a collection.
+      description: |
+        One of the authenticated user's questions on a collection. `llm_response`
+        is null until the answer has been written; `processing` is true while the
+        answer or its nodes' paths are still being produced.
       properties:
         id:
           type: string
@@ -16930,7 +17013,17 @@ components:
         question:
           type: string
         llm_response:
-          type: string
+          type:
+            - string
+            - 'null'
+        sourcing:
+          type:
+            - string
+            - 'null'
+          description: |
+            Where the model said the answer's facts came from: `context` (all from
+            the collection's graph), `blended` (graph plus public knowledge) or
+            `world_knowledge` (mostly public knowledge). Null until answered.
         processing:
           type: boolean
     ListCollectionQuestionsResponse:
@@ -16955,12 +17048,19 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
-    UpdateCollectionQuestionRequest:
+    AskCollectionQuestionRequest:
       type: object
       required:
-        - question
+        - collection_id
+        - query
+      description: |
+        A question to answer over a collection's members. The asker comes from the
+        session.
       properties:
-        question:
+        collection_id:
+          type: string
+          format: uuid
+        query:
           type: string
           maxLength: 5000
     CollectionQuestionEnvelope:
@@ -16972,6 +17072,130 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/CollectionQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateCollectionQuestionRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          maxLength: 5000
+    CollectionQuestionNode:
+      type: object
+      required:
+        - id
+        - collection_question_id
+        - kind
+        - paths_processing
+        - entity_type
+        - node_uuid
+        - node_targeted
+        - person
+        - company
+        - live_event
+        - film_tv
+        - film_tv_award
+        - funding_round
+        - music_group
+        - music_recording
+        - paths_to_person
+        - paths_to_company
+        - created_at
+      description: |
+        One answer node: a member the model named, in the shared node shape every
+        feature serves (the same objects a discover node carries). `node_uuid` is
+        the entity's row id in the table `entity_type` names, so exactly one entity
+        object is non-null and the rest are null. Paths are the asker's stored
+        relationship paths to the node.
+      properties:
+        id:
+          type: string
+          format: uuid
+        collection_question_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          description: '`response` for a member the model named as the answer.'
+        paths_processing:
+          type: boolean
+          description: True until the asker's paths to this node are stored.
+        entity_type:
+          type: string
+          description: '`persons` or `companies` today.'
+        node_uuid:
+          type: string
+          format: uuid
+        node_targeted:
+          type: boolean
+        person:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        company:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        live_event:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        funding_round:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_group:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_recording:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        paths_to_person:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        paths_to_company:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    ListCollectionQuestionNodesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionQuestionNode'
         error:
           type: 'null'
         meta:
@@ -21786,7 +22010,7 @@ components:
         full_name:
           type: string
           maxLength: 200
-          description: Required unless person_id is set. Seeds the provider and, split on the last whitespace, names the local row.
+          description: Required unless person_id identifies a person with a stored name. Seeds the provider and fills a blank local name, split on the last whitespace. Existing names are preserved.
         title:
           type: string
         company_id:
@@ -21947,7 +22171,7 @@ components:
         status:
           type: string
           description: |
-            found (matched an existing person) | created (person was created via the enrichment provider on this call; enrichment continues in the background) | pending_enrichment (no match and the signal cannot seed a create yet).
+            found (matched an existing person) | created (person was created via the enrichment provider on this call; enrichment continues in the background) | pending_enrichment (no match and the signal cannot seed a create yet, or the person's name has not resolved).
         person:
           oneOf:
             - $ref: '#/components/schemas/PersonLookupResult'
@@ -22116,7 +22340,7 @@ components:
     PersonDetail:
       type: object
       description: |
-        Full person detail (GET /persons/{id}). Fields backed by tables we don't have yet are present but empty/null: work_history, education_experiences, skills, roles, scheduling_links, mutual_connections (→ []), birthday, financial_data (→ null). See docs/master-detail-missing-tables.md.
+        Full person detail (GET /persons/{id}). Expertise, skills, and roles are the arrays stored from the Universe projection; each is empty when no values are available. Unimplemented sections remain empty/null: work_history, education_experiences, scheduling_links, mutual_connections (→ []), birthday, financial_data (→ null).
       properties:
         id:
           type: string
@@ -22165,12 +22389,18 @@ components:
         education_experiences:
           type: array
           items: {}
+        expertise:
+          type: array
+          items:
+            type: string
         skills:
           type: array
-          items: {}
+          items:
+            type: string
         roles:
           type: array
-          items: {}
+          items:
+            type: string
         person_contact:
           oneOf:
             - $ref: '#/components/schemas/ContactNested'
@@ -22495,6 +22725,14 @@ components:
       properties:
         company_name:
           type: string
+        profile_urls:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+          description: |
+            Company profile URLs discovered on the original website. LinkedIn is preferred, then Crunchbase, as Universe's primary profile signal. Accepted profiles are also merged into the saved company's links.
         domain:
           type: string
           description: |
@@ -22555,14 +22793,22 @@ components:
       properties:
         domain:
           type: string
-          description: The company's website host, e.g. acme.com.
+          description: A website URL or host, e.g. https://www.acme.com/about or acme.com.
     CompanyLookupResult:
       type: object
-      description: Lean company returned when a lookup matches.
+      description: Company metadata; logo.dev and website previews have no canonical id until saved.
       properties:
         id:
-          type: string
+          type:
+            - string
+            - 'null'
           format: uuid
+        profile_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Company profiles published on the matching website.
         name:
           type: string
         logo:
@@ -22582,7 +22828,7 @@ components:
         status:
           type: string
           description: |
-            found (matched an existing company) | created (company was created via the enrichment provider on this call) | pending_enrichment (no match and the signal cannot seed a create yet).
+            found (preview or existing company) | created (company resolved and persisted through Universe) | manual_entry (automatic lookup exhausted; preserve the requested domain and enter a name).
         company:
           oneOf:
             - $ref: '#/components/schemas/CompanyLookupResult'
@@ -22765,10 +23011,38 @@ components:
             - 'null'
         collection_nodes_count:
           type: integer
+    CompanyEmployee:
+      type: object
+      description: One live contact belonging to the caller with a role at this company.
+      required:
+        - id
+        - person_id
+        - name
+        - avatar
+        - current_title
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The caller's person-contact ID.
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+          description: The role at this company, including the former role for past employees.
     CompanyDetail:
       type: object
       description: |
-        Full company detail (GET /companies/{id}). Sections backed by tables we don't have yet are present but empty/null: current_employees / past_employees (→ []), total_contacts_linked (→ 0), financial_data (→ null), funding (→ []). See docs/master-detail-missing-tables.md.
+        Full company detail (GET /companies/{id}). Employee lists contain the caller's live contacts, even when the company is not saved. A person's current company or a current work-history role places them in current_employees; other matching work history places them in past_employees. Each person appears once, with current membership taking precedence. Financials use a separate endpoint.
       properties:
         id:
           type: string
@@ -22839,12 +23113,15 @@ components:
           type: boolean
         current_employees:
           type: array
-          items: {}
+          items:
+            $ref: '#/components/schemas/CompanyEmployee'
         past_employees:
           type: array
-          items: {}
+          items:
+            $ref: '#/components/schemas/CompanyEmployee'
         total_contacts_linked:
           type: integer
+          description: Distinct contacts across both employee lists.
         show_add_button:
           type: boolean
         visible_button:
