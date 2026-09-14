@@ -237,7 +237,7 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-why-box { padding:16px 18px; font-size:14px; line-height:22px; border-radius:5px; }
       #orbiter-moonshot .orb-why-headline { margin:0 0 16px; color:#f1f3f8; font-size:16px; line-height:24px; font-weight:700; }
       #orbiter-moonshot .orb-why-headline::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
-      #orbiter-moonshot .orb-trajectory-section { margin-top:10px; }
+      #orbiter-moonshot .orb-trajectory-section, #orbiter-moonshot .sample-sequencing-section, #orbiter-moonshot .sample-action-section { margin-top:10px; }
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
       #orbiter-moonshot .orb-trajectory-panel { position:relative; }
@@ -313,7 +313,7 @@ export const SampleSuggestionData = () => {
               </div>
             </div>
           </section>
-          <section className="orb-section" aria-labelledby="sample-sequencing">
+          <section className="orb-section sample-sequencing-section" aria-labelledby="sample-sequencing">
             <h3 className="orb-section-title" id="sample-sequencing"><span className="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
             <div className="orb-sequencing-panel" data-expanded={open.sequencing}>
               <button className="orb-collapse orb-sequencing-toggle" type="button" aria-expanded={open.sequencing} aria-controls="sample-sequencing-content" aria-label={(open.sequencing ? 'Collapse' : 'Expand') + ' suggested sequencing'} onClick={() => toggle('sequencing')}>{arrow(open.sequencing)}</button>
