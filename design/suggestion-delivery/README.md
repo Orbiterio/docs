@@ -16,3 +16,5 @@ Open http://localhost:3002/palettes.html to compare four color palettes. Each op
 The source screenshots live in `images/suggestion-delivery/`. Profile photos and logos are shown as CSS crops of the original screenshot, retaining the original image resolution.
 
 `npm run build` validates and bundles the prototype into the ignored `.preview/` directory. The preview server binds only to localhost.
+
+The Mintlify `Outcome UI` page documents the current design with 11 captured states. Run `npm run reference` after design changes to regenerate `images/suggestion-delivery/outcome-ui-reference.html`, its downloadable ZIP with the image sprite, and the identical HTML block in `outcome-ui.mdx`. The reference is rendered from the current component and uses `reference-runtime.js` for plain JavaScript interactions; draft copy is shared in `sample-drafts.js`. The reference HTML expects `current-ui.png` in the same folder. Its local preview is at `http://localhost:3002/images/suggestion-delivery/outcome-ui-reference.html`. Refresh the screenshots separately when the design changes.

@@ -1,81 +1,15 @@
-import React, { useState } from 'react';
-import { defaultPalette } from './palettes.js';
-import { sampleDrafts } from './sample-drafts.js';
-
-export const SampleSuggestionData = ({ palette = defaultPalette, showControls = true } = {}) => {
-  const [editing, setEditing] = useState(false);
-  const [editingCard, setEditingCard] = useState(null);
-  const [version, setVersion] = useState('earlier');
-  const [open, setOpen] = useState({ main: true, seth: false, lighthouse: false, aila: false, archived: false, trajectory: false, sequencing: false });
-  const [notes, setNotes] = useState({ seth: '', lighthouse: '', aila: '' });
-  const [data, setData] = useState({
-    title: 'Ryan Reynolds / Maximum Effort',
-    people: [
-      { id:'ryan', name:'Ryan Reynolds', role:'Co-Founder @ Maximum Effort', logo:'maximum', company:'Maximum Effort', bio:'Ryan Reynolds is an actor and entrepreneur with three decades of experience in film and television. Recognized by The Wall Street Journal for building a…' },
-      { id:'charlie', name:'Charlie Anderson', role:'Head Of Frame.io Partnerships @ Adobe', logo:'adobe', company:'Adobe', bio:'Charlie Anderson is Head of Frame.io Partnerships & Developer Experience at Adobe, where he leads the Partnerships team covering DevX, Partner Success, an…' },
-      { id:'kyle', name:'Kyle Jackson', role:'Founder @ Being Human', logo:'being', company:'Being Human', bio:'Kyle Jackson currently serves as Founder at Being Human.' }
-    ],
-    why: {
-      headline: 'Orbiter.io can turn Maximum Effort’s relationships across film, brands, and sports into its next deal.',
-      current: ['Ryan Reynolds perfectly embodies the "Networked Operator" profile: he\'s built a $14+ billion business empire across seven industries and three continents. His 70+ million social media following and systematic approach to digital relationship building could provide unprecedented visibility for Orbiter.io\'s success stories.'],
-      earlier: [
-        "Maximum Effort is a relationship business wearing a production company's clothes. A small team in New York operates across film and TV development, brand marketing, sports, and adtech simultaneously: a Paramount first-look studio slate, campaign work for Aviation Gin, Mint Mobile and Match, Welcome to Wrexham, and an ongoing services relationship with MNTN, where Reynolds remains chief creative officer.",
-        "Every one of those bets was sourced through people, and the value compounds when someone spots that a brand client, a streaming partner, and a talent relationship can be pointed at the same deal. That context currently lives in inboxes, phones, and a handful of heads. Orbiter makes it queryable, surfacing the non-obvious path between a Wrexham sponsor, a Paramount executive, and a portfolio founder before the opportunity closes.",
-        "They are also the sharpest possible stress test: if the graph holds across entertainment, consumer, sports, and venture in one org, it holds anywhere. And a Maximum Effort reference converts the entire media-operator ICP."
-      ]
-    },
-    trajectory: [
-      { id:'charlie', title:'Charlie Anderson', text:'All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.' },
-      { id:'kyle', title:'Kyle Jackson', text:'Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.' }
-    ],
-    sequencing: [
-      { id:'charlie-first', title:'Start with Charlie', text:'Charlie’s direct work with Ryan and close relationships with all three founders make him the strongest first conversation. Give him a short walkthrough, get his read on the fit, and ask whether he would be comfortable introducing Orbiter.io to Ryan.' },
-      { id:'kyle-next', title:'Bring Kyle in with context', text:'After speaking with Charlie, ask Kyle who at Maximum Effort would be best placed to evaluate Orbiter.io. Share what is already in motion. If Charlie cannot make an introduction or the timing is uncertain, explore Kyle’s connection as the next route.' },
-      { id:'coordinate', title:'Coordinate one introduction', text:'Agree on who will make the introduction and whether the first demo should be for Ryan or a member of the Maximum Effort team. Follow up through that connector and keep the other informed, so both relationships support one coordinated approach.' }
-    ],
-    actions: ['Reach out to Charlie Anderson about showing Ryan', 'Reach out to Kyle Jackson about Maximum Effort']
-  });
-  const [activeDraft, setActiveDraft] = useState(null);
-  const [openActions, setOpenActions] = useState({ charlie:false, kyle:false });
-  const [copyStatus, setCopyStatus] = useState('');
-  const [drafts, setDrafts] = useState(sampleDrafts);
-  const draftKey = activeDraft ? activeDraft.personId + '-' + activeDraft.channel : null;
-  const draftPerson = activeDraft ? data.people.find(person => person.id === activeDraft.personId) : null;
-  const draftTitle = activeDraft ? (activeDraft.channel === 'sms' ? 'SMS to ' : 'Email to ') + draftPerson.name : '';
-  const toggle = key => setOpen(previous => ({ ...previous, [key]: !previous[key] }));
-  const edit = (text, save, enabled = editing) => ({ children:text, contentEditable:enabled ? 'plaintext-only' : false, suppressContentEditableWarning:true, onBlur:event => { if(enabled) save(event.currentTarget.textContent); } });
-  const setField = (key, value) => setData(previous => ({ ...previous, [key]:value }));
-  const setPerson = (id, key, value) => setData(previous => ({ ...previous, people:previous.people.map(person => person.id === id ? { ...person, [key]:value } : person) }));
-  const arrow = expanded => <span className={'sample-chevron' + (expanded ? ' sample-chevron-up' : '')} aria-hidden="true" />;
-  const personCard = person => {
-    const enabled = editing || editingCard === person.id;
-    return <article className="orb-person" key={person.id} aria-label={person.name + ' profile'}>
-      <div className="orb-person-head">
-        <span className={'orb-avatar orb-' + person.id} role="img" aria-label={person.name} />
-        <div className="orb-person-copy"><h3 {...edit(person.name, value => setPerson(person.id,'name',value), enabled)} /><p className="orb-role" {...edit(person.role, value => setPerson(person.id,'role',value), enabled)} /></div>
-        <span className={'orb-logo orb-' + person.logo} role="img" aria-label={person.company + ' logo'} />
-      </div>
-      <p className="orb-bio" {...edit(person.bio, value => setPerson(person.id,'bio',value), enabled)} />
-      <button className="orb-more" type="button" aria-label={(enabled ? 'Finish editing ' : 'Edit ') + person.name + ' profile'} aria-pressed={enabled} onClick={() => { if(editing) setEditing(false); setEditingCard(enabled ? null : person.id); }}>{enabled ? '✓' : '•••'}</button>
-    </article>;
-  };
-  const setDraft = (key, value) => setDrafts(previous => ({ ...previous, [draftKey]:{ ...previous[draftKey], [key]:value } }));
-  const openDraft = (personId, channel) => { setActiveDraft({ personId, channel }); setCopyStatus(''); };
-  const closeDraft = () => { const trigger = document.getElementById('sample-draft-' + draftKey); setActiveDraft(null); setCopyStatus(''); if(trigger) trigger.focus(); };
-  const toggleActions = personId => {
-    if(openActions[personId] && activeDraft?.personId === personId && activeDraft.channel !== 'email') {
-      setActiveDraft(null);
-      setCopyStatus('');
-    }
-    setOpenActions(previous => ({ ...previous, [personId]:!previous[personId] }));
-  };
-  const copyDraft = async () => {
-    const draft = drafts[draftKey];
-    try { await navigator.clipboard.writeText((activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus('Draft copied.'); }
-    catch { const field = document.getElementById('sample-message'); if(field) { field.focus(); field.select(); } setCopyStatus('Message selected. Press ⌘C or Ctrl+C to copy.'); }
-  };
-  return <div className="sample-suggestion-workspace not-prose">
-    <style>{`  #orbiter-moonshot {
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outcome UI — Midnight reference</title>
+  <!-- Keep current-ui.png beside this HTML file for profile photos and logos. -->
+  <style>
+    :root { color-scheme:dark; background:#080a0b; color:#edf0f8; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; }
+    body { margin:0; padding:12px 8px 28px; }
+    main { max-width:1440px; margin:0 auto; }
+  #orbiter-moonshot {
     --orb-page: #080a0b;
     --orb-panel: #0e1420;
     --orb-border: #202d47;
@@ -214,7 +148,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette, showControls = 
       .sample-suggestion-toolbar label { display:flex; align-items:center; gap:8px; }
       .sample-suggestion-toolbar select, .sample-suggestion-toolbar button, .sample-suggestion-toolbar a { background:#101929; color:#e8efff; border:1px solid #364b70; border-radius:6px; padding:7px 10px; font:inherit; cursor:pointer; text-decoration:none; }
       .sample-palette-name { color:#bfc3ce; margin-right:auto; }
-      #orbiter-moonshot { --orb-reference:url('/images/suggestion-delivery/current-ui.png'); padding:0; }
+      #orbiter-moonshot { --orb-reference:url('./current-ui.png'); padding:0; }
       #orbiter-moonshot .orb-frame { padding:12px; border-radius:24px 24px 0 0; }
       #orbiter-moonshot .orb-opportunity { background:var(--orb-page); padding:0; border-radius:11px; }
       #orbiter-moonshot .orb-header { display:grid; grid-template-columns:1fr auto; padding:10px 16px 12px; min-height:46px; background:var(--orb-panel); border-radius:10px 10px 0 0; border-bottom:1px solid #1b2537; gap:9px 11px; }
@@ -299,76 +233,373 @@ export const SampleSuggestionData = ({ palette = defaultPalette, showControls = 
       #orbiter-moonshot .sample-empty { padding:16px 8px; font-size:13px; color:var(--orb-muted); }
       #orbiter-moonshot .orb-close { font-size:20px; }
       @media(max-width:700px) { #orbiter-moonshot .orb-connections .orb-person { width:367px; } #orbiter-moonshot .orb-person { max-width:100%; } #orbiter-moonshot .orb-frame { padding:8px; } #orbiter-moonshot .orb-header { padding:9px 10px; } #orbiter-moonshot .sample-content { padding:10px 8px; } #orbiter-moonshot .orb-role { white-space:normal; } #orbiter-moonshot .orb-action { flex-wrap:wrap; padding:10px; } #orbiter-moonshot .orb-action p { flex-basis:100%; } #orbiter-moonshot .orb-draft-button { margin-left:auto; padding:6px 9px; } }
-    `}</style>
-    {showControls && <div className="sample-suggestion-toolbar" aria-label="Sample design controls">{palette && <span className="sample-palette-name">Palette: {palette.name}</span>}<a href="/palettes.html" target="_blank" rel="noreferrer">Palette options</a><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>}
-    <div id="orbiter-moonshot" style={palette?.colors} aria-label="Sample suggestion board"><div className="orb-frame">
-      <article className="orb-opportunity">
-        <header className="orb-header"><span className="orb-badge"><span aria-hidden="true">♧</span> MOONSHOT</span><h2 className="orb-heading" {...edit(data.title,value => setField('title',value))} /><button className="orb-collapse" type="button" aria-expanded={open.main} aria-controls="sample-main" aria-label={(open.main ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity'} onClick={() => toggle('main')}>{arrow(open.main)}</button></header>
-        <div className="sample-content" id="sample-main" hidden={!open.main}>
-          {personCard(data.people[0])}
-          <section className="orb-section sample-why-section" aria-labelledby="sample-why"><h3 className="orb-section-title" id="sample-why"><span className="sample-label-icon" aria-hidden="true">✧</span> WHY</h3><div className="orb-why-box"><h4 className="orb-why-headline" {...edit(data.why.headline,value => setData(previous => ({ ...previous, why:{ ...previous.why, headline:value } })))} />{data.why[version].map((paragraph,index) => <p key={version + index} {...edit(paragraph,value => setData(previous => ({ ...previous, why:{ ...previous.why, [version]:previous.why[version].map((item,position) => position === index ? value : item) } })))} />)}</div></section>
-          <section className="orb-trajectory-section" aria-labelledby="sample-trajectory">
-            <h3 className="orb-section-title" id="sample-trajectory"><span className="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3>
-            <div className="orb-trajectory-panel">
-              <button className={open.trajectory ? 'orb-collapse orb-trajectory-toggle' : 'orb-trajectory-summary'} type="button" aria-expanded={open.trajectory} aria-controls="sample-trajectory-content" aria-label={(open.trajectory ? 'Collapse trajectory' : 'Expand trajectory: ' + data.trajectory.map(route => route.title).join(' & '))} onClick={() => toggle('trajectory')}>
-                {!open.trajectory && <span>{data.trajectory.map(route => route.title).join(' & ')}</span>}
-                <span className={open.trajectory ? undefined : 'sample-arrow-circle'}>{arrow(open.trajectory)}</span>
-              </button>
-              <div id="sample-trajectory-content" hidden={!open.trajectory}>
-                <div className="orb-trajectory-note">
-                  {data.trajectory.map(route => <section className="orb-trajectory-route" key={route.id} aria-labelledby={'sample-route-' + route.id}>
-                    <h4 id={'sample-route-' + route.id} {...edit(route.title,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, title:value } : item) })))} />
-                    <p {...edit(route.text,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, text:value } : item) })))} />
-                  </section>)}
-                </div>
-                <div className="orb-connections">{data.people.slice(1).map(personCard)}</div>
-              </div>
-            </div>
-          </section>
-          <section className="orb-section sample-sequencing-section" aria-labelledby="sample-sequencing">
-            <h3 className="orb-section-title" id="sample-sequencing"><span className="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
-            <div className="orb-sequencing-panel" data-expanded={open.sequencing}>
-              <button className="orb-collapse orb-sequencing-toggle" type="button" aria-expanded={open.sequencing} aria-controls="sample-sequencing-content" aria-label={(open.sequencing ? 'Collapse' : 'Expand') + ' suggested sequencing'} onClick={() => toggle('sequencing')}>{arrow(open.sequencing)}</button>
-              <ol className="orb-sequencing-list" id="sample-sequencing-content">
-                {data.sequencing.map((step,index) => <li key={step.id} hidden={!open.sequencing && index > 0}>
-                  <h4 {...edit(step.title,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, title:value } : item) })))} />
-                  <p hidden={!open.sequencing} {...edit(step.text,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, text:value } : item) })))} />
-                </li>)}
-              </ol>
-            </div>
-          </section>
-          <section className="orb-section sample-action-section" aria-labelledby="sample-action">
-            <h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3>
-            <div className="orb-actions">
-              {data.people.slice(1).map((person,index) => <div className="orb-action-group" key={person.id}>
-                <div className="orb-action">
-                  <p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} />
-                  <div className="orb-action-controls">
-                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-email'} aria-label={'Draft email to ' + person.name} aria-expanded={draftKey === person.id + '-email'} aria-controls="sample-composer" onClick={() => openDraft(person.id,'email')}>DRAFT EMAIL</button>
-                    <button className="orb-collapse orb-action-toggle" type="button" aria-label={(openActions[person.id] ? 'Hide' : 'Show') + ' more actions for ' + person.name} aria-expanded={openActions[person.id]} aria-controls={'sample-actions-' + person.id} onClick={() => toggleActions(person.id)}>{arrow(openActions[person.id])}</button>
-                  </div>
-                </div>
-                <div className="orb-action-options" id={'sample-actions-' + person.id} hidden={!openActions[person.id]}>
-                  <div className="orb-action orb-action-option">
-                    <p>Text {person.name}</p>
-                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-sms'} aria-label={'Draft SMS to ' + person.name} aria-expanded={draftKey === person.id + '-sms'} aria-controls="sample-composer" onClick={() => openDraft(person.id,'sms')}>DRAFT SMS</button>
-                  </div>
-                </div>
-              </div>)}
-            </div>
-            {activeDraft && <section className="orb-composer" key={draftKey} id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}>
-              <div className="orb-composer-heading"><h3 id="sample-composer-title">{draftTitle}</h3><button type="button" className="orb-close" aria-label="Close draft" onClick={closeDraft}>×</button></div>
-              {activeDraft.channel === 'email' && <><label htmlFor="sample-subject">Subject</label><input id="sample-subject" autoFocus value={drafts[draftKey].subject} onChange={event => setDraft('subject',event.target.value)} /></>}
-              <label htmlFor="sample-message">Message</label>
-              <textarea id="sample-message" autoFocus={activeDraft.channel !== 'email'} value={drafts[draftKey].message} onChange={event => setDraft('message',event.target.value)} />
-              <div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div>
-            </section>}
-          </section>
-        </div>
-        <button className="orb-more" type="button" aria-label={editing ? 'Finish editing opportunity' : 'Edit opportunity'} aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? '✓' : '•••'}</button>
-      </article>
-      {[{ id:'seth', name:'Seth Rogen / Point Grey Pictures' },{ id:'lighthouse', name:'The Lighthouse' },{ id:'aila', name:'AI LA' }].map(item => <section className="orb-collapsed" key={item.id} aria-label={item.name + ' opportunity'}><button className="orb-summary" type="button" aria-expanded={open[item.id]} aria-controls={'sample-' + item.id} onClick={() => toggle(item.id)}><span>{item.name}</span><span className="sample-arrow-circle">{arrow(open[item.id])}</span></button><div className="orb-notes" id={'sample-' + item.id} hidden={!open[item.id]}><label htmlFor={'sample-notes-' + item.id}>Opportunity notes</label><textarea id={'sample-notes-' + item.id} rows={3} placeholder={'Add notes for ' + item.name + '…'} value={notes[item.id]} onChange={event => setNotes(previous => ({ ...previous, [item.id]:event.target.value }))} /></div><button className="orb-more" type="button" aria-label={'Edit ' + item.name + ' notes'} onClick={() => setOpen(previous => ({ ...previous,[item.id]:true }))}>•••</button></section>)}
-      <button className="sample-archive" type="button" aria-expanded={open.archived} aria-controls="sample-archived" onClick={() => toggle('archived')}>{arrow(open.archived)} ARCHIVED <span className="sample-archive-count">1</span><span className="sample-archive-line" /></button><p className="sample-empty" id="sample-archived" hidden={!open.archived}>No archived sample provided.</p>
-    </div></div>
-  </div>;
+
+  </style>
+</head>
+<body>
+<main>
+<div class="sample-suggestion-workspace not-prose">
+<div id="orbiter-moonshot" style="--orb-why:#172440;--orb-why-border:#7899da;--orb-why-accent:#adc9ff;--orb-trajectory:#271f32;--orb-trajectory-border:#5c466a;--orb-trajectory-accent:#ceb5e0;--orb-sequencing:#292316;--orb-sequencing-border:#635334;--orb-sequencing-accent:#d8bb7a;--orb-action:#14323b;--orb-action-border:#3e7380;--orb-action-accent:#b0dce3;--orb-action-button:#1a424b;--orb-action-option:#10252c" aria-label="Sample suggestion board">
+<div class="orb-frame">
+<article class="orb-opportunity">
+<header class="orb-header">
+<span class="orb-badge">
+<span aria-hidden="true">♧</span> MOONSHOT</span>
+<h2 class="orb-heading" contentEditable="false">Ryan Reynolds / Maximum Effort</h2>
+<button class="orb-collapse" type="button" aria-expanded="true" aria-controls="sample-main" aria-label="Collapse Ryan Reynolds opportunity">
+<span class="sample-chevron sample-chevron-up" aria-hidden="true">
+</span>
+</button>
+</header>
+<div class="sample-content" id="sample-main">
+<article class="orb-person" aria-label="Ryan Reynolds profile">
+<div class="orb-person-head">
+<span class="orb-avatar orb-ryan" role="img" aria-label="Ryan Reynolds">
+</span>
+<div class="orb-person-copy">
+<h3 contentEditable="false">Ryan Reynolds</h3>
+<p class="orb-role" contentEditable="false">Co-Founder @ Maximum Effort</p>
+</div>
+<span class="orb-logo orb-maximum" role="img" aria-label="Maximum Effort logo">
+</span>
+</div>
+<p class="orb-bio" contentEditable="false">Ryan Reynolds is an actor and entrepreneur with three decades of experience in film and television. Recognized by The Wall Street Journal for building a…</p>
+<button class="orb-more" type="button" aria-label="Edit Ryan Reynolds profile" aria-pressed="false">•••</button>
+</article>
+<section class="orb-section sample-why-section" aria-labelledby="sample-why">
+<h3 class="orb-section-title" id="sample-why">
+<span class="sample-label-icon" aria-hidden="true">✧</span> WHY</h3>
+<div class="orb-why-box">
+<h4 class="orb-why-headline" contentEditable="false">Orbiter.io can turn Maximum Effort’s relationships across film, brands, and sports into its next deal.</h4>
+<p contentEditable="false">Maximum Effort is a relationship business wearing a production company&#x27;s clothes. A small team in New York operates across film and TV development, brand marketing, sports, and adtech simultaneously: a Paramount first-look studio slate, campaign work for Aviation Gin, Mint Mobile and Match, Welcome to Wrexham, and an ongoing services relationship with MNTN, where Reynolds remains chief creative officer.</p>
+<p contentEditable="false">Every one of those bets was sourced through people, and the value compounds when someone spots that a brand client, a streaming partner, and a talent relationship can be pointed at the same deal. That context currently lives in inboxes, phones, and a handful of heads. Orbiter makes it queryable, surfacing the non-obvious path between a Wrexham sponsor, a Paramount executive, and a portfolio founder before the opportunity closes.</p>
+<p contentEditable="false">They are also the sharpest possible stress test: if the graph holds across entertainment, consumer, sports, and venture in one org, it holds anywhere. And a Maximum Effort reference converts the entire media-operator ICP.</p>
+</div>
+</section>
+<section class="orb-trajectory-section" aria-labelledby="sample-trajectory">
+<h3 class="orb-section-title" id="sample-trajectory">
+<span class="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3>
+<div class="orb-trajectory-panel">
+<button class="orb-trajectory-summary" type="button" aria-expanded="false" aria-controls="sample-trajectory-content" aria-label="Expand trajectory: Charlie Anderson &amp; Kyle Jackson">
+<span>Charlie Anderson &amp; Kyle Jackson</span>
+<span class="sample-arrow-circle">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</span>
+</button>
+<div id="sample-trajectory-content" hidden="">
+<div class="orb-trajectory-note">
+<section class="orb-trajectory-route" aria-labelledby="sample-route-charlie">
+<h4 id="sample-route-charlie" contentEditable="false">Charlie Anderson</h4>
+<p contentEditable="false">All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.</p>
+</section>
+<section class="orb-trajectory-route" aria-labelledby="sample-route-kyle">
+<h4 id="sample-route-kyle" contentEditable="false">Kyle Jackson</h4>
+<p contentEditable="false">Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.</p>
+</section>
+</div>
+<div class="orb-connections">
+<article class="orb-person" aria-label="Charlie Anderson profile">
+<div class="orb-person-head">
+<span class="orb-avatar orb-charlie" role="img" aria-label="Charlie Anderson">
+</span>
+<div class="orb-person-copy">
+<h3 contentEditable="false">Charlie Anderson</h3>
+<p class="orb-role" contentEditable="false">Head Of Frame.io Partnerships @ Adobe</p>
+</div>
+<span class="orb-logo orb-adobe" role="img" aria-label="Adobe logo">
+</span>
+</div>
+<p class="orb-bio" contentEditable="false">Charlie Anderson is Head of Frame.io Partnerships &amp; Developer Experience at Adobe, where he leads the Partnerships team covering DevX, Partner Success, an…</p>
+<button class="orb-more" type="button" aria-label="Edit Charlie Anderson profile" aria-pressed="false">•••</button>
+</article>
+<article class="orb-person" aria-label="Kyle Jackson profile">
+<div class="orb-person-head">
+<span class="orb-avatar orb-kyle" role="img" aria-label="Kyle Jackson">
+</span>
+<div class="orb-person-copy">
+<h3 contentEditable="false">Kyle Jackson</h3>
+<p class="orb-role" contentEditable="false">Founder @ Being Human</p>
+</div>
+<span class="orb-logo orb-being" role="img" aria-label="Being Human logo">
+</span>
+</div>
+<p class="orb-bio" contentEditable="false">Kyle Jackson currently serves as Founder at Being Human.</p>
+<button class="orb-more" type="button" aria-label="Edit Kyle Jackson profile" aria-pressed="false">•••</button>
+</article>
+</div>
+</div>
+</div>
+</section>
+<section class="orb-section sample-sequencing-section" aria-labelledby="sample-sequencing">
+<h3 class="orb-section-title" id="sample-sequencing">
+<span class="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
+<div class="orb-sequencing-panel" data-expanded="false">
+<button class="orb-collapse orb-sequencing-toggle" type="button" aria-expanded="false" aria-controls="sample-sequencing-content" aria-label="Expand suggested sequencing">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</button>
+<ol class="orb-sequencing-list" id="sample-sequencing-content">
+<li>
+<h4 contentEditable="false">Start with Charlie</h4>
+<p hidden="" contentEditable="false">Charlie’s direct work with Ryan and close relationships with all three founders make him the strongest first conversation. Give him a short walkthrough, get his read on the fit, and ask whether he would be comfortable introducing Orbiter.io to Ryan.</p>
+</li>
+<li hidden="">
+<h4 contentEditable="false">Bring Kyle in with context</h4>
+<p hidden="" contentEditable="false">After speaking with Charlie, ask Kyle who at Maximum Effort would be best placed to evaluate Orbiter.io. Share what is already in motion. If Charlie cannot make an introduction or the timing is uncertain, explore Kyle’s connection as the next route.</p>
+</li>
+<li hidden="">
+<h4 contentEditable="false">Coordinate one introduction</h4>
+<p hidden="" contentEditable="false">Agree on who will make the introduction and whether the first demo should be for Ryan or a member of the Maximum Effort team. Follow up through that connector and keep the other informed, so both relationships support one coordinated approach.</p>
+</li>
+</ol>
+</div>
+</section>
+<section class="orb-section sample-action-section" aria-labelledby="sample-action">
+<h3 class="orb-section-title" id="sample-action">
+<span class="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3>
+<div class="orb-actions">
+<div class="orb-action-group">
+<div class="orb-action">
+<p contentEditable="false">Reach out to Charlie Anderson about showing Ryan</p>
+<div class="orb-action-controls">
+<button class="orb-draft-button" type="button" id="sample-draft-charlie-email" aria-label="Draft email to Charlie Anderson" aria-expanded="false" aria-controls="sample-composer">DRAFT EMAIL</button>
+<button class="orb-collapse orb-action-toggle" type="button" aria-label="Show more actions for Charlie Anderson" aria-expanded="false" aria-controls="sample-actions-charlie">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</button>
+</div>
+</div>
+<div class="orb-action-options" id="sample-actions-charlie" hidden="">
+<div class="orb-action orb-action-option">
+<p>Text Charlie Anderson</p>
+<button class="orb-draft-button" type="button" id="sample-draft-charlie-sms" aria-label="Draft SMS to Charlie Anderson" aria-expanded="false" aria-controls="sample-composer">DRAFT SMS</button>
+</div>
+</div>
+</div>
+<div class="orb-action-group">
+<div class="orb-action">
+<p contentEditable="false">Reach out to Kyle Jackson about Maximum Effort</p>
+<div class="orb-action-controls">
+<button class="orb-draft-button" type="button" id="sample-draft-kyle-email" aria-label="Draft email to Kyle Jackson" aria-expanded="false" aria-controls="sample-composer">DRAFT EMAIL</button>
+<button class="orb-collapse orb-action-toggle" type="button" aria-label="Show more actions for Kyle Jackson" aria-expanded="false" aria-controls="sample-actions-kyle">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</button>
+</div>
+</div>
+<div class="orb-action-options" id="sample-actions-kyle" hidden="">
+<div class="orb-action orb-action-option">
+<p>Text Kyle Jackson</p>
+<button class="orb-draft-button" type="button" id="sample-draft-kyle-sms" aria-label="Draft SMS to Kyle Jackson" aria-expanded="false" aria-controls="sample-composer">DRAFT SMS</button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<button class="orb-more" type="button" aria-label="Edit opportunity" aria-pressed="false">•••</button>
+</article>
+<section class="orb-collapsed" aria-label="Seth Rogen / Point Grey Pictures opportunity">
+<button class="orb-summary" type="button" aria-expanded="false" aria-controls="sample-seth">
+<span>Seth Rogen / Point Grey Pictures</span>
+<span class="sample-arrow-circle">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</span>
+</button>
+<div class="orb-notes" id="sample-seth" hidden="">
+<label for="sample-notes-seth">Opportunity notes</label>
+<textarea id="sample-notes-seth" rows="3" placeholder="Add notes for Seth Rogen / Point Grey Pictures…">
+</textarea>
+</div>
+<button class="orb-more" type="button" aria-label="Edit Seth Rogen / Point Grey Pictures notes">•••</button>
+</section>
+<section class="orb-collapsed" aria-label="The Lighthouse opportunity">
+<button class="orb-summary" type="button" aria-expanded="false" aria-controls="sample-lighthouse">
+<span>The Lighthouse</span>
+<span class="sample-arrow-circle">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</span>
+</button>
+<div class="orb-notes" id="sample-lighthouse" hidden="">
+<label for="sample-notes-lighthouse">Opportunity notes</label>
+<textarea id="sample-notes-lighthouse" rows="3" placeholder="Add notes for The Lighthouse…">
+</textarea>
+</div>
+<button class="orb-more" type="button" aria-label="Edit The Lighthouse notes">•••</button>
+</section>
+<section class="orb-collapsed" aria-label="AI LA opportunity">
+<button class="orb-summary" type="button" aria-expanded="false" aria-controls="sample-aila">
+<span>AI LA</span>
+<span class="sample-arrow-circle">
+<span class="sample-chevron" aria-hidden="true">
+</span>
+</span>
+</button>
+<div class="orb-notes" id="sample-aila" hidden="">
+<label for="sample-notes-aila">Opportunity notes</label>
+<textarea id="sample-notes-aila" rows="3" placeholder="Add notes for AI LA…">
+</textarea>
+</div>
+<button class="orb-more" type="button" aria-label="Edit AI LA notes">•••</button>
+</section>
+<button class="sample-archive" type="button" aria-expanded="false" aria-controls="sample-archived">
+<span class="sample-chevron" aria-hidden="true">
+</span> ARCHIVED <span class="sample-archive-count">1</span>
+<span class="sample-archive-line">
+</span>
+</button>
+<p class="sample-empty" id="sample-archived" hidden="">No archived sample provided.</p>
+</div>
+</div>
+</div>
+</main>
+<script>
+const referenceDrafts = {
+  "charlie-email": {
+    "subject": "Showing Orbiter to Ryan",
+    "message": "Hey Charlie,\n\nWe’ve been thinking about how Orbiter could help the Maximum Effort team connect the dots across their relationships in entertainment, brands, and sports.\n\nGiven your work with Ryan, we’d love your take on whether it would be useful to show him what we’re building. Would you be up for a quick walkthrough first?\n\nThanks!"
+  },
+  "kyle-email": {
+    "subject": "Orbiter × Maximum Effort",
+    "message": "Hey Kyle,\n\nWe’re exploring how Orbiter could help Maximum Effort surface opportunities across the team’s relationships—from brand partnerships to entertainment and sports.\n\nI’d love your perspective on the fit and who at Maximum Effort would be best to speak with. Would you have time for a quick conversation?\n\nThanks!"
+  },
+  "charlie-sms": {
+    "message": "Hey Charlie! Could I give you a quick walkthrough of Orbiter.io? I’d love your take on whether it could be useful for Ryan and the Maximum Effort team."
+  },
+  "kyle-sms": {
+    "message": "Hey Kyle! I’d love your perspective on Orbiter.io for Maximum Effort. Who would be best to speak with on the team? Have a few minutes to catch up?"
+  }
 };
+// Plain JavaScript for the exported HTML. Drafts are local and are never sent.
+(() => {
+  const board = document.getElementById('orbiter-moonshot');
+  let activeDraft = null;
+  let draftTrigger = null;
+  const arrow = expanded => {
+    const span = document.createElement('span');
+    span.className = 'sample-chevron' + (expanded ? ' sample-chevron-up' : '');
+    span.setAttribute('aria-hidden', 'true');
+    return span;
+  };
+  const closeDraft = (restoreFocus = true) => {
+    document.getElementById('sample-composer')?.remove();
+    if (draftTrigger) {
+      draftTrigger.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) draftTrigger.focus();
+    }
+    activeDraft = null;
+    draftTrigger = null;
+  };
+  const openDraft = button => {
+    closeDraft(false);
+    const key = button.id.replace('sample-draft-', '');
+    const [personId, channel] = key.split('-');
+    const draft = referenceDrafts[key];
+    const name = board.querySelector('.orb-' + personId).closest('.orb-person').querySelector('h3').textContent;
+    activeDraft = key;
+    draftTrigger = button;
+    button.setAttribute('aria-expanded', 'true');
+    const composer = document.createElement('section');
+    composer.id = 'sample-composer';
+    composer.className = 'orb-composer';
+    composer.setAttribute('aria-labelledby', 'sample-composer-title');
+    composer.innerHTML = '<div class="orb-composer-heading"><h3 id="sample-composer-title"></h3><button class="orb-close" type="button" aria-label="Close draft">×</button></div>';
+    composer.querySelector('h3').textContent = (channel === 'sms' ? 'SMS to ' : 'Email to ') + name;
+    composer.querySelector('button').addEventListener('click', () => closeDraft());
+    const addField = (labelText, field, tag) => {
+      const label = document.createElement('label');
+      label.htmlFor = 'sample-' + field;
+      label.textContent = labelText;
+      const input = document.createElement(tag);
+      input.id = label.htmlFor;
+      input.value = draft[field] || '';
+      input.addEventListener('input', () => { draft[field] = input.value; });
+      composer.append(label, input);
+    };
+    if (channel === 'email') addField('Subject', 'subject', 'input');
+    addField('Message', 'message', 'textarea');
+    const footer = document.createElement('div');
+    footer.className = 'orb-composer-footer';
+    footer.innerHTML = '<button class="orb-copy" type="button">Copy draft</button><span class="orb-copy-status" role="status" aria-live="polite"></span>';
+    footer.querySelector('button').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText((channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message);
+        footer.querySelector('span').textContent = 'Draft copied.';
+      } catch {
+        composer.querySelector('textarea').focus();
+        composer.querySelector('textarea').select();
+        footer.querySelector('span').textContent = 'Message selected. Press ⌘C or Ctrl+C to copy.';
+      }
+    });
+    composer.append(footer);
+    board.querySelector('.sample-action-section').append(composer);
+    composer.querySelector('input, textarea').focus();
+  };
+  const togglePanel = button => {
+    const id = button.getAttribute('aria-controls');
+    const panel = document.getElementById(id);
+    if (!panel) return;
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(expanded));
+    button.querySelector('.sample-chevron')?.classList.toggle('sample-chevron-up', expanded);
+    if (id === 'sample-sequencing-content') {
+      panel.parentElement.dataset.expanded = String(expanded);
+      Array.from(panel.children).forEach((li, index) => {
+        li.hidden = !expanded && index > 0;
+        li.querySelector('p').hidden = !expanded;
+      });
+      button.setAttribute('aria-label', (expanded ? 'Collapse' : 'Expand') + ' suggested sequencing');
+      return;
+    }
+    panel.hidden = !expanded;
+    if (id === 'sample-trajectory-content') {
+      const names = Array.from(panel.querySelectorAll('.orb-trajectory-route h4')).map(el => el.textContent).join(' & ');
+      button.className = expanded ? 'orb-collapse orb-trajectory-toggle' : 'orb-trajectory-summary';
+      button.replaceChildren();
+      if (!expanded) {
+        const label = document.createElement('span');
+        label.textContent = names;
+        button.append(label);
+      }
+      const icon = document.createElement('span');
+      if (!expanded) icon.className = 'sample-arrow-circle';
+      icon.append(arrow(expanded));
+      button.append(icon);
+      button.setAttribute('aria-label', expanded ? 'Collapse trajectory' : 'Expand trajectory: ' + names);
+    } else if (id.startsWith('sample-actions-')) {
+      button.setAttribute('aria-label', button.getAttribute('aria-label').replace(/^(Show|Hide)/, expanded ? 'Hide' : 'Show'));
+      if (!expanded && activeDraft === id.replace('sample-actions-', '') + '-sms') closeDraft(false);
+    } else if (id === 'sample-main') {
+      button.setAttribute('aria-label', (expanded ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity');
+    }
+  };
+  board.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.classList.contains('orb-draft-button')) return openDraft(button);
+    if (button.hasAttribute('aria-controls')) return togglePanel(button);
+    if (!button.classList.contains('orb-more')) return;
+    const notes = button.closest('.orb-collapsed');
+    if (notes) {
+      const toggle = notes.querySelector('.orb-summary');
+      if (toggle.getAttribute('aria-expanded') !== 'true') togglePanel(toggle);
+      notes.querySelector('textarea').focus();
+      return;
+    }
+    const container = button.closest('.orb-person') || button.closest('.orb-opportunity');
+    const editing = button.getAttribute('aria-pressed') !== 'true';
+    container.querySelectorAll('[contenteditable]').forEach(el => { el.contentEditable = editing ? 'plaintext-only' : 'false'; });
+    button.setAttribute('aria-pressed', String(editing));
+    button.textContent = editing ? '✓' : '•••';
+    button.setAttribute('aria-label', button.getAttribute('aria-label').replace(/^(Edit|Finish editing)/, editing ? 'Finish editing' : 'Edit'));
+  });
+  board.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && event.target.closest('.orb-composer')) closeDraft();
+  });
+})();
+</script>
+</body>
+</html>
