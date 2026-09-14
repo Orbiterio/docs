@@ -4,7 +4,7 @@ export const SampleSuggestionData = () => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
   const [version, setVersion] = useState('earlier');
-  const [open, setOpen] = useState({ main: true, lighthouse: false, aila: false, archived: false });
+  const [open, setOpen] = useState({ main: true, lighthouse: false, aila: false, archived: false, sequencing: false });
   const [notes, setNotes] = useState({ lighthouse: '', aila: '' });
   const [data, setData] = useState({
     title: 'Ryan Reynolds / Maximum Effort',
@@ -229,7 +229,13 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
       #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
-      #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 18px 16px 38px; background:var(--orb-why); border:1px solid #304373; border-radius:5px; color:#e5e9f3; font-size:14px; line-height:22px; }
+      #orbiter-moonshot .orb-sequencing-panel { position:relative; }
+      #orbiter-moonshot .orb-sequencing-toggle { position:absolute; top:13px; right:14px; width:24px; height:24px; }
+      #orbiter-moonshot .orb-sequencing-toggle::before { content:''; position:absolute; inset:-10px; }
+      #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 54px 16px 38px; background:var(--orb-why); border:1px solid #304373; border-radius:5px; color:#e5e9f3; font-size:14px; line-height:22px; }
+      #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list { list-style:none; padding:13px 54px 13px 18px; }
+      #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list li { padding-left:0; }
+      #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list h4 { margin:0; }
       #orbiter-moonshot .orb-sequencing-list li { padding-left:4px; }
       #orbiter-moonshot .orb-sequencing-list li + li { margin-top:16px; }
       #orbiter-moonshot .orb-sequencing-list li::marker { color:#a8c5ff; font-weight:700; }
@@ -272,12 +278,15 @@ export const SampleSuggestionData = () => {
           </section>
           <section className="orb-section" aria-labelledby="sample-sequencing">
             <h3 className="orb-section-title" id="sample-sequencing"><span className="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
-            <ol className="orb-sequencing-list">
-              {data.sequencing.map(step => <li key={step.id}>
-                <h4 {...edit(step.title,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, title:value } : item) })))} />
-                <p {...edit(step.text,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, text:value } : item) })))} />
-              </li>)}
-            </ol>
+            <div className="orb-sequencing-panel" data-expanded={open.sequencing}>
+              <button className="orb-collapse orb-sequencing-toggle" type="button" aria-expanded={open.sequencing} aria-controls="sample-sequencing-content" aria-label={(open.sequencing ? 'Collapse' : 'Expand') + ' suggested sequencing'} onClick={() => toggle('sequencing')}>{arrow(open.sequencing)}</button>
+              <ol className="orb-sequencing-list" id="sample-sequencing-content">
+                {data.sequencing.map((step,index) => <li key={step.id} hidden={!open.sequencing && index > 0}>
+                  <h4 {...edit(step.title,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, title:value } : item) })))} />
+                  <p hidden={!open.sequencing} {...edit(step.text,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, text:value } : item) })))} />
+                </li>)}
+              </ol>
+            </div>
           </section>
           <section className="orb-section sample-action-section" aria-labelledby="sample-action"><h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3><div className="orb-actions">{['charlie','kyle'].map((id,index) => <div className="orb-action" key={id}><p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} /><button className="orb-draft-button" type="button" id={'sample-draft-' + id} aria-expanded={activeDraft === id} aria-controls="sample-composer" onClick={() => { setActiveDraft(id); setCopyStatus(''); }}>DRAFT EMAIL</button></div>)}</div>
             {activeDraft && <section className="orb-composer" id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}><div className="orb-composer-heading"><h3 id="sample-composer-title">Draft to {activeDraft === 'charlie' ? 'Charlie Anderson' : 'Kyle Jackson'}</h3><button type="button" className="orb-close" aria-label="Close email draft" onClick={closeDraft}>×</button></div><label htmlFor="sample-subject">Subject</label><input id="sample-subject" value={drafts[activeDraft].subject} onChange={event => setDraft('subject',event.target.value)} /><label htmlFor="sample-message">Message</label><textarea id="sample-message" value={drafts[activeDraft].message} onChange={event => setDraft('message',event.target.value)} /><div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div></section>}
