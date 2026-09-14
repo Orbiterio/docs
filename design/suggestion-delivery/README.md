@@ -4,6 +4,8 @@ The Leverage Loop prototype runs separately at http://localhost:3003 with `npm r
 
 Both prototypes use `SuggestionStyles.jsx` and the Midnight tokens in `palettes.js`; Outcome on port 3002 is the design reference for shared spacing, type, borders, colors, and controls.
 
+The Mintlify `Leverage Loop UI` page includes 11 captured states. Email and introduction drafts use a right-aligned **Send** button; SMS drafts use **QRCODE**. These are preview controls without email or QR integrations. Run `npm run reference:leverage` after changes to regenerate the standalone HTML, the ZIP containing its five image assets, and the identical copyable block in the docs. The export uses `leverage-reference-runtime.js` for plain JavaScript interactions and is available locally at `http://localhost:3003/images/suggestion-delivery/leverage-loop-ui-reference.html`. Refresh screenshots separately when the UI changes.
+
 Editable reconstruction of the supplied current UI. The docs page is at `guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data.mdx`; it contains the current screenshot and the two original JSON payloads.
 
 Run this directory with:

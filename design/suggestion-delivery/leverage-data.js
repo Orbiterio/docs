@@ -20,7 +20,7 @@ export const leverageData = {
   ]
 };
 
-// Editable sample drafts; the local prototype only opens and copies text.
+// Editable sample drafts for local composer previews.
 export const leverageDrafts = {
   katelyn: {
     subject: 'An introduction to Ethan Jacks?',

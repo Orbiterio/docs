@@ -5,14 +5,14 @@ import { leverageData, leverageDrafts } from './leverage-data.js';
 
 const Arrow = ({ open }) => <span className={'sample-chevron' + (open ? ' sample-chevron-up' : '')} aria-hidden="true" />;
 const asset = name => '/assets/leverage-loop/' + name + '.png';
-const contactActions = [
+export const contactActions = [
   { key: 'email', name: 'Ethan Jacks', channel: 'email' },
   { key: 'sms', name: 'Ethan Jacks', channel: 'sms' },
   { key: 'katelyn-email', name: 'Katelyn Gallanty', channel: 'email' },
   { key: 'katelyn-sms', name: 'Katelyn Gallanty', channel: 'sms' }
 ];
 
-export const LeverageLoop = () => {
+export const LeverageLoop = ({ showControls = true } = {}) => {
   const [data, setData] = useState(leverageData);
   const [editing, setEditing] = useState(false);
   const [editingPerson, setEditingPerson] = useState(false);
@@ -34,10 +34,6 @@ export const LeverageLoop = () => {
   const closeDraft = () => { setActiveDraft(null); setCopyStatus(''); triggerRef.current?.focus(); };
   const toggleActions = () => { if (open.actions && activeDraft && activeDraft !== 'intro') { setActiveDraft(null); setCopyStatus(''); } toggle('actions'); };
   const setDraft = (key, value) => { setDrafts(previous => ({ ...previous, [draftKey]: { ...previous[draftKey], [key]: value } })); setCopyStatus(''); };
-  const copyDraft = async () => {
-    try { await navigator.clipboard.writeText((draft.subject ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus('Draft copied.'); }
-    catch { const message = document.getElementById('loop-message'); message?.focus(); message?.select(); setCopyStatus('Message selected. Press ⌘C or Ctrl+C to copy.'); }
-  };
   return <div className="sample-suggestion-workspace not-prose">
     <SuggestionStyles />
     <style>{`
@@ -55,15 +51,17 @@ export const LeverageLoop = () => {
       #orbiter-moonshot .loop-draft-stages button { border:1px solid #354668; border-radius:5px; background:#0e1727; color:var(--orb-muted); padding:7px 11px; font-size:12px; }
       #orbiter-moonshot .loop-draft-stages button[aria-pressed="true"] { color:var(--orb-action-accent); border-color:var(--orb-action-border); background:var(--orb-action); }
       #orbiter-moonshot .loop-draft-hint { color:var(--orb-muted); font-size:13px; line-height:20px; }
+      #orbiter-moonshot .loop-email-footer { justify-content:flex-end; }
+      #orbiter-moonshot .loop-send { margin-left:auto; border-color:var(--orb-action-border); background:var(--orb-action-button); color:var(--orb-action-accent); }
       #orbiter-moonshot button:focus-visible { outline:2px solid var(--orb-why-accent); outline-offset:3px; }
       #orbiter-moonshot input:focus-visible, #orbiter-moonshot textarea:focus-visible { outline:2px solid var(--orb-why-accent); outline-offset:2px; }
       @media(max-width:700px) { #orbiter-moonshot .loop-context { align-items:flex-start; padding:2px 2px 12px; } }
     `}</style>
-    <div className="sample-suggestion-toolbar" aria-label="Leverage Loop design controls">
+    {showControls && <div className="sample-suggestion-toolbar" aria-label="Leverage Loop design controls">
       <span className="sample-palette-name">Palette: {defaultPalette.name}</span>
       <a href="http://localhost:3002/" target="_blank" rel="noreferrer">Outcome design</a>
       <button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingPerson(false); }}>{editing ? 'Done editing' : 'Edit content'}</button>
-    </div>
+    </div>}
     <div id="orbiter-moonshot" style={defaultPalette.colors} aria-label="Leverage Loop suggestion board"><div className="orb-frame">
       <div className="loop-context"><img src={asset('katelyn')} alt="Katelyn Gallanty" /><p>Find people in my network to introduce to <strong>Katelyn Gallanty</strong></p></div>
       <article className="orb-opportunity">
@@ -90,13 +88,13 @@ export const LeverageLoop = () => {
             <h3 className="orb-section-title" id="loop-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3>
             <div className="orb-actions"><div className="orb-action-group">
               <div className="orb-action"><p {...edit(data.action, value => setField('action', value))} /><div className="orb-action-controls">
-                <button className="orb-draft-button" type="button" aria-label="Make introduction" aria-expanded={activeDraft === 'intro'} aria-controls="loop-composer" onClick={event => openDraft('intro', event)}>MAKE INTRO</button>
+                <button className="orb-draft-button" type="button" data-draft="intro" aria-label="Make introduction" aria-expanded={activeDraft === 'intro'} aria-controls="loop-composer" onClick={event => openDraft('intro', event)}>MAKE INTRO</button>
                 <button className="orb-collapse orb-action-toggle" type="button" aria-label={(open.actions ? 'Hide' : 'Show') + ' more actions for Ethan Jacks'} aria-expanded={open.actions} aria-controls="loop-action-options" onClick={toggleActions}><Arrow open={open.actions} /></button>
               </div></div>
               <div className="orb-action-options" id="loop-action-options" hidden={!open.actions}>
                 {contactActions.map(action => <div className="orb-action orb-action-option" key={action.key}>
                   <p>{action.channel === 'sms' ? 'Text' : 'Email'} {action.name}</p>
-                  <button className="orb-draft-button" type="button" aria-label={'Draft ' + (action.channel === 'sms' ? 'SMS' : 'email') + ' to ' + action.name} aria-expanded={activeDraft === action.key} aria-controls="loop-composer" onClick={event => openDraft(action.key, event)}>{action.channel === 'sms' ? 'DRAFT SMS' : 'DRAFT EMAIL'}</button>
+                  <button className="orb-draft-button" type="button" data-draft={action.key} aria-label={'Draft ' + (action.channel === 'sms' ? 'SMS' : 'email') + ' to ' + action.name} aria-expanded={activeDraft === action.key} aria-controls="loop-composer" onClick={event => openDraft(action.key, event)}>{action.channel === 'sms' ? 'DRAFT SMS' : 'DRAFT EMAIL'}</button>
                 </div>)}
               </div>
             </div></div>
@@ -107,7 +105,7 @@ export const LeverageLoop = () => {
                 {draft.subject !== undefined && <><label htmlFor="loop-subject">Subject</label><input id="loop-subject" autoFocus value={draft.subject} onChange={event => setDraft('subject', event.target.value)} /></>}
                 <label htmlFor="loop-message">Message</label><textarea id="loop-message" autoFocus={draft.subject === undefined} value={draft.message} onChange={event => setDraft('message', event.target.value)} />
               </div>
-              <div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div>
+              <div className="orb-composer-footer loop-email-footer"><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span><button className="orb-copy loop-send" type="button" onClick={() => setCopyStatus(draft.subject !== undefined ? 'Email sending isn’t connected in this prototype.' : 'QR code generation isn’t connected in this prototype.')}>{draft.subject !== undefined ? 'Send' : 'QRCODE'}</button></div>
             </section>}
           </section>
         </div>
