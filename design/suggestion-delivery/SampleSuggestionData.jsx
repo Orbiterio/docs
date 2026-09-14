@@ -4,7 +4,7 @@ export const SampleSuggestionData = () => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
   const [version, setVersion] = useState('earlier');
-  const [open, setOpen] = useState({ main: true, seth: false, lighthouse: false, aila: false, archived: false, sequencing: false });
+  const [open, setOpen] = useState({ main: true, seth: false, lighthouse: false, aila: false, archived: false, trajectory: false, sequencing: false });
   const [notes, setNotes] = useState({ seth: '', lighthouse: '', aila: '' });
   const [data, setData] = useState({
     title: 'Ryan Reynolds / Maximum Effort',
@@ -240,6 +240,13 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-section { margin-top:10px; }
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
+      #orbiter-moonshot .orb-trajectory-panel { position:relative; }
+      #orbiter-moonshot .orb-trajectory-summary { display:flex; align-items:center; justify-content:space-between; gap:14px; width:100%; padding:12px 14px; color:#f1f3f8; background:var(--orb-trajectory); border:1px solid #2e3c64; border-radius:5px; text-align:left; font-size:14px; line-height:22px; font-weight:700; }
+      #orbiter-moonshot .orb-trajectory-summary .sample-arrow-circle { flex:none; }
+      #orbiter-moonshot .orb-trajectory-toggle { position:absolute; top:10px; right:14px; }
+      #orbiter-moonshot .orb-trajectory-toggle::before { content:''; position:absolute; inset:-8px; }
+      #orbiter-moonshot .orb-trajectory-summary:focus-visible, #orbiter-moonshot .orb-trajectory-toggle:focus-visible { outline:2px solid #a8c5ff; outline-offset:3px; }
+      #orbiter-moonshot .orb-trajectory-route:first-child h4 { padding-right:42px; }
       #orbiter-moonshot .orb-trajectory-route + .orb-trajectory-route { margin-top:18px; }
       #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
       #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
@@ -290,13 +297,21 @@ export const SampleSuggestionData = () => {
           <section className="orb-section" aria-labelledby="sample-why"><h3 className="orb-section-title" id="sample-why"><span className="sample-label-icon" aria-hidden="true">✧</span> WHY</h3><div className="orb-why-box"><h4 className="orb-why-headline" {...edit(data.why.headline,value => setData(previous => ({ ...previous, why:{ ...previous.why, headline:value } })))} />{data.why[version].map((paragraph,index) => <p key={version + index} {...edit(paragraph,value => setData(previous => ({ ...previous, why:{ ...previous.why, [version]:previous.why[version].map((item,position) => position === index ? value : item) } })))} />)}</div></section>
           <section className="orb-trajectory-section" aria-labelledby="sample-trajectory">
             <h3 className="orb-section-title" id="sample-trajectory"><span className="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3>
-            <div className="orb-trajectory-note">
-              {data.trajectory.map(route => <section className="orb-trajectory-route" key={route.id} aria-labelledby={'sample-route-' + route.id}>
-                <h4 id={'sample-route-' + route.id} {...edit(route.title,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, title:value } : item) })))} />
-                <p {...edit(route.text,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, text:value } : item) })))} />
-              </section>)}
+            <div className="orb-trajectory-panel">
+              <button className={open.trajectory ? 'orb-collapse orb-trajectory-toggle' : 'orb-trajectory-summary'} type="button" aria-expanded={open.trajectory} aria-controls="sample-trajectory-content" aria-label={(open.trajectory ? 'Collapse trajectory' : 'Expand trajectory: ' + data.trajectory.map(route => route.title).join(' & '))} onClick={() => toggle('trajectory')}>
+                {!open.trajectory && <span>{data.trajectory.map(route => route.title).join(' & ')}</span>}
+                <span className={open.trajectory ? undefined : 'sample-arrow-circle'}>{arrow(open.trajectory)}</span>
+              </button>
+              <div id="sample-trajectory-content" hidden={!open.trajectory}>
+                <div className="orb-trajectory-note">
+                  {data.trajectory.map(route => <section className="orb-trajectory-route" key={route.id} aria-labelledby={'sample-route-' + route.id}>
+                    <h4 id={'sample-route-' + route.id} {...edit(route.title,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, title:value } : item) })))} />
+                    <p {...edit(route.text,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, text:value } : item) })))} />
+                  </section>)}
+                </div>
+                <div className="orb-connections">{data.people.slice(1).map(personCard)}</div>
+              </div>
             </div>
-            <div className="orb-connections">{data.people.slice(1).map(personCard)}</div>
           </section>
           <section className="orb-section" aria-labelledby="sample-sequencing">
             <h3 className="orb-section-title" id="sample-sequencing"><span className="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
