@@ -1,5 +1,9 @@
 # Suggestion delivery design
 
+The Leverage Loop prototype runs separately at http://localhost:3003 with `npm run dev:leverage`. `LeverageLoop.jsx` owns its interactions, and `leverage-data.js` contains the supplied Match Card copy plus editable sample drafts. Its five PNG assets were extracted from the supplied HTML without running the bundled scripts. The default view shows Ethan’s match and two collapsed matches for Rebekah and Bilawal. The primary introduction action opens three draft steps; its chevron reveals email and SMS alternatives. Edits are temporary and reset on refresh. `npm run build:leverage` bundles it into the ignored `.preview-leverage/` directory.
+
+Both prototypes use `SuggestionStyles.jsx` and the Midnight tokens in `palettes.js`; Outcome on port 3002 is the design reference for shared spacing, type, borders, colors, and controls.
+
 Editable reconstruction of the supplied current UI. The docs page is at `guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data.mdx`; it contains the current screenshot and the two original JSON payloads.
 
 Run this directory with:
