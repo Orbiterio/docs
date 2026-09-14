@@ -1,0 +1,436 @@
+---
+title: "Revised Projects, Tasks & Deals"
+sidebarTitle: "Revised Projects, Tasks & Deals"
+description: "Confirmed scope for projects, tasks, and user-defined deal pipelines on Go/AlloyDB, with Kanban views and agents helping move deals forward."
+icon: "diagram-project"
+---
+
+<Note>
+**Status: planned — September 9 scope, expanded September 14, 2026.** User-defined pipelines, stages, statuses, and AI-assisted deal progression are now confirmed scope. The eleven-table project/task model below is the September 9 baseline; the pipeline/deal extension still needs a field-level design. Defaults marked for design acceptance remain proposals. No implementation is claimed.
+</Note>
+
+Design a Go/AlloyDB workspace for nested projects, shared tasks, and deals moving through user-defined pipelines. Agents should do as much of the work to advance those deals as the user authorizes, with clear next steps, actionable recommendations, and a shared Kanban view.
+
+## Summary
+
+Build projects, tasks, and deal flow in `orbiter-backend` on Go/AlloyDB. The September 9 proposal places the project/task foundation in `projects.*`; extend that design to cover configurable pipelines, stages, statuses, deal records, and agent actions. Reuse existing users, personal/business organizations, teams, and delivery infrastructure. This is a scope and schema plan; product tables and implementation have not been built as part of this work.
+
+## Confirmed scope
+
+- Go / AlloyDB in `orbiter-backend`, not Xano or the Universe enrichment database.
+- Users and agents can create projects, nested subprojects, and tasks.
+- Every task belongs to exactly one project; no standalone tasks in V1.
+- Multiple assignees per task.
+- Tasks/subprojects inherit root-project visibility; no private or independently shared children.
+- A linked team grants accepted members collaboration access dynamically.
+- Agents create work when instructed and proactively research, prepare, and suggest next steps. Changes to existing work require user authorization; suggestions can be prepared without committing the user to action.
+- Target means a target completion date, distinct from a committed due date.
+
+### Confirmed September 14: pipelines and AI-assisted deal flow
+
+- Users can define pipelines with their own ordered stages and statuses, and define the suggested next steps and actions associated with moving deals forward.
+- Deals are the individual opportunities tracked through a pipeline. Provide the familiar **Kanban board**, with stages as columns and deals as cards, so users can see progress and manage the pipeline directly.
+- Make **AI agents central to progressing deals**. Agents should carry as much of the research, preparation, coordination, and authorized execution as possible, reducing the manual effort required from the user to move each deal through its pipeline.
+- For each active deal, agents should identify what would help it advance, explain why, propose concrete next steps and actions, and carry out the actions the user has authorized. Keep the current stage, status, blockers, proposed next step, and action outcomes visible.
+- Suggested next steps remain optional until adopted or authorized. Users can steer, edit, defer, or dismiss them; an ignored suggestion does not become an assigned task or an automatic stage change.
+
+## Pipeline and deal flow behavior
+
+A user defines the pipeline's stages, statuses, and what progress means. The Kanban board shows that shared state; the agent uses the same definitions to determine useful work for each deal. Stage and status choices are user-configurable product data. The fixed task statuses in the September 9 baseline below do not restrict deal-pipeline customization.
+
+The agent's work should include researching the deal and its relevant people or companies, finding missing information or useful connections, preparing outreach or meeting materials, suggesting follow-ups, and completing authorized actions. Each recommendation should connect a specific action to the deal's next milestone. When work is blocked, explain what is missing and what would unblock it.
+
+**Example:** in a fundraising pipeline, a deal in **Candidate** may need a relevant investor contact and an introduction. The agent can identify the contact, find an introduction route, prepare an introduction request, and carry out the authorized action. It then records the actual result and proposes advancement to **Outreach** when the pipeline's criteria are satisfied. Preparing a draft or displaying a suggestion alone does not establish that outreach occurred.
+
+Users and agents should work through the same deal actions and transition rules. Record who acted, what happened, the supporting evidence, and the resulting stage/status change. The existing authorization rules still govern changes to work and external actions; the aim is to maximize useful agent effort within those permissions.
+
+### Schema extension still to design
+
+The eleven tables below cover the September 9 project/task foundation. They do not yet define pipeline, stage/status, or deal storage, deal-linked suggestions/actions, or transition history. Those are now required parts of the scope, and their fields, relationships, access inheritance, and execution rules must be reconciled with the existing suggestion, activity, and retry model before implementation. The final table count is open.
+
+Use the nested [Projects, Tasks, Pipelines & Deals](/guides/open-work/roadmap/projects-tasks-pipelines-deals) page as prior design context. Its Xano table names and earlier scope decisions are not automatically adopted into this Go/AlloyDB revision.
+
+
+## Verified implementation context
+
+Backend review snapshot from September 9, 2026: commit `27253e6`, clean working tree. No existing project/task feature or corresponding tables found in the inspected migrations, feature tree, and schema map.
+
+- `migrations/20260514084912_users_001_init.sql`: local user IDs are UUID; WorkOS IDs are separate text identifiers. User timezone/settings fields already exist.
+- `migrations/20260514120000_organizations_001_init.sql`: UUID organizations, `is_personal`, and role/status memberships.
+- `internal/features/organizations/queries/organizations.sql`: personal org resolution and organization soft deletion.
+- `internal/features/organizations/service_membership_check.go`: active membership checker exists, but projects must ALSO reject deleted organizations and inactive users.
+- `migrations/20260527090000_teams_001_init.sql`: existing teams and team_member tables; separate from organizations.
+- `internal/features/teams/queries/teams.sql`: accepted membership is the right gate. Some existing member readers include pending/rejected users; do not use those for project authorization.
+- `migrations/20260630193757_organizations_002_scope_tables_org_id.sql`: existing organization_id is attribution/scoping, not a complete ACL. A team's attributed organization does not confer team membership.
+- `internal/features/collections/queries/collections.sql`: useful sharing precedent, but use live team membership rather than one-time per-user share fan-out.
+- `internal/features/notifications/worker.go`: current Knock delivery allows duplicate notifications on retries and skips/ACKs when unconfigured. EventID is traceability, not implemented dedupe.
+- `migrations/20260813160530_edgesync_001_sync_outbox.sql`: transactional outbox precedent, but this table is graph-specific and should not store project jobs.
+- HTTP composition actually mounts in `internal/app/api.go`; content wiring is `wire_content.go`, worker wiring is `wire_worker.go`/`worker.go`.
+- Repository conventions: UUIDv7 for new IDs, feature-owned migrations/sqlc, service-layer enums, WorkOS-verified user identity, typed errors, response envelopes, cursor pagination, and `*pub` feature boundaries.
+
+## Recommended defaults requiring design acceptance
+
+1. Native UUID foreign keys, serialized as JSON strings. Do not use WorkOS text IDs as local FKs.
+2. Separate immutable creator attribution, current owner, and visibility. Assignment never grants access.
+3. One optional team per root in V1. Accepted members are editors; accepted team admins are project admins. Multiple-team sharing can later use a join table.
+4. Organization grants are relational; `organization_ids` is a derived API array, not a second writable ACL.
+5. One shared task status for all assignees. An authorized editor/assignee can complete the shared task. Separate tasks model independent deliverables or sign-offs. The user chose multiple assignees but has not explicitly confirmed this completion rule.
+6. Date-only target/due fields in V1. Root IANA timezone determines when a due date becomes overdue: next local midnight, with calendar-aware DST handling. Exact-time deadlines are deferred; reminder schedules use TIMESTAMPTZ.
+7. Private by default: root owner and owning-organization administrators for recovery. Ordinary owning-org members only gain access when the organization is explicitly shared. Team linking and external organization sharing are explicit actions.
+8. No public/guest task access or autonomous agent mutation of existing work.
+9. Optional suggested next steps are not tasks or obligations. The user's request to rethink this distinction is confirmed; the two-kind suggestion lifecycle and personal response design below are proposed refinements, not yet separately approved.
+
+## Table design
+
+September 9 project/task baseline: eleven proposed tables. The first six model work/collaboration; the remaining five add advisory/change suggestions, personal suggestion responses, reminders, retry safety, and user controls. The eleventh table prevents one teammate's dismissal from removing a shared suggestion for everyone. The confirmed September 14 pipeline/deal scope extends this baseline; the following table list is not yet the complete revised schema. Build in slices.
+
+### 1. projects.projects
+
+A subproject is another project row, not another table.
+
+| Field | Type/default | Purpose |
+|---|---|---|
+| id | UUID PK | App-minted UUIDv7. |
+| parent_project_id | UUID nullable FK | Immediate parent; null for root. |
+| root_project_id | UUID required FK | Self for roots; server-maintained root for descendants. |
+| title | TEXT required | Nonblank name. |
+| description | TEXT nullable | Project context. |
+| success_criteria | TEXT nullable | What successful completion means. |
+| status | TEXT, planned | planned, active, on_hold, completed, canceled. |
+| priority | TEXT, normal | low, normal, high, urgent. |
+| owner_user_id | UUID nullable FK users | Accountable lead. Only root ownership is an access route; child leads get no extra permissions. |
+| owning_organization_id | UUID nullable FK organizations | Root-only ownership/recovery context; required by service when creating a root. |
+| team_id | UUID nullable FK teams | Root-only optional collaboration/access route. |
+| timezone | TEXT nullable | Validated IANA timezone, required on roots and inherited by children. |
+| target_date, due_date | DATE nullable | Desired finish and committed deadline. |
+| next_action | TEXT nullable | Current accepted next step. |
+| last_progress_at | TIMESTAMPTZ | Creation or last meaningful progress on this project; descendant progress is separately rolled up. |
+| agent_assistance_enabled | BOOLEAN, false | Root-only background suggestion opt-in; not mutation authority. |
+| agent_review_interval_hours | INTEGER nullable | Root-level bounded evaluation cadence. |
+| next_agent_review_at | TIMESTAMPTZ nullable | Root-level indexed scheduling state. |
+| created_by_user_id | UUID nullable FK users | Immutable initiating human, including on-behalf-of agent creation; server-derived. |
+| created_by_agent_key | TEXT nullable | Trusted stable application agent identity, not a credential. |
+| created_by_agent_run_id | TEXT nullable | Agent invocation correlation. |
+| created_at, updated_at | TIMESTAMPTZ | Standard timestamps. |
+| completed_at, archived_at | TIMESTAMPTZ nullable | Actual lifecycle timestamps; archive is separate from status. |
+| version | BIGINT, 1 | Optimistic domain-edit version. |
+
+Store root-only settings once. Child API responses can expose resolved inherited values, but clients cannot set separate child organization/team/timezone settings.
+
+Use unique `(id, root_project_id)` plus composite FK `(parent_project_id, root_project_id)` to keep parent/root consistent. Enforce root self-identity and shape structurally. Prevent cycles transactionally under root-scoped serialization; a self-FK alone cannot prevent cycles.
+
+Meaningful progress means an explicit progress update, accepted deliverable, or actual advancement toward completion. Scheduling scans, suggestions, reminder sends, sharing, reassignment, priority edits, and deadline edits do not refresh last_progress_at. All domain edits increment version/updated_at; operational scan/scheduling updates do not. Task/project progress rollups must preserve that distinction.
+
+### 2. projects.tasks
+
+| Field | Type/default | Purpose |
+|---|---|---|
+| id | UUID PK | UUIDv7. |
+| project_id | UUID required FK | Exactly one parent project; resolve root through it. |
+| title | TEXT required | Concrete work item. |
+| description | TEXT nullable | Instructions/context. |
+| acceptance_criteria | TEXT nullable | Definition of done. |
+| status | TEXT, todo | todo, in_progress, blocked, in_review, done, canceled. |
+| priority | TEXT, normal | low, normal, high, urgent. |
+| target_date, due_date | DATE nullable | Desired and committed dates. |
+| estimated_minutes | INTEGER nullable | Nonnegative estimate, not fabricated agent output. |
+| next_action | TEXT nullable | Specific accepted next action. |
+| blocked_reason | TEXT nullable | Required for manually setting blocked. |
+| blocked_at | TIMESTAMPTZ nullable | Beginning of current manual block. |
+| next_check_in_at | TIMESTAMPTZ nullable | Agreed follow-up, distinct from due date. |
+| last_progress_at | TIMESTAMPTZ | Meaningful accepted progress, not agent activity. |
+| completion_summary | TEXT nullable | What was delivered; evidence can accompany completion activity. |
+| created_by_user_id | UUID nullable FK | Server-derived initiating human. |
+| created_by_agent_key, created_by_agent_run_id | TEXT nullable | Creation provenance. |
+| created_at, updated_at | TIMESTAMPTZ | Standard timestamps. |
+| started_at, completed_at, archived_at | TIMESTAMPTZ nullable | Actual lifecycle times. |
+| version | BIGINT, 1 | Incremented for task edits AND assignment/dependency changes. |
+
+Do not duplicate organization_ids/team_id here or store an assignee array. Derive is_overdue, staleness, readiness, and project progress rather than maintaining competing truth. Unfinished dependencies may make is_blocked true without rewriting manual task status; explain both manual and dependency blockers in the response.
+
+### 3. projects.project_organization_access
+
+Root grants to either personal or business organizations:
+
+- id UUID PK
+- root_project_id UUID FK projects (service validates it is a root)
+- organization_id UUID FK organizations
+- role TEXT: viewer or editor
+- granted_by_user_id UUID nullable FK users
+- created_at, updated_at TIMESTAMPTZ
+- Unique `(root_project_id, organization_id)` and reverse organization/root index.
+
+Only project admins manage grants. Resolve active memberships in non-deleted organizations dynamically. Empty grants never mean public. A personal-org grant shares through that personal tenant; a business-org grant intentionally reaches all its active members. Return organization_ids as a derived list of these rows. Do not silently add the team's attributed organization.
+
+### 4. projects.task_assignees
+
+- id UUID PK
+- task_id UUID FK tasks
+- user_id UUID FK users
+- assigned_by_user_id UUID nullable FK users
+- assigned_by_agent_key TEXT nullable
+- assigned_at TIMESTAMPTZ
+- Unique `(task_id, user_id)`; reverse `(user_id, task_id)` index.
+
+Zero rows means unassigned. Validate every assignee is an active Orbiter user with effective editor access. Multiple assignees share one task status; no per-assignee completion workflow in V1. Assignment never creates visibility.
+
+On membership loss, access stops immediately even if an assignment row remains for accountability. Authorized viewers see the assignee as ineligible, that user receives no reminders, and the agent can propose reassignment. User deletion removes only this pure link; changes are recorded in activity.
+
+### 5. projects.task_dependencies
+
+- id UUID PK
+- task_id UUID FK: dependent
+- depends_on_task_id UUID FK: prerequisite
+- created_by_user_id UUID nullable FK users
+- created_at TIMESTAMPTZ
+- Unique `(task_id, depends_on_task_id)` and reverse prerequisite index; reject self-reference.
+
+Finish-to-start only, within the same root. Validate a DAG under root-scoped serialization, including concurrent opposite-edge inserts. An unfinished prerequisite blocks completion, not reading/discussion. Canceled prerequisites do not count as success: remove/replace the dependency explicitly and audit the reason.
+
+### 6. projects.work_activity
+
+Append-only domain history, including short progress comments:
+
+- id UUID PK, project_id UUID FK, task_id UUID nullable FK
+- event_type TEXT: created, status_changed, assigned/unassigned, dates_changed, progress_update, dependency_added/removed, access_changed, suggestion_adopted/resolved/withdrawn, archived/reopened, etc. Personal views, saves, snoozes, and dismissals stay out of shared activity.
+- actor_type TEXT: user, agent, system
+- actor_user_id UUID nullable FK: human actor/delegating principal
+- agent_key, agent_run_id TEXT nullable; command_id UUID nullable receipt reference
+- entity_version BIGINT nullable
+- body TEXT nullable; payload JSONB with validated field changes, explanation, and bounded source references
+- created_at TIMESTAMPTZ
+
+Commit activity with the domain change. Enforce task/project consistency with composite keys where applicable. History is not a replacement for current-state tables or a raw LLM transcript. Activity inherits current root access; detailed admin/ACL events remain admin-visible only.
+
+Evidence references grant no access to source files, notes, email, or entities. Agent inputs require delegating-user authorization, and persisted shared content must be appropriate for the root audience. Do not paste private source content into broadly visible suggestions/activity. A dedicated attachments/context-link table is deferred.
+
+### 7. projects.agent_suggestions
+
+Recommended refinement after the scope review requested optional suggested next steps: a suggestion is a possibility, not a commitment or an approval the user owes the system. Keep advisory next steps distinct from exact requests to change existing work, without creating two separate recommendation systems.
+
+- id UUID PK, project_id UUID FK, task_id UUID nullable FK (context, not a generated task)
+- kind TEXT: next_step or change_request
+- suggestion_type TEXT: reach_out, gather_information, clarify_next_action, unblock, assign/reassign, change_dates, reprioritize, request_update, propose_completion
+- title, rationale TEXT; description and expected_benefit TEXT nullable
+- suggested_for_user_id UUID nullable FK: routing relevance only, not assignment or a private ACL
+- action_type TEXT nullable: create_task, update_task, update_project, link_existing_task; null for advice without an executable command
+- action_payload JSONB nullable: typed editable task seed or exact allowlisted change, never arbitrary SQL/scripts/unrestricted patches; required when action_type is executable
+- suggested_due_date DATE nullable: optional recommendation, never a committed deadline or an overdue clock
+- estimated_effort_minutes INTEGER nullable: explicitly labeled estimate, with agent provenance, not a promise
+- evidence_refs JSONB: bounded permitted source IDs and versions
+- trigger_type TEXT and context_fingerprint TEXT: explain why now and which relevant facts support the recommendation
+- agent_key, agent_run_id, policy_version TEXT; model_key TEXT nullable
+- on_behalf_of_user_id UUID nullable FK; must identify an active authorized delegating principal for generation and execution
+- based_on_version, based_on_root_version BIGINT nullable for advice, required where an executable existing-record change depends on them; bounded related-entity versions as appropriate
+- dedupe_key TEXT: stable normalized intent identity within the root, based on action/target, not prose wording
+- confidence NUMERIC nullable, validated 0..1; optional internal quality signal, never authority
+- status TEXT: open, adopted, resolved, expired, superseded, withdrawn
+- version BIGINT for concurrent adoption/withdrawal and content changes
+- created_at, updated_at TIMESTAMPTZ; expires_at TIMESTAMPTZ nullable (opportunity validity, not user obligation)
+- adopted_at TIMESTAMPTZ nullable, adopted_by_user_id UUID nullable FK, adoption_type TEXT nullable: created_task, linked_task, applied_change
+- result_task_id UUID nullable FK: created/linked task; applied_activity_id UUID nullable FK: accepted state change
+- resolved_at TIMESTAMPTZ nullable, resolved_by_user_id UUID nullable FK, resolution_reason TEXT nullable; resolution_source TEXT nullable: user_report or verified_event
+- supersedes_suggestion_id UUID nullable FK for replacement lineage
+
+A recommendation card explains the next step, why now, expected benefit, and permitted evidence. Human actions are explicit:
+
+- **Make a task:** open an editable task seed, let the user confirm title/project/assignees/dates, then atomically create one task and mark the suggestion adopted. V1 conversion produces one task per suggestion. Candidate advice with no seed can still open a manual task form. Creating a task is not completing the suggested action.
+- **Apply change:** only for an exact typed change_request, preview the change and execute under ordinary authorization and version checks. No generic ambiguous Accept button.
+- **Link existing task:** adoption can point to work already tracking the outcome, avoiding duplicates.
+- **Save, snooze, dismiss, or do nothing:** personal choices in suggestion_user_state; none creates a task, changes a deadline, updates last_progress_at, or obliges the user to follow up.
+- **Already handled:** an authorized editor can resolve the shared suggestion with user-reported evidence. It does not mark a task done. A viewer can instead leave personal already_done feedback. Automated global resolution requires a verified canonical event; an LLM guess only prompts confirmation.
+- **Withdraw for everyone:** explicit admin action, not the side effect of one user's dismissal.
+
+A global status stays open when one person saves/snoozes/dismisses it. Adoption means a task was created/linked or a change applied, not that the real-world outcome succeeded. Linked task status is read from the task; don't duplicate execution/completion state in suggestions. Opportunity expiration is not overdue work.
+
+Adoption is one transaction checking current permissions, shared suggestion state/version, affected record versions, expiration, assignee eligibility, and semantic relevance. Lock/CAS the suggestion as well as using command receipts so two different users/keys cannot create two tasks from the same suggestion. Stale exact changes must be refreshed rather than overwritten. Unrelated edits need not invalidate useful advice, but the current task seed must always be validated. Record any user edits to the seed in the adoption activity; attribution distinguishes the suggesting agent from the human command that creates the task. An agent cannot approve itself or treat saving as execution consent.
+
+No response means no response, not rejection, inability, or consent. Surface a small ranked set of useful opportunities rather than turning every generated idea into a backlog item. Repeated phrasing is not new information: dedupe by normalized intent, retain per-user suppression across equivalent regeneration, and re-surface only after explicit snooze expiry or a material contextual change with a fresh why-now explanation. Re-surfacing in the UI does not automatically authorize a notification. User feedback helps relevance, but dismissal/ignored impressions are not employee performance metrics.
+
+### 8. projects.followups
+
+One durable notification/reminder occurrence per recipient:
+
+- id UUID PK, project_id UUID FK, task_id UUID nullable FK, suggestion_id UUID nullable FK
+- recipient_user_id UUID FK users
+- kind TEXT: assignment, due_soon, overdue, check_in, blocked_too_long, suggestion_ready, suggestion_reminder
+- scheduled_for, available_at TIMESTAMPTZ
+- status TEXT: pending, processing, sent, canceled, failed
+- dedupe_key TEXT UNIQUE: stable occurrence identity, unchanged on retry
+- basis_version BIGINT nullable, basis_due_date DATE nullable: semantic scheduling basis
+- attempts INTEGER; locked_until TIMESTAMPTZ nullable; lock_token UUID nullable
+- last_error TEXT nullable and sanitized; provider_message_id TEXT nullable
+- sent_at TIMESTAMPTZ nullable; created_at, updated_at TIMESTAMPTZ
+
+Create event-triggered rows in the domain transaction. A bounded periodic scanner creates date/check-in/staleness occurrences idempotently. Claim with row locks/SKIP LOCKED and expiring fenced leases, then send outside the DB transaction. Reclaim expired attempts without creating a new occurrence.
+
+Immediately before sending, recheck current access, active user, assignee eligibility, completion/archive/root-pause state, semantic schedule basis, mute, quiet hours, and cooldown. Cancel obsolete rows; an unrelated version change must not suppress a valid due reminder. Route task reminders to eligible assignees; use eligible owner/admin fallback for unassigned work, not whole organizations.
+
+Suggestions are primarily pull-based cards or an opted-in digest, not automatically one notification per generated idea. Optional ideas never get overdue/escalation reminders. A saved or ignored suggestion does not schedule a follow-up; a snooze re-surfaces it in the UI, with a reminder only if explicitly requested. Add `suggestion_reminder` as a distinct follow-up kind for that opt-in. Recheck suggestion global validity and the recipient's personal state at send time; cancel on adoption, resolution, expiry, supersession, withdrawal, or personal dismissal. An initial opted-in suggestion_ready digest and user-requested reminders share stable dedupe/cooldowns. Do not announce one user's private dismissal to the team.
+
+Add a synchronous notificationspub sender contract, implemented by notifications.Service and injected by app wiring. This lets the projects worker authorize just before dispatch and record provider acceptance. Preserve the existing Pub/Sub invite path initially. Extend the Knock client with a backward-compatible idempotent trigger method only after verifying its documented provider contract. DB dedupe alone does not ensure exactly-once delivery. If the provider cannot resolve the accepted-send/local-ack failure window, treat it as an explicit launch decision/blocker.
+
+sent_at means provider acceptance, not read receipt. Initial rollout is in-app; live sends and email/SMS are separately approved. Missing provider config leaves jobs pending/observable, never falsely sent. Project business logic stays in projects, delivery integration in notifications.
+
+### 9. projects.command_receipts
+
+Retry safety for creates and approval mutations:
+
+- id UUID PK
+- actor_key TEXT: verified user plus trusted agent identity when present; no secrets
+- owning_organization_id UUID nullable FK, root_project_id UUID nullable FK as applicable
+- operation, idempotency_key, request_hash TEXT
+- result_refs JSONB; created_at TIMESTAMPTZ
+- Unique `(actor_key, operation, idempotency_key)`; org/root scope belongs in request_hash.
+
+Receipt and result commit in the same transaction. Same key/body returns existing result IDs; changed body conflicts. Reauthorize before returning referenced resources. Retain receipts for the advertised retry lifetime and avoid silently re-enabling duplicate creation by premature purge. Expected-version protects concurrent edits; idempotency protects retries.
+
+### 10. projects.project_user_preferences
+
+Per-root/user reminder controls, NOT membership:
+
+- root_project_id UUID FK, user_id UUID FK, composite PK
+- reminders_enabled BOOLEAN; muted_until TIMESTAMPTZ nullable
+- quiet_hours_start, quiet_hours_end TIME nullable, both or neither
+- minimum_reminder_interval_hours INTEGER, bounded
+- created_at, updated_at TIMESTAMPTZ
+
+No row means documented defaults. Users edit only their own preferences and need project access. Reuse effective user timezone settings, falling back to project timezone. No watcher table in V1; notification audiences are assignees and accountable project leads/admins.
+
+### 11. projects.suggestion_user_state
+
+Separate the shared recommendation from each person's response. This is the one additional table recommended for collaborative optional next steps.
+
+- suggestion_id UUID FK, user_id UUID FK, composite PK
+- first_viewed_at TIMESTAMPTZ nullable: actual UI view, not notification delivery
+- disposition TEXT: undecided, saved, snoozed, dismissed
+- snoozed_until TIMESTAMPTZ nullable, required only while snoozed
+- feedback_reason TEXT nullable: not_relevant, wrong_timing, already_done, not_my_role, other
+- feedback_text TEXT nullable; created_at, updated_at TIMESTAMPTZ
+
+No row means no recorded interaction. Saving is a bookmark, not commitment. A snooze controls personal display; request a reminder separately if desired. Dismissal hides the recommendation for this user, not the team. Clearing a disposition is reversible while the global suggestion remains open. Global adoption/expiry/withdrawal overrides personal resurfacing; snoozing does not extend validity.
+
+These rows never grant access. Only the user may change their personal state; normal project readers, team admins, and generic root agents do not receive other users' private disposition/feedback. Server-side eligibility/ranking can respect personal suppression without disclosing reasons in shared activity. Global adopt/resolve/withdraw is separately authorized and audited. Cross-user privacy also applies to command result references and notification payloads.
+
+Index `(user_id, disposition, snoozed_until)` for personal queues, plus the composite PK. Match suppression through the stable suggestion intent when an equivalent row is regenerated, so paraphrasing or reissuing a suggestion cannot bypass dismissal. Do not infer that an unseen/ignored suggestion was rejected or that an adopted one was completed.
+
+## Access and lifecycle invariants
+
+Effective rights are the union of surviving routes, admin > editor > viewer:
+
+- Root owner: admin while active and an active member of the owning org.
+- Active owning-org owners/admins: admin/recovery. Ordinary owning-org members require a grant.
+- Linked team's accepted members: editor; accepted team admins: admin. They need not belong to the owning org.
+- Active members of explicitly shared personal/business orgs: viewer/editor as granted.
+- Creator attribution, assignments, child ownership, history authorship, and preferences: no independent rights.
+
+Admins manage sharing/team links, root ownership, archive and hierarchy moves. Editors create/edit work and assign eligible users. Viewers read only. Approving a suggestion requires the same permission as performing its command directly; agents never self-approve.
+
+Apply the same permission predicate to reads, lists, counts, rollups, search, agent inputs, and sends. Filter before pagination. Revocation removes that membership route immediately, although another intentional grant may remain. Pending/rejected team invitations and inactive organizations/users grant nothing.
+
+Nullable attribution/ownership user FKs use SET NULL. Pure assignment/membership links may cascade. Deleting a user/team/org must not cascade away shared work. Team deletion clears team_id/access; organization deletion removes its grants/ownership route without making content public. If no admin survives, preserve inaccessible content for explicit administrative ownership recovery, never guess an owner.
+
+Use archive rather than hard-delete endpoints in V1. Archived ancestors suppress descendant mutation/reminders without overwriting each child's independent archive state. Project completion is explicit, not auto-derived from counts; unfinished descendants must be addressed first. Reopen clears current completed_at while history preserves previous completion.
+
+Moves are within-root only, admin-only, transactionally cycle-checked. Cross-root moves/owning-org transfers are deferred because they change audiences, dependencies, evidence, and scheduled work.
+
+## Agent identity and example flow
+
+No general-purpose agent identity/delegation subsystem was found in the inspected backend. V1 uses trusted application-controlled agent entry points acting for a verified user under a specific instruction or explicit root assistance opt-in. Agent keys are server-trusted identity, not arbitrary JSON body claims. Human APIs retain RequireWorkOS/OrbiterUserID.
+
+The root owner is the delegating principal for opted-in background assistance. Revalidate each run; pause when delegation becomes ineligible until an admin chooses an eligible owner and re-enables assistance. Worker/database privileges do not bypass domain ACL. External agent credentials/delegations require a separate auth design.
+
+Example:
+1. User instructs creation; validate scope/assignees and commit work, receipt, activity, and required follow-ups atomically.
+2. Bounded scans derive deterministic due/stale/blocked/opportunity signals. Only opted-in roots receive bounded agent evaluation.
+3. Agent offers either optional advice with an explanation/expected benefit, or an exact typed change request with permitted evidence and versions. It does not populate tasks.next_action automatically.
+4. User may save, snooze, dismiss, ignore, make a task, link existing work, or approve the exact change. Only explicit adoption creates/links work or changes existing state; atomically recheck permissions, versions, relevance, and single-adoption constraints.
+5. Follow-up worker sends only currently relevant, authorized, non-muted occurrences, with provider-aware retry protection. Optional suggestions are not nagged or escalated for inactivity; reminders require the distinct opt-in rules above.
+
+## Indexes and validation
+
+- Projects: root/parent creation cursors, root owner/org/team lookups, active-root next_agent_review_at scan.
+- Tasks: project/status/creation cursor; partial open-work due_date, next_check_in_at, and last_progress_at indexes matched to real query shapes.
+- Access: root/org uniqueness plus org/root reverse lookup.
+- Assignees: task/user uniqueness and user/task reverse lookup.
+- Dependencies: task/prerequisite uniqueness and reverse prerequisite lookup.
+- Activity: project and task `(created_at DESC, id DESC)` timelines.
+- Suggestions: project/open timeline, expiration scan, open scoped intent-dedupe uniqueness, replacement lineage, and result-task lookup. Personal states: user/disposition/snooze scan plus suggestion/user PK. Suppression lookup follows stable intent across regenerated equivalents.
+- Follow-ups: occurrence uniqueness; pending `(available_at, id)` scan; expired processing lease lookup; recipient recent-sent lookup for throttling.
+- Receipts/preferences: uniqueness above.
+- Keyset pagination with deterministic ID tie-breaks; joins must not multiply rows for multiple grants/assignees.
+- Use structural/range constraints as appropriate. Repository policy forbids new DB enum CHECKs/native enums: canonical values and validation live in Go services, with plain-string OpenAPI descriptions.
+
+## Implementation steps
+
+1. Extend the September 9 baseline with the confirmed pipeline/deal scope: configurable stages/statuses, deal records, deal-linked next steps/actions, and transition history. Resolve their field-level relationships and access rules, plus the recommended shared-completion, root-admin, date-only, and single-team defaults, before building the revised schema.
+2. Build a projects feature and first six tables using `make migration name=projects_001_init`; write authorization/hierarchy/service tests first. No hand-chosen migration timestamps or changes to historic migrations.
+3. Implement transactional commands/activity, eligibility, root permissions, expected-version updates, archive, and paginated reads; add sqlc generation and additive depguard enforcement.
+4. Add command receipts, both suggestion kinds, suggestion_user_state, trusted internal agent methods, personal response endpoints, and explicit make-task/link-task/apply-change/resolve/withdraw commands. Test cross-user single adoption and private dispositions. No assumed external machine authentication.
+5. Add preferences, scheduling, durable follow-ups, notifications sender, and provider idempotency. Test send/crash windows before any live rollout.
+6. Wire API/worker through actual split composition roots; publish OpenAPI with endpoints. Keep domain logic out of app wiring.
+7. Verify locally/test-only, then request separate rollout approval. Production migrations, deployment, live sends, and provider configuration are separate implementation and rollout work.
+
+## Files to modify or add during later approved implementation
+
+New:
+- `internal/features/projects/{module,types,http_types,http_mappers,handler,service,repo}.go`, split by projects/tasks/access/assignments/dependencies/activity/suggestions/followups as needed.
+- `internal/features/projects/queries/*.sql`, generated `db/*`, colocated `*_test.go`; projectspub only when actually consumed cross-feature.
+- Timestamp-generated `migrations/*_projects_001_init.sql` and later projects-owned additive migrations.
+- `api/projects.openapi.yaml`, owning project and task routes together.
+
+Existing:
+- `sqlc.yaml`: projects block; generated output never edited by hand.
+- `.golangci.yml`: additive projects feature boundary, preserving all security/compliance controls.
+- `api/openapi.yaml`: references/tag/envelopes.
+- `internal/app/wire_content.go`, `internal/app/api.go`: construct/mount project HTTP module.
+- `internal/app/wire_worker.go`, `internal/app/worker.go`: scheduler and sender wiring.
+- `internal/features/notifications/module.go`, new notification service and notificationspub sender contract.
+- `internal/clients/knock/client.go`: additive idempotent trigger and HTTP contract tests, contingent on verified provider support.
+- Add narrow organizationspub/teamspub contracts only if needed beyond authorized ACL query joins; never import sibling internals or use any-status team readers as authorization.
+
+The file list above covers the September 9 project/task foundation. The revised implementation plan must also cover pipeline/deal storage and APIs, shared agent action paths, and the Kanban frontend. Scheduler infrastructure and provider configuration remain implementation work to assess against the existing worker lifecycle.
+
+## Verification
+
+- [ ] Users can create and configure pipelines, ordered stages, statuses, and associated next steps/actions; the Kanban board reflects the same deal state used by agents.
+- [ ] Agents identify useful work for each deal, prepare and execute authorized actions, record actual results, and propose evidence-supported progression; ignored suggestions and unfinished drafts do not advance a deal.
+
+- [ ] Private personal project; share to another personal org; business-org share; cross-org team.
+- [ ] Pending/rejected/accepted teams; active/inactive user/org membership; deleted org; revocation with/without another surviving grant.
+- [ ] Forged creator/org/agent claims rejected; creator/assignee/child-owner/preferences cannot bypass root ACL.
+- [ ] Root inheritance; child override rejection; self/cyclic/cross-root trees and dependencies rejected under concurrent writes.
+- [ ] Multiple/duplicate/zero/ineligible assignees; shared completion; revoked assignment suppresses reminders.
+- [ ] Blocked/canceled prerequisite behavior; status timestamps/reopen; archived ancestor; explicit project completion.
+- [ ] Target vs due, no dates, target-after-due surfaced as warning, local-midnight/DST, overnight quiet hours.
+- [ ] Scans/suggestions/reminders/administrative edits do not refresh meaningful progress or overwrite semantic versions.
+- [ ] Same retry returns same result; key/body mismatch conflicts; concurrent human/agent edits do not lose updates.
+- [ ] Adoption is atomic, authorized, versioned, validity-checked, and never agent-self-approved; source evidence cannot leak private information.
+- [ ] Advice may exist without an executable payload; ignore/save/snooze/dismiss changes no task, deadline, workload, or meaningful-progress timestamp.
+- [ ] One user's dismissal does not suppress teammates; private feedback is not exposed in shared activity, agents' root context, or notification payloads.
+- [ ] Two users adopting the same suggestion with different idempotency keys create only one task; retry/link-existing behavior remains correct.
+- [ ] Edited task seed is validated and attributed correctly; adoption is not completion; already-handled user reports do not falsely mark tasks done.
+- [ ] Equivalent regeneration respects prior suppression; expired/adopted suggestions cannot resurface or trigger reminders; ignored ideas are not treated as rejections or escalated.
+- [ ] Leases/fencing/reclaim, duplicate jobs, provider accepts then times out, crash before acknowledgment, obsolete schedules, task completion/reassignment, missing config, mute/cooldown, and authorization at send time.
+- [ ] Account/team/org deletion preserves shared content without broadening access.
+- [ ] Query plans/pagination are bounded and deduplicated.
+
+Commands for a later implementation (not run during this planning work):
+- `make sqlc-generate`
+- `go test ./internal/features/projects/ ./internal/features/notifications/ ./internal/clients/knock/`
+- Targeted DB integration tests on confirmed disposable fixtures; `make test-integration` only against test infrastructure.
+- `make test`, `make lint`, `go build ./cmd/api ./cmd/worker`
+- `npx @redocly/cli lint api/openapi.yaml` with the approved project tool version.
+- Additive migration testing only on explicitly approved local/test DBs; no reset/down against real data.
+
+## Risks and deferred scope
+
+Root inheritance intentionally excludes confidential child tasks. Dynamic membership means cached audience lists need revocation handling. Shared task status does not supply per-user sign-off. One team/root is deliberate V1 scope. Typed JSON is for bounded command/evidence/history payloads, not core permissions/state. Provider-aware dedupe is necessary; DB uniqueness alone is not exactly-once delivery. External agents require a separate delegation design.
+
+Defer recurrence, subtasks, multi-project tasks, advanced task-workflow customization, time tracking/billing, Gantt/critical-path automation, graph synchronization, attachment/chat systems, per-assignee completion, multiple teams/root, and exact-time deadlines. User-defined deal pipelines, stages, statuses, and agent-assisted progression are confirmed scope, not deferred custom-workflow work.
+
+## Source and related plans
+
+- [Saved scope session in Basic Memory](https://app.basicmemory.com/notes?id=cloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110%7Cf55832a8-76eb-4e87-b415-000fc9eb175c&explorer=project%3Acloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110) — September 9 planning session, `bitter-birthday`.
+- [Projects, Tasks, Pipelines & Deals](/guides/open-work/roadmap/projects-tasks-pipelines-deals) — the earlier August 11 scope for the Xano-based `df_*` model.
+- [Planned Work](/guides/open-work/roadmap) — parent index.
