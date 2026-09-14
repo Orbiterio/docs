@@ -40,5 +40,12 @@ export const leverageDrafts = {
   },
   sms: {
     message: 'Hi Ethan — would you be open to an introduction to Katelyn Gallanty? She helps founders raise capital at Grant Drive Group and is CFO of Orbiter.io. I see a useful fit with your M&A work at MediaBridge and potential for referrals both ways.'
+  },
+  'katelyn-email': {
+    subject: 'A potential referral partner: Ethan Jacks',
+    message: 'Hi Katelyn,\n\nI thought of you in connection with Ethan Jacks, co-founder and managing partner at MediaBridge Capital Advisors. He advises media and technology companies on M&A and exits.\n\nHis work could complement your fundraising work at Grant Drive Group, with opportunities to refer founders to one another as they move from raising capital to planning an exit. His network could also be relevant to Orbiter.io.\n\nWould you be interested in an introduction?'
+  },
+  'katelyn-sms': {
+    message: 'Hi Katelyn — would you be open to an introduction to Ethan Jacks at MediaBridge Capital Advisors? He advises media and tech companies on M&A and exits. I see a useful fit with your fundraising work and potential for referrals both ways.'
   }
 };

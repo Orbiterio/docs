@@ -5,6 +5,12 @@ import { leverageData, leverageDrafts } from './leverage-data.js';
 
 const Arrow = ({ open }) => <span className={'sample-chevron' + (open ? ' sample-chevron-up' : '')} aria-hidden="true" />;
 const asset = name => '/assets/leverage-loop/' + name + '.png';
+const contactActions = [
+  { key: 'email', name: 'Ethan Jacks', channel: 'email' },
+  { key: 'sms', name: 'Ethan Jacks', channel: 'sms' },
+  { key: 'katelyn-email', name: 'Katelyn Gallanty', channel: 'email' },
+  { key: 'katelyn-sms', name: 'Katelyn Gallanty', channel: 'sms' }
+];
 
 export const LeverageLoop = () => {
   const [data, setData] = useState(leverageData);
@@ -19,6 +25,7 @@ export const LeverageLoop = () => {
   const triggerRef = useRef(null);
   const draftKey = activeDraft === 'intro' ? introStep : activeDraft;
   const draft = drafts[draftKey];
+  const draftContact = contactActions.find(action => action.key === activeDraft);
   const toggle = key => setOpen(previous => ({ ...previous, [key]: !previous[key] }));
   const edit = (text, save, enabled = editing) => ({ children: text, contentEditable: enabled ? 'plaintext-only' : false, suppressContentEditableWarning: true, onBlur: event => { if (enabled) save(event.currentTarget.textContent); } });
   const setField = (key, value) => setData(previous => ({ ...previous, [key]: value }));
@@ -87,12 +94,14 @@ export const LeverageLoop = () => {
                 <button className="orb-collapse orb-action-toggle" type="button" aria-label={(open.actions ? 'Hide' : 'Show') + ' more actions for Ethan Jacks'} aria-expanded={open.actions} aria-controls="loop-action-options" onClick={toggleActions}><Arrow open={open.actions} /></button>
               </div></div>
               <div className="orb-action-options" id="loop-action-options" hidden={!open.actions}>
-                <div className="orb-action orb-action-option"><p>Email Ethan Jacks</p><button className="orb-draft-button" type="button" aria-label="Draft email to Ethan Jacks" aria-expanded={activeDraft === 'email'} aria-controls="loop-composer" onClick={event => openDraft('email', event)}>DRAFT EMAIL</button></div>
-                <div className="orb-action orb-action-option"><p>Text Ethan Jacks</p><button className="orb-draft-button" type="button" aria-label="Draft SMS to Ethan Jacks" aria-expanded={activeDraft === 'sms'} aria-controls="loop-composer" onClick={event => openDraft('sms', event)}>DRAFT SMS</button></div>
+                {contactActions.map(action => <div className="orb-action orb-action-option" key={action.key}>
+                  <p>{action.channel === 'sms' ? 'Text' : 'Email'} {action.name}</p>
+                  <button className="orb-draft-button" type="button" aria-label={'Draft ' + (action.channel === 'sms' ? 'SMS' : 'email') + ' to ' + action.name} aria-expanded={activeDraft === action.key} aria-controls="loop-composer" onClick={event => openDraft(action.key, event)}>{action.channel === 'sms' ? 'DRAFT SMS' : 'DRAFT EMAIL'}</button>
+                </div>)}
               </div>
             </div></div>
             {activeDraft && <section className="orb-composer" id="loop-composer" aria-labelledby="loop-composer-title" onKeyDown={event => { if (event.key === 'Escape') closeDraft(); }}>
-              <div className="orb-composer-heading"><h3 id="loop-composer-title">{activeDraft === 'intro' ? 'Double opt-in introduction' : (activeDraft === 'sms' ? 'SMS' : 'Email') + ' to Ethan Jacks'}</h3><button className="orb-close" type="button" aria-label="Close draft" onClick={closeDraft}>×</button></div>
+              <div className="orb-composer-heading"><h3 id="loop-composer-title">{activeDraft === 'intro' ? 'Double opt-in introduction' : (draftContact.channel === 'sms' ? 'SMS' : 'Email') + ' to ' + draftContact.name}</h3><button className="orb-close" type="button" aria-label="Close draft" onClick={closeDraft}>×</button></div>
               {activeDraft === 'intro' && <><div className="loop-draft-stages" role="group" aria-label="Introduction drafts">{[['katelyn', '1. Ask Katelyn'], ['ethan', '2. Ask Ethan'], ['introduction', '3. Introduction']].map(([key, label]) => <button type="button" key={key} aria-pressed={introStep === key} onClick={() => { setIntroStep(key); setCopyStatus(''); }}>{label}</button>)}</div><p className="loop-draft-hint">{introStep === 'introduction' ? 'Use this introduction after both Katelyn and Ethan agree to connect.' : 'Check with each person before making the introduction.'}</p></>}
               <div key={draftKey}>
                 {draft.subject !== undefined && <><label htmlFor="loop-subject">Subject</label><input id="loop-subject" autoFocus value={draft.subject} onChange={event => setDraft('subject', event.target.value)} /></>}
