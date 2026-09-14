@@ -22,7 +22,10 @@ export const SampleSuggestionData = () => {
         "They are also the sharpest possible stress test: if the graph holds across entertainment, consumer, sports, and venture in one org, it holds anywhere. And a Maximum Effort reference converts the entire media-operator ICP."
       ]
     },
-    trajectory: 'All three Orbiter.io Founders have close relationships with Charlie Anderson who has collaborated with Ryan many times. Kyle Jackson has relationship at Maximum Effort',
+    trajectory: [
+      { id:'charlie', title:'Through Charlie Anderson', text:'All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.' },
+      { id:'kyle', title:'Through Kyle Jackson', text:'Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.' }
+    ],
     actions: ['Reach out to Charlie Anderson about showing Ryan', 'Reach out to Kyle Jackson about Maximum Effort']
   });
   const [activeDraft, setActiveDraft] = useState(null);
@@ -217,6 +220,8 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-section { margin-top:10px; }
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
+      #orbiter-moonshot .orb-trajectory-route + .orb-trajectory-route { margin-top:18px; }
+      #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 5px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
       #orbiter-moonshot .sample-action-section .orb-section-title { margin-bottom:6px; }
       #orbiter-moonshot .orb-actions { gap:6px; }
@@ -244,7 +249,16 @@ export const SampleSuggestionData = () => {
         <div className="sample-content" id="sample-main" hidden={!open.main}>
           {personCard(data.people[0])}
           <section className="orb-section" aria-labelledby="sample-why"><h3 className="orb-section-title" id="sample-why"><span className="sample-label-icon" aria-hidden="true">✧</span> WHY</h3><div className="orb-why-box"><h4 className="orb-why-headline" {...edit(data.why.headline,value => setData(previous => ({ ...previous, why:{ ...previous.why, headline:value } })))} />{data.why[version].map((paragraph,index) => <p key={version + index} {...edit(paragraph,value => setData(previous => ({ ...previous, why:{ ...previous.why, [version]:previous.why[version].map((item,position) => position === index ? value : item) } })))} />)}</div></section>
-          <section className="orb-trajectory-section" aria-labelledby="sample-trajectory"><h3 className="orb-section-title" id="sample-trajectory"><span className="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3><p className="orb-trajectory-note" {...edit(data.trajectory,value => setField('trajectory',value))} /><div className="orb-connections">{data.people.slice(1).map(personCard)}</div></section>
+          <section className="orb-trajectory-section" aria-labelledby="sample-trajectory">
+            <h3 className="orb-section-title" id="sample-trajectory"><span className="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3>
+            <div className="orb-trajectory-note">
+              {data.trajectory.map(route => <section className="orb-trajectory-route" key={route.id} aria-labelledby={'sample-route-' + route.id}>
+                <h4 id={'sample-route-' + route.id} {...edit(route.title,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, title:value } : item) })))} />
+                <p {...edit(route.text,value => setData(previous => ({ ...previous, trajectory:previous.trajectory.map(item => item.id === route.id ? { ...item, text:value } : item) })))} />
+              </section>)}
+            </div>
+            <div className="orb-connections">{data.people.slice(1).map(personCard)}</div>
+          </section>
           <section className="orb-section sample-action-section" aria-labelledby="sample-action"><h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3><div className="orb-actions">{['charlie','kyle'].map((id,index) => <div className="orb-action" key={id}><p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} /><button className="orb-draft-button" type="button" id={'sample-draft-' + id} aria-expanded={activeDraft === id} aria-controls="sample-composer" onClick={() => { setActiveDraft(id); setCopyStatus(''); }}>DRAFT EMAIL</button></div>)}</div>
             {activeDraft && <section className="orb-composer" id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}><div className="orb-composer-heading"><h3 id="sample-composer-title">Draft to {activeDraft === 'charlie' ? 'Charlie Anderson' : 'Kyle Jackson'}</h3><button type="button" className="orb-close" aria-label="Close email draft" onClick={closeDraft}>×</button></div><label htmlFor="sample-subject">Subject</label><input id="sample-subject" value={drafts[activeDraft].subject} onChange={event => setDraft('subject',event.target.value)} /><label htmlFor="sample-message">Message</label><textarea id="sample-message" value={drafts[activeDraft].message} onChange={event => setDraft('message',event.target.value)} /><div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div></section>}
           </section>
