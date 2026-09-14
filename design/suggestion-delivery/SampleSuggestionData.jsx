@@ -26,6 +26,11 @@ export const SampleSuggestionData = () => {
       { id:'charlie', title:'Charlie Anderson', text:'All three Orbiter.io founders have close relationships with Charlie Anderson, the cinematographer for Ryan Reynolds’s Mint Mobile commercials produced by Maximum Effort. Charlie’s work with Ryan creates an opening to show how Orbiter.io could help the team connect opportunities across its relationships. Start by giving Charlie a walkthrough and asking whether he would be comfortable introducing the product to Ryan.' },
       { id:'kyle', title:'Kyle Jackson', text:'Kyle Jackson provides a separate route through his relationship at Maximum Effort. Ask Kyle who on the team is best placed to explore Orbiter.io and whether he can make an introduction. This route can open a conversation about how the company manages relationships across brand campaigns, entertainment, and sports.' }
     ],
+    sequencing: [
+      { id:'charlie-first', title:'Start with Charlie', text:'Charlie’s direct work with Ryan and close relationships with all three founders make him the strongest first conversation. Give him a short walkthrough, get his read on the fit, and ask whether he would be comfortable introducing Orbiter.io to Ryan.' },
+      { id:'kyle-next', title:'Bring Kyle in with context', text:'After speaking with Charlie, ask Kyle who at Maximum Effort would be best placed to evaluate Orbiter.io. Share what is already in motion. If Charlie cannot make an introduction or the timing is uncertain, explore Kyle’s connection as the next route.' },
+      { id:'coordinate', title:'Coordinate one introduction', text:'Agree on who will make the introduction and whether the first demo should be for Ryan or a member of the Maximum Effort team. Follow up through that connector and keep the other informed, so both relationships support one coordinated approach.' }
+    ],
     actions: ['Reach out to Charlie Anderson about showing Ryan', 'Reach out to Kyle Jackson about Maximum Effort']
   });
   const [activeDraft, setActiveDraft] = useState(null);
@@ -224,6 +229,11 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
       #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
+      #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 18px 16px 38px; background:var(--orb-why); border:1px solid #304373; border-radius:5px; color:#e5e9f3; font-size:14px; line-height:22px; }
+      #orbiter-moonshot .orb-sequencing-list li { padding-left:4px; }
+      #orbiter-moonshot .orb-sequencing-list li + li { margin-top:16px; }
+      #orbiter-moonshot .orb-sequencing-list li::marker { color:#a8c5ff; font-weight:700; }
+      #orbiter-moonshot .orb-sequencing-list h4 { margin:0 0 4px; color:#f1f3f8; font-size:14px; line-height:22px; font-weight:700; }
       #orbiter-moonshot .sample-action-section .orb-section-title { margin-bottom:6px; }
       #orbiter-moonshot .orb-actions { gap:6px; }
       #orbiter-moonshot .orb-action { padding:7px 14px; min-height:38px; font-size:13px; border-radius:5px; }
@@ -259,6 +269,15 @@ export const SampleSuggestionData = () => {
               </section>)}
             </div>
             <div className="orb-connections">{data.people.slice(1).map(personCard)}</div>
+          </section>
+          <section className="orb-section" aria-labelledby="sample-sequencing">
+            <h3 className="orb-section-title" id="sample-sequencing"><span className="sample-label-icon" aria-hidden="true">↳</span> SUGGESTED SEQUENCING</h3>
+            <ol className="orb-sequencing-list">
+              {data.sequencing.map(step => <li key={step.id}>
+                <h4 {...edit(step.title,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, title:value } : item) })))} />
+                <p {...edit(step.text,value => setData(previous => ({ ...previous, sequencing:previous.sequencing.map(item => item.id === step.id ? { ...item, text:value } : item) })))} />
+              </li>)}
+            </ol>
           </section>
           <section className="orb-section sample-action-section" aria-labelledby="sample-action"><h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3><div className="orb-actions">{['charlie','kyle'].map((id,index) => <div className="orb-action" key={id}><p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} /><button className="orb-draft-button" type="button" id={'sample-draft-' + id} aria-expanded={activeDraft === id} aria-controls="sample-composer" onClick={() => { setActiveDraft(id); setCopyStatus(''); }}>DRAFT EMAIL</button></div>)}</div>
             {activeDraft && <section className="orb-composer" id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}><div className="orb-composer-heading"><h3 id="sample-composer-title">Draft to {activeDraft === 'charlie' ? 'Charlie Anderson' : 'Kyle Jackson'}</h3><button type="button" className="orb-close" aria-label="Close email draft" onClick={closeDraft}>×</button></div><label htmlFor="sample-subject">Subject</label><input id="sample-subject" value={drafts[activeDraft].subject} onChange={event => setDraft('subject',event.target.value)} /><label htmlFor="sample-message">Message</label><textarea id="sample-message" value={drafts[activeDraft].message} onChange={event => setDraft('message',event.target.value)} /><div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div></section>}
