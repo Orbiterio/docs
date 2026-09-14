@@ -1,0 +1,74 @@
+---
+title: "Build Plan — Outcome Chat"
+description: "Step-by-step build scope for the outcome chat intake flow: first message to SUBMIT click."
+---
+
+<Info>
+**Scope:** only the turns from `"I want to buy a house in Costa Rica"` → user clicks **SUBMIT** (request persisted, `status=submitted`). Out of scope: working phase, results rendering, `leverage_outcome` beneficiary context, `serendipity`, file attach, pitch profiles, Phase II Universe payload, Phase III delivery formats.
+</Info>
+
+## The flow being built
+
+1. User clicks **+** → new outcome thread opens (OpenUI chat surface)
+2. Turn 1: user message → intake model calls `resolve_outcome` → `purchase_real_estate`, then speaks a one-sentence goal confirmation (required — routing turn must not end silent)
+3. Turns 2–N: `update_context` fills the class's slot schema; model streams OpenUI Lang (question + option components, or free-text prompt) rendered progressively
+4. Result-count gate: once slots are sufficient → "How many matches do you want?" (20 great / 100 broader / as many as you can find)
+5. Ready state → SUBMIT button enabled
+6. SUBMIT click → `submit_outcome_request` tool → Go dispatch endpoint → `suggestion_request` persisted, `status=submitted`, `request_id` returned
+7. Hard cap: no route after two intake turns → submit `confidence: low`
+
+## Steps
+
+### 0. Model eval (blocks step 5)
+
+| Task | Done when |
+| --- | --- |
+| TTFT test: `google/gemma-4-31b-it` (Cerebras-pinned) vs DeepSeek V4.1 Flash, reasoning off, realistic intake prompt (~6k tokens) | Decision recorded: two-tier vs single-model harness |
+
+### 1. Go — thread persistence tables (migration)
+
+| Task | Done when |
+| --- | --- |
+| `copilot` schema migration: `conversations` (id, user_id, mode, title, person_id, timestamps) + `messages` (id, conversation_id, role, `parts` jsonb, created_at). `parts` stores the full TanStack AI parts array — text, tool-call, tool-result — not plain content | `make migration name=copilot_001_init`; applied; goose version advances |
+
+### 2. Go — endpoints
+
+| Route | Purpose | Done when |
+| --- | --- | --- |
+| `POST /v1/copilot/threads/ensure` + `GET`/`POST /v1/copilot/threads/{id}/messages` | Thread load/save for the persistence middleware — **server-side thread store, client never supplies history** | Messages round-trip; parts JSONB preserved; ownership enforced |
+| `POST /v1/copilot/outcomes/drafts` | Create draft (`class_slug` optional, validated against registry) | Draft row in `suggestions.suggestion_request`, `status=draft` |
+| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Persist slot context + `number_of_results` (`update_context` calls this); `context_version` optimistic check | Context written; version conflict → 409 |
+| `POST /v1/copilot/outcomes/dispatch` | Owner + status guard → `status=submitted` (called by `submit_outcome_request`). **Phase I: no Universe call** | Status flips; request_id returned; double-submit → 409 |
+| Class registry | `class_slug` canonical set + `ValidClassSlug()` in `types.go` — all 26 slugs incl. `ask_back` | Invalid slug → `apperror.Validation` |
+
+Feature placement: routes under `/v1/copilot/*` mount from the `copilot` feature (new module + `cross-feature-copilot` depguard block); writes to `suggestions.suggestion_request` go through `suggestionspub` — `copilot` never touches the `suggestions` schema directly.
+
+### 3. Frontend — harness server route
+
+| Task | Done when |
+| --- | --- |
+| `POST /api/chat` route: `chat()` + `openRouterText` adapter picked per request from newest tool-result route state | Adapter switches between requests; never mid-loop |
+| `toolDefinition`s: `resolve_outcome`, `update_context`, `submit_outcome_request`, `re_route`, `handoff_to_akira` — `.server()` impls call Go via `backendFetch` | Tool calls hit Go; request_id from dispatch returned to model |
+| `defineAIPersistence` store → Go thread endpoints | Refresh mid-turn loses nothing; forged history impossible |
+| Route-state derivation: newest-first scan of `resolve_outcome`/`re_route`/`submit_outcome_request` results, re-injected as turn context | Compaction can't drop route state |
+
+### 4. Frontend — intake prompt + OpenUI
+
+| Task | Done when |
+| --- | --- |
+| `BASE_VOICE` (Chief of Staff) + `INTAKE` prompt: class-selection rules, per-class question sets (live classes first — `purchase_real_estate`, `find_investors`, `find_talent`, `find_customers`), confirm-after-routing rule, two-turn cap, result-count gate | Prompt file versioned in repo |
+| OpenUI component library: question, option-list (3–5 + Other), multi-select, free-text, summary card, submit-ready card → generated system prompt via `@openuidev/lang-core` | Model output restricted to registered components |
+| `useChat` client + `@openuidev/react-lang` Renderer on text parts + strict-mode parse check | Option selections round-trip as user messages; invalid Lang lines surface as errors, not silence |
+| `+` button → new thread; SUBMIT button enabled on ready state → fires `submit_outcome_request` | Click → `status=submitted` → thread hands to results view (view itself out of scope) |
+
+### 5. Verify
+
+| Task | Done when |
+| --- | --- |
+| Script the flow end-to-end: "I want to buy a house in Costa Rica" → `purchase_real_estate` → slots → count gate → SUBMIT → `submitted` | Request row correct; transcript rows in `copilot.messages` |
+| Off-script cases: ambiguous first message → `ask_back` clarification; two-turn cap → `confidence: low` submit; `re_route` correction; forged `submit_outcome_request` result rejected | Each behaves per spec |
+| Phoenix spans tagged `tier`, `outcome_type`, `model`, `provider`, `ttft_ms`, `output_tokens` | Latency/cost visible per tier |
+
+## Explicit non-goals
+
+Working-phase model turns, `draft_intro`, result cards/nodes/trajectories, `leverage_outcome` `[HELPING TARGET]` context assembly, `serendipity`, `files` attach, pitch profiles, Universe payload (Phase II), CSV/collection/PDF (Phase III).
