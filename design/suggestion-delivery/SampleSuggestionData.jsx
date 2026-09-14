@@ -84,8 +84,15 @@ export const SampleSuggestionData = () => {
     --orb-border: #202d47;
     --orb-text: #f1f3f8;
     --orb-muted: #bfc3ce;
-    --orb-why: #10182e;
-    --orb-trajectory: #252f52;
+    --orb-why: #14213c;
+    --orb-why-border: #456394;
+    --orb-why-accent: #8bb4ff;
+    --orb-trajectory: #122326;
+    --orb-trajectory-border: #2c494c;
+    --orb-trajectory-accent: #9dc8c4;
+    --orb-sequencing: #211e19;
+    --orb-sequencing-border: #4b4131;
+    --orb-sequencing-accent: #d5ba89;
     --orb-action: #193b48;
     --orb-radius: 10px;
     --orb-section-gap: 44px;
@@ -137,10 +144,10 @@ export const SampleSuggestionData = () => {
   #orbiter-moonshot .orb-section { margin-top: var(--orb-section-gap); }
   #orbiter-moonshot .orb-section-title { display: flex; align-items: center; gap: 9px; padding-left: 12px; font-size: 11px; line-height: 18px; letter-spacing: 2.5px; font-weight: 750; margin-bottom: 10px; }
   #orbiter-moonshot .orb-section-title svg { width: 12px; height: 12px; color: #b6c6e8; flex: none; }
-  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 1px solid #304373; border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
+  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 1px solid var(--orb-why-border); box-shadow:inset 3px 0 0 var(--orb-why-accent); border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
   #orbiter-moonshot .orb-why-box p + p { margin-top: 22px; }
   #orbiter-moonshot .orb-trajectory-section { margin-top: 12px; }
-  #orbiter-moonshot .orb-trajectory-note { padding: 12px 14px; background: var(--orb-trajectory); border: 1px solid #2e3c64; border-radius: calc(var(--orb-radius) - 2px); color: #eef0fb; font-size: 14px; line-height: 20px; }
+  #orbiter-moonshot .orb-trajectory-note { padding: 12px 14px; background: var(--orb-trajectory); border: 1px solid var(--orb-trajectory-border); border-radius: calc(var(--orb-radius) - 2px); color: #dce8e7; font-size: 14px; line-height: 20px; }
   #orbiter-moonshot .orb-connections { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 20px; margin-top: 10px; }
   #orbiter-moonshot .orb-actions { display: grid; gap: 5px; }
   #orbiter-moonshot .orb-action { min-height: 39px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 14px; background: var(--orb-action); border: 1px solid #2a5477; border-radius: calc(var(--orb-radius) - 2px); font-size: 14px; line-height: 20px; }
@@ -236,32 +243,37 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .sample-label-icon { color:#a5bcff; font-size:13px; letter-spacing:0; }
       #orbiter-moonshot .orb-why-box { padding:16px 18px; font-size:14px; line-height:22px; border-radius:5px; }
       #orbiter-moonshot .orb-why-headline { margin:0 0 16px; color:#f1f3f8; font-size:16px; line-height:24px; font-weight:700; }
-      #orbiter-moonshot .orb-why-headline::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
+      #orbiter-moonshot .orb-why-headline::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:var(--orb-why-accent); }
       #orbiter-moonshot .orb-trajectory-section, #orbiter-moonshot .sample-sequencing-section, #orbiter-moonshot .sample-action-section { margin-top:10px; }
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
+      #orbiter-moonshot .orb-trajectory-section .sample-label-icon { color:var(--orb-trajectory-accent); }
+      #orbiter-moonshot .sample-sequencing-section .sample-label-icon { color:var(--orb-sequencing-accent); }
       #orbiter-moonshot .orb-trajectory-note { padding:10px 14px; font-size:13px; line-height:20px; border-radius:5px; }
       #orbiter-moonshot .orb-trajectory-panel { position:relative; }
-      #orbiter-moonshot .orb-trajectory-summary { display:flex; align-items:center; justify-content:space-between; gap:14px; width:100%; padding:12px 14px; color:#f1f3f8; background:var(--orb-trajectory); border:1px solid #2e3c64; border-radius:5px; text-align:left; font-size:14px; line-height:22px; font-weight:700; }
+      #orbiter-moonshot .orb-trajectory-summary { display:flex; align-items:center; justify-content:space-between; gap:14px; width:100%; padding:12px 14px; color:#dce8e7; background:var(--orb-trajectory); border:1px solid var(--orb-trajectory-border); border-radius:5px; text-align:left; font-size:14px; line-height:22px; font-weight:700; }
       #orbiter-moonshot .orb-trajectory-summary .sample-arrow-circle { flex:none; }
+      #orbiter-moonshot .orb-trajectory-summary .sample-arrow-circle, #orbiter-moonshot .orb-trajectory-toggle { color:var(--orb-trajectory-accent); border-color:var(--orb-trajectory-border); }
+      #orbiter-moonshot .orb-trajectory-summary:hover, #orbiter-moonshot .orb-trajectory-toggle:hover { border-color:#507c7c; }
       #orbiter-moonshot .orb-trajectory-toggle { position:absolute; top:10px; right:14px; }
       #orbiter-moonshot .orb-trajectory-toggle::before { content:''; position:absolute; inset:-8px; }
       #orbiter-moonshot .orb-trajectory-summary:focus-visible, #orbiter-moonshot .orb-trajectory-toggle:focus-visible { outline:2px solid #a8c5ff; outline-offset:3px; }
       #orbiter-moonshot .orb-trajectory-route:first-child h4 { padding-right:42px; }
       #orbiter-moonshot .orb-trajectory-route + .orb-trajectory-route { margin-top:18px; }
-      #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#f1f3f8; font-size:14px; line-height:20px; font-weight:700; }
-      #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#344b80; }
+      #orbiter-moonshot .orb-trajectory-route h4 { margin:0 0 12px; color:#dce8e7; font-size:14px; line-height:20px; font-weight:700; }
+      #orbiter-moonshot .orb-trajectory-route h4::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:#507c7c; }
       #orbiter-moonshot .orb-connections { align-items:stretch; }
       #orbiter-moonshot .orb-sequencing-panel { position:relative; }
-      #orbiter-moonshot .orb-sequencing-toggle { position:absolute; top:13px; right:14px; width:24px; height:24px; }
+      #orbiter-moonshot .orb-sequencing-toggle { position:absolute; top:13px; right:14px; width:24px; height:24px; color:var(--orb-sequencing-accent); border-color:var(--orb-sequencing-border); }
+      #orbiter-moonshot .orb-sequencing-toggle:hover { border-color:#8d7753; }
       #orbiter-moonshot .orb-sequencing-toggle::before { content:''; position:absolute; inset:-10px; }
-      #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 54px 16px 38px; background:var(--orb-why); border:1px solid #304373; border-radius:5px; color:#e5e9f3; font-size:14px; line-height:22px; }
+      #orbiter-moonshot .orb-sequencing-list { margin:0; padding:16px 54px 16px 38px; background:var(--orb-sequencing); border:1px solid var(--orb-sequencing-border); border-radius:5px; color:#e5dfd5; font-size:14px; line-height:22px; }
       #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list { list-style:none; padding:13px 54px 13px 18px; }
       #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list li { padding-left:0; }
       #orbiter-moonshot .orb-sequencing-panel[data-expanded="false"] .orb-sequencing-list h4 { margin:0; }
       #orbiter-moonshot .orb-sequencing-list li { padding-left:4px; }
       #orbiter-moonshot .orb-sequencing-list li + li { margin-top:16px; }
-      #orbiter-moonshot .orb-sequencing-list li::marker { color:#a8c5ff; font-weight:700; }
-      #orbiter-moonshot .orb-sequencing-list h4 { margin:0 0 4px; color:#f1f3f8; font-size:14px; line-height:22px; font-weight:700; }
+      #orbiter-moonshot .orb-sequencing-list li::marker { color:var(--orb-sequencing-accent); font-weight:700; }
+      #orbiter-moonshot .orb-sequencing-list h4 { margin:0 0 4px; color:#ede3d3; font-size:14px; line-height:22px; font-weight:700; }
       #orbiter-moonshot .sample-action-section .orb-section-title { margin-bottom:6px; }
       #orbiter-moonshot .orb-actions { gap:6px; }
       #orbiter-moonshot .orb-action { padding:7px 14px; min-height:38px; font-size:13px; border-radius:5px; }
