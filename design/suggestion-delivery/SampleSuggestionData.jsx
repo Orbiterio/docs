@@ -4,8 +4,8 @@ export const SampleSuggestionData = () => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
   const [version, setVersion] = useState('earlier');
-  const [open, setOpen] = useState({ main: true, lighthouse: false, aila: false, archived: false, sequencing: false });
-  const [notes, setNotes] = useState({ lighthouse: '', aila: '' });
+  const [open, setOpen] = useState({ main: true, seth: false, lighthouse: false, aila: false, archived: false, sequencing: false });
+  const [notes, setNotes] = useState({ seth: '', lighthouse: '', aila: '' });
   const [data, setData] = useState({
     title: 'Ryan Reynolds / Maximum Effort',
     people: [
@@ -34,11 +34,19 @@ export const SampleSuggestionData = () => {
     actions: ['Reach out to Charlie Anderson about showing Ryan', 'Reach out to Kyle Jackson about Maximum Effort']
   });
   const [activeDraft, setActiveDraft] = useState(null);
+  const [openActions, setOpenActions] = useState({ charlie:false, kyle:false });
   const [copyStatus, setCopyStatus] = useState('');
   const [drafts, setDrafts] = useState({
-    charlie: { subject:'Showing Orbiter to Ryan', message:'Hey Charlie,\n\nWe’ve been thinking about how Orbiter could help the Maximum Effort team connect the dots across their relationships in entertainment, brands, and sports.\n\nGiven your work with Ryan, we’d love your take on whether it would be useful to show him what we’re building. Would you be up for a quick walkthrough first?\n\nThanks!' },
-    kyle: { subject:'Orbiter × Maximum Effort', message:'Hey Kyle,\n\nWe’re exploring how Orbiter could help Maximum Effort surface opportunities across the team’s relationships—from brand partnerships to entertainment and sports.\n\nI’d love your perspective on the fit and who at Maximum Effort would be best to speak with. Would you have time for a quick conversation?\n\nThanks!' }
+    'charlie-email': { subject:'Showing Orbiter to Ryan', message:'Hey Charlie,\n\nWe’ve been thinking about how Orbiter could help the Maximum Effort team connect the dots across their relationships in entertainment, brands, and sports.\n\nGiven your work with Ryan, we’d love your take on whether it would be useful to show him what we’re building. Would you be up for a quick walkthrough first?\n\nThanks!' },
+    'kyle-email': { subject:'Orbiter × Maximum Effort', message:'Hey Kyle,\n\nWe’re exploring how Orbiter could help Maximum Effort surface opportunities across the team’s relationships—from brand partnerships to entertainment and sports.\n\nI’d love your perspective on the fit and who at Maximum Effort would be best to speak with. Would you have time for a quick conversation?\n\nThanks!' },
+    'charlie-sms': { message:'Hey Charlie! Could I give you a quick walkthrough of Orbiter.io? I’d love your take on whether it could be useful for Ryan and the Maximum Effort team.' },
+    'kyle-sms': { message:'Hey Kyle! I’d love your perspective on Orbiter.io for Maximum Effort. Who would be best to speak with on the team? Have a few minutes to catch up?' },
+    'charlie-call': { message:'1. Walk Charlie through how Orbiter.io connects opportunities across relationships.\n\n2. Ask where he sees a fit for Ryan and Maximum Effort, drawing on his work on the Mint Mobile commercials.\n\n3. Ask whether he would be comfortable making an introduction, and agree on a next step.' },
+    'kyle-call': { message:'1. Share what is already in motion with Charlie.\n\n2. Ask who at Maximum Effort would be best placed to evaluate Orbiter.io.\n\n3. Explore Kyle’s connection if Charlie’s route is unavailable, and coordinate one introduction.' }
   });
+  const draftKey = activeDraft ? activeDraft.personId + '-' + activeDraft.channel : null;
+  const draftPerson = activeDraft ? data.people.find(person => person.id === activeDraft.personId) : null;
+  const draftTitle = activeDraft ? (activeDraft.channel === 'call' ? 'Call prep for ' : activeDraft.channel === 'sms' ? 'SMS to ' : 'Email to ') + draftPerson.name : '';
   const toggle = key => setOpen(previous => ({ ...previous, [key]: !previous[key] }));
   const edit = (text, save, enabled = editing) => ({ children:text, contentEditable:enabled ? 'plaintext-only' : false, suppressContentEditableWarning:true, onBlur:event => { if(enabled) save(event.currentTarget.textContent); } });
   const setField = (key, value) => setData(previous => ({ ...previous, [key]:value }));
@@ -56,10 +64,19 @@ export const SampleSuggestionData = () => {
       <button className="orb-more" type="button" aria-label={(enabled ? 'Finish editing ' : 'Edit ') + person.name + ' profile'} aria-pressed={enabled} onClick={() => { if(editing) setEditing(false); setEditingCard(enabled ? null : person.id); }}>{enabled ? '✓' : '•••'}</button>
     </article>;
   };
-  const setDraft = (key, value) => setDrafts(previous => ({ ...previous, [activeDraft]:{ ...previous[activeDraft], [key]:value } }));
-  const closeDraft = () => { const trigger = document.getElementById('sample-draft-' + activeDraft); setActiveDraft(null); setCopyStatus(''); if(trigger) trigger.focus(); };
+  const setDraft = (key, value) => setDrafts(previous => ({ ...previous, [draftKey]:{ ...previous[draftKey], [key]:value } }));
+  const openDraft = (personId, channel) => { setActiveDraft({ personId, channel }); setCopyStatus(''); };
+  const closeDraft = () => { const trigger = document.getElementById('sample-draft-' + draftKey); setActiveDraft(null); setCopyStatus(''); if(trigger) trigger.focus(); };
+  const toggleActions = personId => {
+    if(openActions[personId] && activeDraft?.personId === personId && activeDraft.channel !== 'email') {
+      setActiveDraft(null);
+      setCopyStatus('');
+    }
+    setOpenActions(previous => ({ ...previous, [personId]:!previous[personId] }));
+  };
   const copyDraft = async () => {
-    try { await navigator.clipboard.writeText('Subject: ' + drafts[activeDraft].subject + '\n\n' + drafts[activeDraft].message); setCopyStatus('Draft copied.'); }
+    const draft = drafts[draftKey];
+    try { await navigator.clipboard.writeText((activeDraft.channel === 'email' ? 'Subject: ' + draft.subject + '\n\n' : '') + draft.message); setCopyStatus(activeDraft.channel === 'call' ? 'Talking points copied.' : 'Draft copied.'); }
     catch { const field = document.getElementById('sample-message'); if(field) { field.focus(); field.select(); } setCopyStatus('Message selected. Press ⌘C or Ctrl+C to copy.'); }
   };
   return <div className="sample-suggestion-workspace not-prose">
@@ -244,6 +261,13 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-actions { gap:6px; }
       #orbiter-moonshot .orb-action { padding:7px 14px; min-height:38px; font-size:13px; border-radius:5px; }
       #orbiter-moonshot .orb-draft-button { padding:3px 8px; font-size:10px; font-weight:400; line-height:15px; letter-spacing:.5px; border-radius:3px; }
+      #orbiter-moonshot .orb-action-controls { display:flex; align-items:center; gap:14px; flex:none; margin-left:auto; }
+      #orbiter-moonshot .orb-action-toggle { color:#b7d0e6; border-color:#38566b; position:relative; }
+      #orbiter-moonshot .orb-action-toggle::before { content:''; position:absolute; inset:-6px; }
+      #orbiter-moonshot .orb-action-toggle:hover { background:#284b5c; border-color:#729ab7; }
+      #orbiter-moonshot .orb-action-toggle:focus-visible { outline:2px solid #a8c5ff; outline-offset:3px; }
+      #orbiter-moonshot .orb-action-options { display:grid; gap:5px; margin:5px 0 8px 18px; padding-left:10px; border-left:1px solid #2a5477; }
+      #orbiter-moonshot .orb-action-option { background:#102630; border-color:#274352; padding-right:52px; }
       #orbiter-moonshot .orb-more { width:37px; border:1px solid #293957; background:var(--orb-panel); color:#f5f7fc; font-size:10px; line-height:11px; letter-spacing:3px; padding:0 0 1px 3px; }
       #orbiter-moonshot .orb-opportunity>.orb-more, #orbiter-moonshot .orb-collapsed>.orb-more { right:22px; background:#1d2944; }
       #orbiter-moonshot .orb-summary { padding:11px 16px; min-height:47px; font-weight:600; }
@@ -288,13 +312,37 @@ export const SampleSuggestionData = () => {
               </ol>
             </div>
           </section>
-          <section className="orb-section sample-action-section" aria-labelledby="sample-action"><h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3><div className="orb-actions">{['charlie','kyle'].map((id,index) => <div className="orb-action" key={id}><p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} /><button className="orb-draft-button" type="button" id={'sample-draft-' + id} aria-expanded={activeDraft === id} aria-controls="sample-composer" onClick={() => { setActiveDraft(id); setCopyStatus(''); }}>DRAFT EMAIL</button></div>)}</div>
-            {activeDraft && <section className="orb-composer" id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}><div className="orb-composer-heading"><h3 id="sample-composer-title">Draft to {activeDraft === 'charlie' ? 'Charlie Anderson' : 'Kyle Jackson'}</h3><button type="button" className="orb-close" aria-label="Close email draft" onClick={closeDraft}>×</button></div><label htmlFor="sample-subject">Subject</label><input id="sample-subject" value={drafts[activeDraft].subject} onChange={event => setDraft('subject',event.target.value)} /><label htmlFor="sample-message">Message</label><textarea id="sample-message" value={drafts[activeDraft].message} onChange={event => setDraft('message',event.target.value)} /><div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>Copy draft</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div></section>}
+          <section className="orb-section sample-action-section" aria-labelledby="sample-action">
+            <h3 className="orb-section-title" id="sample-action"><span className="sample-label-icon" aria-hidden="true">⊙</span> ACTION</h3>
+            <div className="orb-actions">
+              {data.people.slice(1).map((person,index) => <div className="orb-action-group" key={person.id}>
+                <div className="orb-action">
+                  <p {...edit(data.actions[index],value => setField('actions',data.actions.map((item,position) => position === index ? value : item)))} />
+                  <div className="orb-action-controls">
+                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-email'} aria-label={'Draft email to ' + person.name} aria-expanded={draftKey === person.id + '-email'} aria-controls="sample-composer" onClick={() => openDraft(person.id,'email')}>DRAFT EMAIL</button>
+                    <button className="orb-collapse orb-action-toggle" type="button" aria-label={(openActions[person.id] ? 'Hide' : 'Show') + ' more actions for ' + person.name} aria-expanded={openActions[person.id]} aria-controls={'sample-actions-' + person.id} onClick={() => toggleActions(person.id)}>{arrow(openActions[person.id])}</button>
+                  </div>
+                </div>
+                <div className="orb-action-options" id={'sample-actions-' + person.id} hidden={!openActions[person.id]}>
+                  {[{ channel:'sms', title:'Text ' + person.name, button:'DRAFT SMS' }, { channel:'call', title:'Call ' + person.name, button:'PREPARE CALL' }].map(option => <div className="orb-action orb-action-option" key={option.channel}>
+                    <p>{option.title}</p>
+                    <button className="orb-draft-button" type="button" id={'sample-draft-' + person.id + '-' + option.channel} aria-label={option.channel === 'sms' ? 'Draft SMS to ' + person.name : 'Prepare call with ' + person.name} aria-expanded={draftKey === person.id + '-' + option.channel} aria-controls="sample-composer" onClick={() => openDraft(person.id,option.channel)}>{option.button}</button>
+                  </div>)}
+                </div>
+              </div>)}
+            </div>
+            {activeDraft && <section className="orb-composer" key={draftKey} id="sample-composer" aria-labelledby="sample-composer-title" onKeyDown={event => { if(event.key === 'Escape') closeDraft(); }}>
+              <div className="orb-composer-heading"><h3 id="sample-composer-title">{draftTitle}</h3><button type="button" className="orb-close" aria-label="Close draft" onClick={closeDraft}>×</button></div>
+              {activeDraft.channel === 'email' && <><label htmlFor="sample-subject">Subject</label><input id="sample-subject" autoFocus value={drafts[draftKey].subject} onChange={event => setDraft('subject',event.target.value)} /></>}
+              <label htmlFor="sample-message">{activeDraft.channel === 'call' ? 'Talking points' : 'Message'}</label>
+              <textarea id="sample-message" autoFocus={activeDraft.channel !== 'email'} value={drafts[draftKey].message} onChange={event => setDraft('message',event.target.value)} />
+              <div className="orb-composer-footer"><button className="orb-copy" type="button" onClick={copyDraft}>{activeDraft.channel === 'call' ? 'Copy talking points' : 'Copy draft'}</button><span className="orb-copy-status" role="status" aria-live="polite">{copyStatus}</span></div>
+            </section>}
           </section>
         </div>
         <button className="orb-more" type="button" aria-label={editing ? 'Finish editing opportunity' : 'Edit opportunity'} aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? '✓' : '•••'}</button>
       </article>
-      {[{ id:'lighthouse', name:'The Lighthouse' },{ id:'aila', name:'AI LA' }].map(item => <section className="orb-collapsed" key={item.id} aria-label={item.name + ' opportunity'}><button className="orb-summary" type="button" aria-expanded={open[item.id]} aria-controls={'sample-' + item.id} onClick={() => toggle(item.id)}><span>{item.name}</span><span className="sample-arrow-circle">{arrow(open[item.id])}</span></button><div className="orb-notes" id={'sample-' + item.id} hidden={!open[item.id]}><label htmlFor={'sample-notes-' + item.id}>Opportunity notes</label><textarea id={'sample-notes-' + item.id} rows={3} placeholder={'Add notes for ' + item.name + '…'} value={notes[item.id]} onChange={event => setNotes(previous => ({ ...previous, [item.id]:event.target.value }))} /></div><button className="orb-more" type="button" aria-label={'Edit ' + item.name + ' notes'} onClick={() => setOpen(previous => ({ ...previous,[item.id]:true }))}>•••</button></section>)}
+      {[{ id:'seth', name:'Seth Rogen / Point Grey Pictures' },{ id:'lighthouse', name:'The Lighthouse' },{ id:'aila', name:'AI LA' }].map(item => <section className="orb-collapsed" key={item.id} aria-label={item.name + ' opportunity'}><button className="orb-summary" type="button" aria-expanded={open[item.id]} aria-controls={'sample-' + item.id} onClick={() => toggle(item.id)}><span>{item.name}</span><span className="sample-arrow-circle">{arrow(open[item.id])}</span></button><div className="orb-notes" id={'sample-' + item.id} hidden={!open[item.id]}><label htmlFor={'sample-notes-' + item.id}>Opportunity notes</label><textarea id={'sample-notes-' + item.id} rows={3} placeholder={'Add notes for ' + item.name + '…'} value={notes[item.id]} onChange={event => setNotes(previous => ({ ...previous, [item.id]:event.target.value }))} /></div><button className="orb-more" type="button" aria-label={'Edit ' + item.name + ' notes'} onClick={() => setOpen(previous => ({ ...previous,[item.id]:true }))}>•••</button></section>)}
       <button className="sample-archive" type="button" aria-expanded={open.archived} aria-controls="sample-archived" onClick={() => toggle('archived')}>{arrow(open.archived)} ARCHIVED <span className="sample-archive-count">1</span><span className="sample-archive-line" /></button><p className="sample-empty" id="sample-archived" hidden={!open.archived}>No archived sample provided.</p>
     </div></div>
   </div>;
