@@ -3,11 +3,11 @@ import React, { useState } from 'react';
 export const SampleSuggestionData = () => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
-  const [version, setVersion] = useState('current');
+  const [version, setVersion] = useState('earlier');
   const [open, setOpen] = useState({ main: true, lighthouse: false, aila: false, archived: false });
   const [notes, setNotes] = useState({ lighthouse: '', aila: '' });
   const [data, setData] = useState({
-    title: 'Ryan Reynolds',
+    title: 'Ryan Reynolds / Maximum Effort',
     people: [
       { id:'ryan', name:'Ryan Reynolds', role:'Co-Founder @ Maximum Effort', logo:'maximum', company:'Maximum Effort', bio:'Ryan Reynolds is an actor and entrepreneur with three decades of experience in film and television. Recognized by The Wall Street Journal for building a…' },
       { id:'charlie', name:'Charlie Anderson', role:'Head Of Frame.io Partnerships @ Adobe', logo:'adobe', company:'Adobe', bio:'Charlie Anderson is Head of Frame.io Partnerships & Developer Experience at Adobe, where he leads the Partnerships team covering DevX, Partner Success, an…' },
@@ -188,8 +188,10 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot { --orb-reference:url('/images/suggestion-delivery/current-ui.png'); padding:0; }
       #orbiter-moonshot .orb-frame { padding:12px; border-radius:24px 24px 0 0; }
       #orbiter-moonshot .orb-opportunity { background:var(--orb-page); padding:0; border-radius:11px; }
-      #orbiter-moonshot .orb-header { padding:9px 16px; min-height:46px; background:var(--orb-panel); border-radius:10px 10px 0 0; border-bottom:1px solid #1b2537; gap:11px; }
-      #orbiter-moonshot .orb-heading { font-size:14px; font-weight:600; }
+      #orbiter-moonshot .orb-header { display:grid; grid-template-columns:1fr auto; padding:10px 16px 12px; min-height:46px; background:var(--orb-panel); border-radius:10px 10px 0 0; border-bottom:1px solid #1b2537; gap:9px 11px; }
+      #orbiter-moonshot .orb-heading { grid-column:1 / -1; grid-row:2; font-size:16px; font-weight:600; }
+      #orbiter-moonshot .orb-header .orb-badge { justify-self:start; }
+      #orbiter-moonshot .orb-header .orb-collapse { grid-column:2; grid-row:1; }
       #orbiter-moonshot .orb-badge { font-size:12px; font-weight:650; padding:4px 7px; line-height:18px; border-radius:8px; letter-spacing:1px; }
       #orbiter-moonshot .orb-collapse { width:24px; height:24px; }
       #orbiter-moonshot .sample-content { padding:10px 10px 11px; }
@@ -232,7 +234,7 @@ export const SampleSuggestionData = () => {
       #orbiter-moonshot .orb-close { font-size:20px; }
       @media(max-width:700px) { #orbiter-moonshot .orb-connections .orb-person { width:367px; } #orbiter-moonshot .orb-person { max-width:100%; } #orbiter-moonshot .orb-frame { padding:8px; } #orbiter-moonshot .orb-header { padding:9px 10px; } #orbiter-moonshot .sample-content { padding:10px 8px; } #orbiter-moonshot .orb-role { white-space:normal; } #orbiter-moonshot .orb-action { flex-wrap:wrap; padding:10px; } #orbiter-moonshot .orb-action p { flex-basis:100%; } #orbiter-moonshot .orb-draft-button { margin-left:auto; padding:6px 9px; } }
     `}</style>
-    <div className="sample-suggestion-toolbar" aria-label="Sample design controls"><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="current">Current UI</option><option value="earlier">Earlier draft</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
+    <div className="sample-suggestion-toolbar" aria-label="Sample design controls"><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
     <div id="orbiter-moonshot" aria-label="Sample suggestion board"><div className="orb-frame">
       <article className="orb-opportunity">
         <header className="orb-header"><span className="orb-badge"><span aria-hidden="true">♧</span> MOONSHOT</span><h2 className="orb-heading" {...edit(data.title,value => setField('title',value))} /><button className="orb-collapse" type="button" aria-expanded={open.main} aria-controls="sample-main" aria-label={(open.main ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity'} onClick={() => toggle('main')}>{arrow(open.main)}</button></header>
