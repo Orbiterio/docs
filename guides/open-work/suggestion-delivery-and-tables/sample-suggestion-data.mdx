@@ -1,6 +1,6 @@
 ---
 title: "Sample Suggestion Data"
-description: "Proposed payload schema and current Leverage Loop and Outcome examples, with descriptive entity ID placeholders."
+description: "Version 2 payloads for the Orbiter Backend creation test, with current Leverage Loop and Outcome data and descriptive entity ID placeholders."
 icon: "code"
 mode: "wide"
 ---
@@ -24,14 +24,16 @@ These samples match the current [Leverage Loop UI](/guides/open-work/suggestion-
 
 ## Schema revision
 
-**Version 2 is a proposed contract for this design.** The [parent page](/guides/open-work/suggestion-delivery-and-tables#envelope) still describes version 1. These examples add structured trajectories, suggested sequencing, action groups, SMS, and ordered recipient contact arrays; they do not indicate that the backend already accepts those fields.
+**Version 2 is the build target for the Orbiter Backend creation test.** The [parent build guide](/guides/open-work/suggestion-delivery-and-tables#envelope) defines the matching tables and direct POST receiver. These examples include structured trajectories, suggested sequencing, action groups, SMS, and ordered recipient contact arrays. The documentation does not indicate that the backend already accepts them.
 
-Every person or company reference uses a quoted placeholder such as `"{entity ID for Ethan Jacks}"`. Replace placeholders with real IDs before ingestion. `org_id` is the owning WorkOS organization ID and `requested_by` is a user ID; neither is a graph entity ID. The timestamp is also a placeholder. Candidate, route, group, and action `ref` values are local references within the payload, not entity IDs.
+Every person or company reference uses a quoted placeholder such as `"{entity ID for Ethan Jacks}"`. Replace placeholders with real IDs before ingestion. `org_id` is the local UUID in `organizations.organizations.id`, linked to WorkOS; `requested_by` is the local user UUID in `users.users.id`. Do not use external WorkOS IDs or graph entity IDs for either field. The timestamp is also a placeholder. Candidate, route, group, and action `ref` values are local references within the payload, not entity IDs.
+
+Fill the existing local org/user and entity UUIDs, mint request/batch UUIDv7 IDs, then POST the complete raw JSON to `POST /v1/ingest/suggestions` using the Universe service identity. The proposed receiver creates the minimal parent request row when absent in the same transaction as the suggestion batch. No separate request setup is required. Follow the [manual creation test](/guides/open-work/suggestion-delivery-and-tables#manual-creation-test); no Universe generation or message sending is required.
 
 | Field | UI behavior |
 | --- | --- |
 | `entity_id` and `entity_type` | Every entity object pairs its ID with its type, including the suggested entity, `entities[]`, and introduction recipients. These examples use `person` and `company`. |
-| `requested_by` | The requesting user's `user_id`. Required for these user-requested samples; it must match the creator of `request_suggestion_id`. |
+| `requested_by` | The requesting user's `user_id`. Required for these user-requested samples. It supplies the new parent request’s attribution, or must match the requester on an existing request. |
 | `org_id` | The owning organization and access scope. The requesting user must belong to it. |
 | `badge` | Displays LEVERAGE LOOP or MOONSHOT. It is a display label, separate from `suggestion_mode`, which remains null for these types. |
 | `why.headline` and `why.body[]` | Headline with a short underline, followed by one paragraph per array item. |
@@ -487,7 +489,7 @@ Ryan Reynolds / Maximum Effort replaces the old investor example. Charlie and Ky
 - Group, action, trajectory, and sequencing ranks are positive and unique within their respective arrays. The first action in each group is the top action. Local refs must also be unique within their array.
 - `trajectories[].path_refs[]` resolves against `paths[].ref` in the same suggestion. These design examples have no verified graph path records, evidence, or scores, so those values are empty; the supplied narratives are retained without fabricated graph edges.
 - Version 2 uses `entity_type` instead of the version 1 entity-list field `entity_kind`, mapping `org` to `company`. It also replaces the single `trajectory_text`, aggregate `trajectory_entity_ids`, and `trajectory_path_refs` with per-route `body`, `connector_entity_ids`, and `path_refs`. Existing version 1 consumers need an explicit mapping or migration.
-- Backend adoption requires adding `draft_sms` to the action enum and storing/validating the entity types, `badge`, `trajectories`, `suggested_sequencing`, `action_groups`, and the action `ref`/`group_ref`. Drafts, ordered email/mobile arrays, per-person introduction recipient options, and introduction-step data fit in the existing action `params` JSON; handlers must validate their required shape. This page updates the sample contract; it does not apply a database migration.
+- Backend adoption requires `draft_sms` in the Go action validator and the v2 table designs in the [build guide](/guides/open-work/suggestion-delivery-and-tables#schema). Drafts, ordered email/mobile arrays, per-person introduction recipient options, and introduction steps are stored in `suggestion_action.params` JSONB; handlers validate their required shape. The new request and result tables live in the `suggestions` schema. These documentation changes do not apply a database migration.
 
 The collapsed Rebekah, Bilawal, Seth Rogen, The Lighthouse, and AI LA bars are design placeholders. They are not included as completed generated suggestions because their WHY and outreach data have not been supplied.
 
