@@ -145,7 +145,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette } = {}) => {
   #orbiter-moonshot .orb-section { margin-top: var(--orb-section-gap); }
   #orbiter-moonshot .orb-section-title { display: flex; align-items: center; gap: 9px; padding-left: 12px; font-size: 11px; line-height: 18px; letter-spacing: 2.5px; font-weight: 750; margin-bottom: 10px; }
   #orbiter-moonshot .orb-section-title svg { width: 12px; height: 12px; color: #b6c6e8; flex: none; }
-  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 2px solid var(--orb-why-border); border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
+  #orbiter-moonshot .orb-why-box { padding: 24px 22px; background: var(--orb-why); border: 1px solid var(--orb-why-border); border-radius: calc(var(--orb-radius) - 2px); color: #e5e9f3; line-height: 23px; }
   #orbiter-moonshot .orb-why-box p + p { margin-top: 22px; }
   #orbiter-moonshot .orb-trajectory-section { margin-top: 12px; }
   #orbiter-moonshot .orb-trajectory-note { padding: 12px 14px; background: var(--orb-trajectory); border: 1px solid var(--orb-trajectory-border); border-radius: calc(var(--orb-radius) - 2px); color: #dce8e7; font-size: 14px; line-height: 20px; }
@@ -247,7 +247,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette } = {}) => {
       #orbiter-moonshot .orb-why-box { padding:16px 18px; font-size:14px; line-height:22px; border-radius:5px; }
       #orbiter-moonshot .orb-why-headline { margin:0 0 16px; color:#f1f3f8; font-size:16px; line-height:24px; font-weight:700; }
       #orbiter-moonshot .orb-why-headline::after { content:''; display:block; width:34px; height:2px; margin-top:9px; background:var(--orb-why-accent); }
-      #orbiter-moonshot .orb-trajectory-section, #orbiter-moonshot .sample-sequencing-section, #orbiter-moonshot .sample-action-section { margin-top:10px; }
+      #orbiter-moonshot .sample-why-section, #orbiter-moonshot .orb-trajectory-section, #orbiter-moonshot .sample-sequencing-section, #orbiter-moonshot .sample-action-section { margin-top:10px; }
       #orbiter-moonshot .orb-trajectory-section .orb-section-title { margin-bottom:7px; }
       #orbiter-moonshot .orb-trajectory-section .sample-label-icon { color:var(--orb-trajectory-accent); }
       #orbiter-moonshot .sample-sequencing-section .sample-label-icon { color:var(--orb-sequencing-accent); }
@@ -310,7 +310,7 @@ export const SampleSuggestionData = ({ palette = defaultPalette } = {}) => {
         <header className="orb-header"><span className="orb-badge"><span aria-hidden="true">♧</span> MOONSHOT</span><h2 className="orb-heading" {...edit(data.title,value => setField('title',value))} /><button className="orb-collapse" type="button" aria-expanded={open.main} aria-controls="sample-main" aria-label={(open.main ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity'} onClick={() => toggle('main')}>{arrow(open.main)}</button></header>
         <div className="sample-content" id="sample-main" hidden={!open.main}>
           {personCard(data.people[0])}
-          <section className="orb-section" aria-labelledby="sample-why"><h3 className="orb-section-title" id="sample-why"><span className="sample-label-icon" aria-hidden="true">✧</span> WHY</h3><div className="orb-why-box"><h4 className="orb-why-headline" {...edit(data.why.headline,value => setData(previous => ({ ...previous, why:{ ...previous.why, headline:value } })))} />{data.why[version].map((paragraph,index) => <p key={version + index} {...edit(paragraph,value => setData(previous => ({ ...previous, why:{ ...previous.why, [version]:previous.why[version].map((item,position) => position === index ? value : item) } })))} />)}</div></section>
+          <section className="orb-section sample-why-section" aria-labelledby="sample-why"><h3 className="orb-section-title" id="sample-why"><span className="sample-label-icon" aria-hidden="true">✧</span> WHY</h3><div className="orb-why-box"><h4 className="orb-why-headline" {...edit(data.why.headline,value => setData(previous => ({ ...previous, why:{ ...previous.why, headline:value } })))} />{data.why[version].map((paragraph,index) => <p key={version + index} {...edit(paragraph,value => setData(previous => ({ ...previous, why:{ ...previous.why, [version]:previous.why[version].map((item,position) => position === index ? value : item) } })))} />)}</div></section>
           <section className="orb-trajectory-section" aria-labelledby="sample-trajectory">
             <h3 className="orb-section-title" id="sample-trajectory"><span className="sample-label-icon" aria-hidden="true">⌁</span> TRAJECTORY</h3>
             <div className="orb-trajectory-panel">

@@ -26,7 +26,7 @@ export const PaletteOptions = () => <div className="palette-workspace">
     .palette-trajectory { --section-accent:var(--orb-trajectory-accent); }
     .palette-sequencing { --section-accent:var(--orb-sequencing-accent); }
     .palette-action { --section-accent:var(--orb-action-accent); }
-    .palette-why-box { min-height:142px; padding:16px; background:var(--orb-why); border:2px solid var(--orb-why-border); border-radius:6px; }
+    .palette-why-box { min-height:142px; padding:16px; background:var(--orb-why); border:1px solid var(--orb-why-border); border-radius:6px; }
     .palette-headline { margin:0; color:#f1f3f8; font-size:15px; line-height:21px; font-weight:700; }
     .palette-headline::after { content:''; display:block; width:30px; height:2px; margin-top:9px; background:var(--orb-why-accent); }
     .palette-why-copy { margin:10px 0 0; color:#e5e9f3; font-size:12px; line-height:18px; }
@@ -49,7 +49,7 @@ export const PaletteOptions = () => <div className="palette-workspace">
     @media(max-width:680px) { .palette-grid { grid-template-columns:1fr; } .palette-page-header { align-items:flex-start; flex-direction:column; gap:12px; } .palette-page-header h1 { font-size:26px; } }
   `}</style>
   <header className="palette-page-header">
-    <div><p className="palette-eyebrow">Suggestion delivery · color study</p><h1>Four palettes. One clear hierarchy.</h1><p>WHY leads with a heavier outline. Trajectory, sequencing, and actions each get their own hue. Compare the same suggestion below, then open a full preview.</p></div>
+    <div><p className="palette-eyebrow">Suggestion delivery · color study</p><h1>Four palettes. One clear hierarchy.</h1><p>WHY leads with a brighter outline. Trajectory, sequencing, and actions each get their own hue. Compare the same suggestion below, then open a full preview.</p></div>
     <a className="palette-back" href="/">Current design ↗</a>
   </header>
   <div className="palette-grid">
