@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { defaultPalette } from './palettes.js';
 
-export const SampleSuggestionData = ({ palette = null } = {}) => {
+export const SampleSuggestionData = ({ palette = defaultPalette } = {}) => {
   const [editing, setEditing] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
   const [version, setVersion] = useState('earlier');
@@ -303,7 +304,7 @@ export const SampleSuggestionData = ({ palette = null } = {}) => {
       #orbiter-moonshot .orb-close { font-size:20px; }
       @media(max-width:700px) { #orbiter-moonshot .orb-connections .orb-person { width:367px; } #orbiter-moonshot .orb-person { max-width:100%; } #orbiter-moonshot .orb-frame { padding:8px; } #orbiter-moonshot .orb-header { padding:9px 10px; } #orbiter-moonshot .sample-content { padding:10px 8px; } #orbiter-moonshot .orb-role { white-space:normal; } #orbiter-moonshot .orb-action { flex-wrap:wrap; padding:10px; } #orbiter-moonshot .orb-action p { flex-basis:100%; } #orbiter-moonshot .orb-draft-button { margin-left:auto; padding:6px 9px; } }
     `}</style>
-    <div className="sample-suggestion-toolbar" aria-label="Sample design controls">{palette && <span className="sample-palette-name">Palette preview: {palette.name}</span>}<a href="/palettes.html" target="_blank" rel="noreferrer">Palette options</a><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
+    <div className="sample-suggestion-toolbar" aria-label="Sample design controls">{palette && <span className="sample-palette-name">Palette: {palette.name}</span>}<a href="/palettes.html" target="_blank" rel="noreferrer">Palette options</a><label>Why copy <select aria-label="Why copy" value={version} onChange={event => setVersion(event.target.value)}><option value="earlier">Updated copy</option><option value="current">Original UI</option></select></label><button type="button" aria-pressed={editing} onClick={() => { setEditing(!editing); setEditingCard(null); }}>{editing ? 'Done editing' : 'Edit content'}</button></div>
     <div id="orbiter-moonshot" style={palette?.colors} aria-label="Sample suggestion board"><div className="orb-frame">
       <article className="orb-opportunity">
         <header className="orb-header"><span className="orb-badge"><span aria-hidden="true">♧</span> MOONSHOT</span><h2 className="orb-heading" {...edit(data.title,value => setField('title',value))} /><button className="orb-collapse" type="button" aria-expanded={open.main} aria-controls="sample-main" aria-label={(open.main ? 'Collapse' : 'Expand') + ' Ryan Reynolds opportunity'} onClick={() => toggle('main')}>{arrow(open.main)}</button></header>

@@ -12,7 +12,7 @@ const palette = (id, name, description, sections) => ({
 });
 
 export const palettes = [
-  palette('midnight', 'Midnight', 'Indigo, plum, amber, and petrol. Closest to the current design.', {
+  palette('midnight', 'Midnight', 'Indigo, plum, amber, and petrol. The selected design palette.', {
     why: { background:'#172440', border:'#7899da', accent:'#adc9ff' },
     trajectory: { background:'#271f32', border:'#5c466a', accent:'#ceb5e0' },
     sequencing: { background:'#292316', border:'#635334', accent:'#d8bb7a' },
@@ -37,3 +37,5 @@ export const palettes = [
     action: { background:'#342544', border:'#8566a5', accent:'#dfc8f4', button:'#47325d', option:'#261c32' }
   })
 ];
+
+export const defaultPalette = palettes.find(palette => palette.id === 'midnight');
