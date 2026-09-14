@@ -1,0 +1,183 @@
+---
+title: "Projects & Tasks Table Design"
+sidebarTitle: "Projects & Tasks Table Design"
+description: "All 17 AlloyDB table schemas, keys, constraints, indexes, ordering, and migration rules for projects, tasks, pipelines, deals, and agent work."
+icon: "table"
+---
+
+<Note>
+**Go + 100% AlloyDB build design.** This is the table-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). It owns the complete feature schema, including pipelines, deals, suggestions, and durable agent execution. Routes and command contracts live in [Projects & Tasks API Design](/guides/open-work/roadmap/projects-tasks/api-design).
+</Note>
+
+## Data model: 17 feature-owned tables
+
+These 17 tables form the complete feature-owned AlloyDB schema. Reused users, organizations, teams, entity records, email records, and notification records remain in their existing AlloyDB feature schemas.
+
+| # | Table | Purpose |
+|---|---|---|
+| 1 | `projects.projects` | Root projects and nested subprojects. |
+| 2 | `projects.project_organization_access` | Root-level viewer/editor grants. |
+| 3 | `projects.tasks` | Shared committed work, optionally linked to a deal. |
+| 4 | `projects.task_assignees` | Multiple eligible users per task. |
+| 5 | `projects.task_dependencies` | Finish-to-start prerequisites. |
+| 6 | `projects.pipelines` | Root-owned process configuration. |
+| 7 | `projects.pipeline_stages` | Ordered stages, criteria, and action guidance. |
+| 8 | `projects.deals` | Project-owned opportunities and current stage. |
+| 9 | `projects.deal_stakeholders` | Canonical people/companies with supported roles. |
+| 10 | `projects.work_activity` | Append-only shared domain history. |
+| 11 | `projects.agent_suggestions` | Optional next steps and exact change proposals. |
+| 12 | `projects.suggestion_user_state` | Private save/snooze/dismiss state by stable intent. |
+| 13 | `projects.agent_runs` | Durable, bounded research/planning jobs. |
+| 14 | `projects.action_runs` | Authorized action execution and receipts. |
+| 15 | `projects.followups` | Durable per-recipient notification occurrences. |
+| 16 | `projects.command_receipts` | Idempotency for domain commands. |
+| 17 | `projects.project_user_preferences` | Personal reminder controls. |
+
+### Shared schema rules
+
+Below, `?` means nullable; unmarked fields are required. All new row IDs are application-minted UUIDv7. Foreign-key IDs are UUIDs; strings crossing HTTP do not become text FKs. Unless overridden, mutable domain rows have `id`, `created_at`, `updated_at`, and `version BIGINT DEFAULT 1`. Timestamps are `TIMESTAMPTZ`; titles and enum-like values are text. JSON fields have typed, versioned, size-bounded schemas and non-null `{}` or `[]` defaults where appropriate.
+
+Root-scoped rows carry `root_project_id`. Composite FKs keep project/root, deal/project/root, stage/pipeline/root, and task/project/root consistent. A nullable task/deal context must still belong to the declared project; when both are present the task links to that deal. Add the necessary composite unique keys before dependent FKs. Native structural, uniqueness, and range constraints are appropriate; enum membership is validated in Go services.
+
+Shared work is archived, not hard-deleted through product APIs. Structural work/history FKs use `RESTRICT`; nullable human attribution/ownership uses `SET NULL`; pure user-assignee/grant/preference joins may cascade. Deleting a user, team, or organization must not delete shared projects or deals. Canonical entity references are typed logical references through the AlloyDB-backed `nodespub` readers. Validate the resolved entity type as well as its ID.
+
+### 1. projects.projects
+
+| Fields | Type/default and rule |
+|---|---|
+| `parent_project_id?`, `root_project_id` | UUID FKs. Roots reference themselves; children inherit the root. |
+| `title`, `description?`, `success_criteria?` | Nonblank title and optional text. |
+| `status`, `priority` | `planned` and `normal` defaults. Project statuses: planned, active, on_hold, completed, canceled. Priorities: low, normal, high, urgent. |
+| `owner_user_id?` | Accountable lead; required and eligible on creation. Only root ownership grants access. |
+| `owning_organization_id?`, `team_id?`, `timezone?` | Root-only settings. Owning org and valid IANA timezone required on root creation; no child overrides. |
+| `target_date?`, `due_date?` | DATE. Target after due is surfaced as a warning, not silently changed. |
+| `next_action?`, `last_progress_at` | Accepted next step and last meaningful progress. |
+| `agent_assistance_enabled`, `agent_review_interval_hours?`, `agent_daily_budget_usd?`, `next_agent_review_at?` | Root-only; false by default. Enabled roots default to a 24-hour review cycle, minimum 1 hour, and a configurable USD 5 daily budget. |
+| `agent_review_cursor?`, `agent_review_cycle_started_at?` | Root-only operational cursor and cycle time, persisted independently of domain versions. |
+| `created_by_user_id?`, `created_by_agent_key?`, `created_by_agent_run_id?` | Trusted immutable creation provenance. Human attribution survives as null if the account is removed. |
+| `completed_at?`, `archived_at?`, `access_version` | Lifecycle and root authorization version. Access changes increment the root access version. |
+
+Root-only settings are null on children; `agent_assistance_enabled` is false on children and their unused `access_version` remains 1. Expose resolved root settings in API responses. Serialize hierarchy changes under the root lock, reject cycles and cross-root moves, and cap nesting at 10 levels. Completing a project requires all non-archived descendant projects to be completed/canceled, tasks done/canceled, and deals terminal; report remaining blockers instead of silently closing them. Archived unfinished work is shown in the confirmation summary. Completion is an explicit command, not a count-derived mutation.
+
+### 2. projects.project_organization_access
+
+Fields: `id`, `root_project_id`, `organization_id`, `role` (viewer/editor), `granted_by_user_id?`, `created_at`, `updated_at`. Unique root/org, plus reverse org/root index. Resolve active members of non-deleted organizations at request time. No grant means private, not public. Do not automatically grant the owning org or a linked team's attributed org. `organization_ids` in responses is derived from these rows.
+
+### 3. projects.tasks
+
+Fields: common mutable fields; `project_id`, `root_project_id`, `deal_id?`, `work_key?`; `title`, `description?`, `acceptance_criteria?`; `status DEFAULT todo`, `priority DEFAULT normal`; `target_date?`, `due_date?`, `estimated_minutes?`; `next_action?`, `blocked_reason?`, `blocked_at?`, `next_check_in_at?`, `last_progress_at`; `completion_summary?`; creator/agent provenance; `started_at?`, `completed_at?`, `archived_at?`.
+
+Statuses: todo, in_progress, blocked, in_review, done, canceled. Estimates are nonnegative integers. A manual block requires a reason. Dependency blocking is derived and need not overwrite manual status. Assignment/dependency changes increment task version. The optional deal belongs to the same project. A My Tasks view aggregates eligible assignments across readable projects; it does not introduce standalone tasks. Reopen clears current completion fields while preserving activity history.
+
+`work_key` is an optional stable pipeline requirement key, such as `diligence_review`, set by an authorized create/link command and meaningful only with a deal. Validate it against that deal's pipeline criteria/guidance. Enforce one non-archived task per deal/work key. A canceled or missing required task does not satisfy `task_done`; replacement is explicit. Copying a pipeline preserves semantic work keys while giving stage/criterion/rule rows fresh IDs, so every new deal can supply its own work.
+
+### 4. projects.task_assignees
+
+Fields: `id`, `task_id`, `project_id`, `root_project_id`, `user_id`, `assigned_by_user_id?`, `assigned_by_agent_key?`, `assigned_at`. Unique task/user, reverse user/task index. Zero rows means unassigned. Assignees must be active users with editor rights. Assignment never grants visibility. Revoked assignments remain visibly ineligible to current collaborators, receive no reminders, and can be explicitly reassigned; user deletion removes the pure link.
+
+### 5. projects.task_dependencies
+
+Fields: `id`, `root_project_id`, `task_id`, `depends_on_task_id`, `created_by_user_id?`, `created_at`. Unique dependent/prerequisite; reverse prerequisite lookup. Both tasks must be in the same root. No self-link or cycle, including simultaneous inverse inserts. Unfinished or canceled prerequisites block completion. Removing/replacing a prerequisite is explicit and audited.
+
+### 6. projects.pipelines
+
+Fields: common mutable fields; `root_project_id`; `title`, `description?`, `kind DEFAULT custom`, `icon_name?`, `color?`, `default_currency?`; `position`, `configuration_version BIGINT DEFAULT 1`, `board_version BIGINT DEFAULT 1`; `source_template_key?`, `source_template_version?`, `copied_from_pipeline_id?`; `created_by_user_id?`, `archived_at?`.
+
+Kinds are descriptive Go-validated strings such as fundraising, sales, partnerships, hiring, custom. A root may have multiple pipelines. Root admins manage configuration. Copy requires read access to the source and admin access to the destination; copy stages/criteria/guidance with fresh IDs, preserve semantic work keys, and copy no deals, people, history, or permissions. Remove source-specific targets/evidence/default parameters and require valid configuration before admitting deals. Copies do not receive later source edits. A provenance source FK is nullable with `SET NULL`.
+
+### 7. projects.pipeline_stages
+
+Fields: common mutable fields; `pipeline_id`, `root_project_id`; `name`, `category`, `color?`, `position`, `is_default DEFAULT false`; `criteria JSONB`, `action_guidance JSONB`; `stale_after_days?`; `archived_at?`.
+
+Use stable stage IDs. A pipeline has exactly one active, nonterminal default stage and at least one active successful and unsuccessful terminal stage before deals are admitted. At most one default is enforced by a partial unique index; the full configuration rule is transactional service validation. `stale_after_days` is a positive integer when set. Archive referenced stages rather than deleting them; an archive command names a compatible replacement for open deals and records each transition. A configuration edit increments pipeline configuration version even when no deal moves.
+
+### 8. projects.deals
+
+| Fields | Type/default and rule |
+|---|---|
+| `project_id`, `root_project_id`, `pipeline_id`, `stage_id` | Required UUIDs with composite integrity. Pipeline and project share a root. |
+| `title`, `description?`, `owner_user_id?` | Title required; eligible owner required at creation. Ownership alone grants no access. |
+| `entity_type`, `node_uuid` | Canonical primary target: persons or companies. Resolve through nodes before admission; target changes are explicit. |
+| `value?`, `currency?`, `expected_close_date?` | NUMERIC(20,4), ISO currency text, DATE. Value/currency are both present or both absent; value is nonnegative. No floating-point money; serialization follows the [API conventions](/guides/open-work/roadmap/projects-tasks/api-design#transport-and-response-conventions). |
+| `next_action?`, `blocked_reason?`, `last_progress_at`, `stage_entered_at` | Accepted action, explanatory block, actual progress, and current stage age. |
+| `criterion_attestations JSONB` | Typed map keyed by criterion ID/version with attesting user/time and permitted evidence references. A model cannot write user attestations. |
+| `position`, `won_at?`, `lost_at?`, `lost_reason?`, `archived_at?` | Board rank and lifecycle. Unsuccessful closure requires a reason. |
+| `created_by_user_id?`, `created_by_agent_key?`, `created_by_agent_run_id?` | Immutable creation provenance, plus common mutable fields. |
+
+Derive the deal's outcome from stage category; do not add a separately writable outcome column. Stage moves update current terminal timestamps transactionally; reopening clears current closure fields and records the prior values in history. The same target can legitimately have different opportunities; warn about possible duplicates within the project/pipeline, but do not impose a global target uniqueness constraint. A copied default currency does not redenominate existing deals.
+
+### 9. projects.deal_stakeholders
+
+Fields: common mutable fields; `deal_id`, `project_id`, `root_project_id`; `entity_type`, `node_uuid`; `role`, `description?`, `evidence_refs JSONB`; `added_by_user_id?`, `added_by_agent_key?`, `removed_at?`.
+
+Roles: decision_maker, champion, influencer, blocker, other. The role and canonical target must be supported by user input or permitted evidence. Enforce active uniqueness on deal/entity type/node/role. Soft removal preserves the earlier relationship in history. Multiple roles can be explicit separate links; references confer no access and create no graph edges.
+
+### 10. projects.work_activity
+
+Append-only fields: `id`, `project_id`, `root_project_id`, `task_id?`, `deal_id?`; `event_type`; `actor_type` (user/agent/system), `actor_user_id?`, `agent_key?`, `agent_run_id?`; `command_id?`, `action_run_id?`, `entity_version?`; `body?`, `payload JSONB`, `visibility` (root/admin), `created_at`.
+
+Store typed old/new values, explanations, and evidence references for creation, assignment, meaningful progress, configuration, transition, attestations, adoption, archive, and reopen. Commit with the state change. Pipeline configuration events use the root project as their project context. Sensitive ACL details are admin-visible. Private suggestion responses and mailbox contents never enter the shared timeline. Provider receipt details can be referenced without exposing private payloads. There is no raw model transcript feed.
+
+### 11. projects.agent_suggestions
+
+Fields: common mutable fields; `project_id`, `root_project_id`, `task_id?`, `deal_id?`; `kind` (next_step/change_request), `suggestion_type`; `title`, `description?`, `rationale`, `expected_benefit?`; `suggested_for_user_id?`; `action_type?`, typed `action_payload?`; `intent_key`, `context_fingerprint`, `resource_versions JSONB`; `evidence_refs JSONB`; `agent_run_id?`, `agent_key`, `model_key?`, `prompt_version`, `policy_version`, `on_behalf_of_user_id?`; `source_suggestion_id?`, `source_action_ref?`; `status DEFAULT open`, `expires_at?`; `adopted_at?`, `adopted_by_user_id?`, `adoption_type?`, `result_task_id?`, `action_run_id?`, `applied_activity_id?`; `resolved_at?`, `resolved_by_user_id?`, `resolution_reason?`, `resolution_source?`, `supersedes_suggestion_id?`.
+
+Shared states: open, adopted, resolved, expired, superseded, withdrawn. Adoption types: created_task, linked_task, applied_change, queued_action. Queuing an action is adoption, not completion; read execution state from its action run. An action failure remains visible and retryable under its own rules rather than reopening a suggestion automatically.
+
+`intent_key` is server-normalized from action/target/business occurrence, not model wording. Enforce one open suggestion per root/intent and reject duplicate adoption across users with a locked row/version. An explicit source import is unique per root/source suggestion/action. Revalidate source visibility; do not copy private source content into root-shared cards. Use an optional future `suggestionspub` reader, never direct sibling service imports.
+
+Advice may have no executable payload. Exact changes carry relevant task/deal/root-access/pipeline-configuration versions. Shared cards hold only audience-safe material; a mailbox draft is an owner-scoped resource reference, not shared body/recipient content. Ignoring/saving does not change work, deadlines, next_action, or progress. Resolution requires a user report or a verified canonical event; a model inference can only propose it.
+
+### 12. projects.suggestion_user_state
+
+Fields: `root_project_id`, `user_id`, `intent_key` as composite PK; `last_suggestion_id?`, `first_viewed_at?`; `disposition DEFAULT undecided` (undecided/saved/snoozed/dismissed), `snoozed_until?`; `feedback_reason?`, `feedback_text?`; `created_at`, `updated_at`.
+
+Keying by intent preserves suppression across equivalent regenerated suggestions. A snoozed disposition requires a future wake time; saving is a bookmark. Dismissal persists until that user clears it; revised phrasing does not reset it. Global adoption, expiry, resolution, or withdrawal overrides personal resurfacing. Only the user can read/change their private state; root admins and generic root agents do not receive personal feedback. Server-side filtering may honor it without revealing it. No row means no response.
+
+### 13. projects.agent_runs
+
+Fields: `id`, `root_project_id`, `project_id`, `task_id?`, `deal_id?`; `requested_by_user_id?`, `on_behalf_of_user_id?`, `trigger_type`; `dedupe_key`, `context_fingerprint`, `resource_versions JSONB`; `status`, `available_at`, `attempts`, `lease_token?`, `lease_until?`, `lease_fence`; `model_key`, `prompt_version`, `policy_version`; `limits JSONB`, `usage JSONB`, bounded `evidence_manifest JSONB`, `result_summary?`, `error_code?`, sanitized `last_error?`; `created_at`, `started_at?`, `finished_at?`, `updated_at`.
+
+States: queued, running, succeeded, partial, failed, canceled, budget_exhausted. A unique dedupe key covers root, trigger/target, input fingerprint, and review occurrence. Store explicit budget counters and provider receipts before making work visible. The bounded evidence manifest records source, visibility, observed time, and freshness/unknown status. Recheck input versions and permissions before materializing suggestions; stale output is discarded or re-evaluated, never committed as current advice.
+
+### 14. projects.action_runs
+
+Fields: `id`, `root_project_id`, `project_id`, `task_id?`, `deal_id?`, `suggestion_id?`; `action_type`, typed `input JSONB`, `input_hash`, `resource_versions JSONB`; `authorized_by_user_id?`, `authorized_at`, `authorization_expires_at`, `authorization_scope JSONB`; `on_behalf_of_user_id?`, `agent_run_id?`; `status`, `dedupe_key`, `available_at`, `attempts`, `lease_token?`, `lease_until?`, `lease_fence`; `provider_idempotency_key?`, `provider_request_id?`, `provider_result_id?`; typed `result_refs JSONB`, `result_summary?`, `visibility` (root/actor), `error_code?`, sanitized `last_error?`; `created_at`, `started_at?`, `finished_at?`, `updated_at`.
+
+States: queued, running, succeeded, failed, unknown, canceled. One logical action has one stable identity across retries. Authorization binds the action, target, relevant versions, and exact content hash; edits require a new authorized command. V1 authorizations expire after 24 hours if not started. Missing/deleted principal cancels unstarted work. A running action whose result is uncertain becomes `unknown`; do not silently retry non-idempotent side effects. Result references distinguish `provider_acknowledged`, `domain_committed`, and `user_reported` evidence. A user report alone cannot satisfy an `action_succeeded` provider criterion; use an explicit human-confirmation criterion where appropriate. Actor-only inputs/results stay private even though the shared timeline can say an authorized action occurred.
+
+### 15. projects.followups
+
+Fields: `id`, `root_project_id`, `project_id`, `task_id?`, `deal_id?`, `suggestion_id?`; `recipient_user_id`, `kind`; `scheduled_for`, `available_at`, `basis JSONB`; `dedupe_key UNIQUE`; `status` (pending/processing/sent/failed/unknown/canceled), `attempts`, `lease_token?`, `lease_until?`, `lease_fence`; `provider_idempotency_key?`, `provider_result_id?`, `sent_at?`; sanitized `last_error?`; `created_at`, `updated_at`.
+
+Kinds: assignment, due_soon, overdue, check_in, blocked_too_long, suggestion_digest, suggestion_reminder. One row is one occurrence for one recipient, not a recurring rule. Domain commands create event-based occurrences transactionally; bounded scans derive date-based occurrences. A semantic basis identifies the due date/check-in/stage/suggestion intent, so irrelevant version bumps do not create or cancel valid reminders. Sent means acknowledged provider acceptance, not a read receipt.
+
+### 16. projects.command_receipts
+
+Fields: `id`, `actor_key`, `root_project_id?`, `operation`, `idempotency_key`, `request_hash`, `result_refs JSONB`, `created_at`. Unique actor/operation/key. Actor keys are verified identities with trusted agent attribution, never credentials. Root/scope and the complete normalized command belong in the request hash.
+
+Commit the receipt and domain result together. Same key/body returns the existing result after reauthorization; changed body conflicts. Root creation may begin without a root ID, then stores the created root in the receipt. Retain receipts for the advertised retry lifetime, initially the life of archived work; no V1 purge job. Suggestion adoption also locks the shared suggestion, because per-actor keys alone cannot stop two different users adopting it twice.
+
+### 17. projects.project_user_preferences
+
+Fields: `root_project_id`, `user_id` as composite PK; `reminders_enabled DEFAULT true`, `suggestion_digest_enabled DEFAULT false`, `muted_until?`, `quiet_hours_start?`, `quiet_hours_end?`, `minimum_reminder_interval_hours DEFAULT 24`; `created_at`, `updated_at`.
+
+Quiet hours are paired TIME values, resolved in the user's current timezone with root fallback, including overnight/DST behavior. Users manage only their own preferences and must have root access. Assignment/due reminders use the existing in-app channel; suggestions appear as pull-based cards unless a digest or reminder is explicitly enabled. Save/ignore creates no reminder. Snooze controls display only unless the user separately requests a reminder.
+
+## Board storage and ordering
+
+Use 12-character, zero-padded base-36 text ranks with `C` collation. Compute integer midpoints with checked arithmetic; when no gap remains, rebalance the affected ordered set under the root lock. Assign even ranks across the available range and retry the requested placement in the same transaction. IDs break ties. Test endpoint insertion, repeated midpoint exhaustion, simultaneous moves, and rebalance.
+
+Add a pipeline `board_version` counter for card membership/order mutations; keep it separate from `configuration_version`.
+
+The [API pagination contract](/guides/open-work/roadmap/projects-tasks/api-design#pagination) defines cursor contents and invalidation behavior. Stage criteria and action-guidance documents follow the [typed API contract](/guides/open-work/roadmap/projects-tasks/api-design#stage-criteria-and-suggested-actions).
+
+## Indexes and query plans
+
+Initial load-test target: a root with 10,000 active deals, 100,000 tasks, and 50 collaborators. This is a test fixture, not a claimed production measurement. Inspect query plans for board columns, ACL counts, My Tasks, history, due scans, and intent suppression. Use batch node hydration and bounded pages; no N+1 person/stakeholder lookups. Tune indexes from these actual queries: root/parent, task project/status/date, assignee user/task, reverse dependency, pipeline/stage/rank/ID, canonical target, stakeholder target, timeline time/ID, open-intent uniqueness, ready/expired-lease jobs, and semantic occurrence dedupe.
+
+## Migration sequence
+
+Generate migrations using `make migration name=projects_001_work`, then feature-owned sequential migrations for pipelines/deals, suggestions/reliability, and actions/follow-ups. The named slices are logical ordering, not hand-chosen timestamps. Add FKs for later-created dependencies in the later migration; do not introduce forward references to absent tables. Receipt/activity/run circular references are nullable and added after both tables exist. Recheck ordering against current main before merge; do not rewrite already-applied migrations.
+
+Table numbers in the [implementation build slices](/guides/open-work/roadmap/projects-tasks#implementation-layout-and-build-slices) refer to the schema above. Transaction and access invariants are defined in [Projects & Tasks API Design](/guides/open-work/roadmap/projects-tasks/api-design#commands-concurrency-and-invariants).
