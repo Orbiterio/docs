@@ -18,22 +18,24 @@ Use [Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-pl
 
 The TypeScript harness starts on Gemma, then switches to a second model through OpenRouter after a configurable number of accepted user turns. Compare continuation candidates using real OpenUI buttons and full Submit journeys; Go persists model selection for retry consistency. See the [model bake-off contract](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#gemma-to-second-model-bake-off).
 
-### Refreshed AlloyDB schema — 2026-09-15
+### Verified live AlloyDB schema — 2026-09-15
 
-All 185 migrations from backend `177a0a0be376331802c73cdf5398a392233bcc6e` were applied to fresh Docker database `orbiter_chat_qa_20260915` in `orbiter-db` (AlloyDB Omni 16.8.0); latest migration `20260914214645`, zero pending. This is a local schema rebuild, not a live AlloyDB inspection. Connect through `orbiter-db.orb.local:5432` on this machine; `localhost:5432` points elsewhere.
+**All Phase I schema work is complete.** Njogu's [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) and [PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) are merged and deployed. Read-only inspection of live dev AlloyDB (`orbiter-dev` / `orbiter-dev-primary`, database `orbiter`) verified all 72 expected columns, all 17 indexes, constraints and runtime access. The final check at **10:37:57 UTC** confirmed **188 applied migrations**, latest `20260915131618`, and `copilot_messages_run_fk` using `ON DELETE NO ACTION`.
 
-| Phase I table | Current schema | Planned change |
+Backend baseline: `edc3b71adef8effc431de964b7d757b31740dcd3`. The earlier local Docker snapshot at 185 migrations predates these changes; its refresh has not been verified. Use the [environment preflight](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#schema-preflight) to confirm the selected test database.
+
+| Phase I table | Verified schema | Existing role in the application build |
 | --- | --- | --- |
-| `suggestions.suggestion_request` | Existing, 22 columns | Add `context_version`, `intake_context`, `submission_receipt`; retain same request ID through submit |
-| `copilot.conversations` | Missing | Create ownership, thread key, request link and transcript version |
-| `copilot.runs` | Missing | Create accepted-input and model-selection metadata (`execution_metadata`), plus fenced lease |
-| `copilot.messages` | Missing | Create ordered SDK parts, revisions, question metadata and UI-library version |
-| `copilot.mutations` | Missing | Create logical-turn effect and submit receipts |
-| `users.users`, `organizations.organizations`, `organizations.organization_memberships` | Existing | Reuse account, org and current membership checks; provision synthetic QA fixtures |
+| `suggestions.suggestion_request` | Ready, 25 columns | `context_version`, `intake_context`, `submission_receipt`; same request ID through submit |
+| `copilot.conversations` | Ready, 13 columns | Ownership, thread key, request link and transcript version |
+| `copilot.runs` | Ready, 13 columns | Accepted input and model-selection metadata (`execution_metadata`), plus fenced lease |
+| `copilot.messages` | Ready, 14 columns | Ordered SDK parts, revisions, question metadata and UI-library version |
+| `copilot.mutations` | Ready, 7 columns | Logical-turn effect and submit retry receipts |
+| `users.users`, `organizations.organizations`, `organizations.organization_memberships` | Existing | Account, org and current membership checks; synthetic QA fixtures |
 | `persons.persons` | Existing | Request FK dependency only; beneficiary remains null |
 | `suggestions.suggestion_batch` and result/loop children | Existing | Preserve; Phase I writes no result rows |
 
-The class registry is versioned Go code, not a new table. Unsent UI fields use a bounded browser session cache. The build plan defines exact ownership/deletion rules, additive SQL and browser-to-database assertions.
+No table creation, column additions or new migrations remain in the Phase I plan. The class registry is versioned Go code; unsent UI fields use a bounded browser session cache. The build plan retains the existing schema reference and defines the remaining Go services/APIs, TypeScript/React integration and browser-to-database assertions. Database readiness does not imply that those application flows are implemented.
 
 ## Table access matrix — historical Xano snapshot
 
@@ -51,20 +53,20 @@ Seven Xano tables carry all data traffic. Only `query`, `get`, `add`, `edit` are
 
 ## Xano → AlloyDB coverage
 
-Half the tables already exist on `main` — the `suggestions` and `relationships` features landed mid-September. The canonical AlloyDB request table is **`suggestions.suggestion_request`**, keeping the Xano name `suggestion_request`. Use this existing table for all outcome request persistence.
+The Phase I destination tables exist on `main` and in live dev AlloyDB. Table availability does not imply that historical Xano records or other chat surfaces have been migrated. The canonical AlloyDB request table is **`suggestions.suggestion_request`**, keeping the Xano name `suggestion_request`. Use this existing table for all outcome request persistence.
 
 | Xano table | AlloyDB table | Status |
 | --- | --- | --- |
 | `contacts` | `persons.contacts` | Exists — redesigned, diff below |
 | `user` | `users.users` | Exists — redesigned, diff below |
-| `suggestion_request` | `suggestions.suggestion_request` | **Exists on main** (`suggestions_001_init`, `suggestions_002_ingest`, `suggestions_003_universe_loop_job`) — Xano name kept; diff below |
+| `suggestion_request` | `suggestions.suggestion_request` | **Exists on main** (`suggestions_001_init` through `suggestions_004_outcome_chat_intake`) — Xano name kept; diff below |
 | `master_person_relationship` | `relationships.relationships` | **Exists on main** (`relationships_001_init`, merged 9/8) — diff below |
-| `conversation` | `copilot.conversations` *(proposed)* | Missing — new feature |
-| `copilot_chat_messages` | `copilot.messages` *(proposed)* | Missing — new feature |
-| `leverage_loop_conversations` | `copilot.messages` *(proposed)* | Missing — fold in via `surface` discriminator |
-| `outcome_conversations` | `copilot.messages` *(proposed)* | Missing — fold in via `surface` discriminator |
+| `conversation` | `copilot.conversations` | Exists — outcome service integration remains; other surfaces deferred |
+| `copilot_chat_messages` | `copilot.messages` | Destination exists — meeting-prep integration deferred |
+| `leverage_loop_conversations` | `copilot.messages` | Destination exists — beneficiary/loop integration deferred |
+| `outcome_conversations` | `copilot.messages` | Exists — Phase I persists new outcome chat messages here |
 
-The three per-surface transcript tables (`copilot_chat_messages`, `leverage_loop_conversations`, `outcome_conversations`) have identical shapes and the same UI contract — the proposed Go design combines them into one `copilot.messages` table keyed by `conversation_id`, with the surface carried on the conversation row.
+The three per-surface transcript tables (`copilot_chat_messages`, `leverage_loop_conversations`, `outcome_conversations`) have identical shapes and the same UI contract — the existing Go schema provides one `copilot.messages` destination keyed by `conversation_id`, with the surface carried on the conversation row. Phase I implements only new outcome intake; historical transcript import and other surfaces remain deferred.
 
 The `suggestions` schema also carries the result/ingest pipeline the results endpoints will read: `suggestion_batch`, `suggestion`, `suggestion_node`, `suggestion_trajectory`, `suggestion_action_group`, `suggestion_action`, `ingest_error`, and the leverage-loop children `leverage_loop_suggestion`, `leverage_loop_action`, `leverage_loop_trajectory`, `leverage_loop_trajectory_node`, `leverage_loop_question`, `leverage_loop_question_node`.
 
@@ -110,6 +112,7 @@ Exists on `main` — `internal/features/suggestions` already serves it. The merg
 | `deliver_format` | `deliver_format` | Column exists on `main` but is **unused** — delivery formats removed entirely (decision 9/14, see Migration Planning); results return to UI, alternate formats become Phase III context-menu APIs |
 | `current_step`, `progress` | — | **Not migrated** — draft progress tracking not carried over |
 | — | `organization_id` uuid | New (002): org scoping, `SET NULL` |
+| — | `context_version`, `intake_context`, `submission_receipt` | Deployed (004): versioned intake and explicit submission snapshot |
 | — | `universe_job_id`, `batch_id`, `next_poll_at`, `poll_deadline_at`, `failure_reason`; `poll_attempts` | New (003): worker bookkeeping; Phase I submit leaves nullable fields null and attempts 0 |
 
 For [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables), the physical request table is `suggestions.suggestion_request`. The delivery payload field `request_suggestion_id` refers to that row; it is not a table name. The merged migration adds the ingest siblings (`suggestion_batch`, `suggestion`, `suggestion_node`, `suggestion_trajectory`, `suggestion_action_group`, `suggestion_action`, `ingest_error`).
@@ -127,24 +130,24 @@ Exists on `main` — `internal/features/relationships` serves it:
 
 ## Historical Xano transcript shapes
 
-The blocks below document source-table shapes, not copy-ready Go DDL. Phase I creates all four copilot tables listed above; use the build plan for leases, receipts, tenant scope, question identity and retention. Other surfaces are deferred.
+The blocks below document source-table shapes, not copy-ready Go DDL. Phase I uses the four existing copilot tables listed above; use the build plan for leases, receipts, tenant scope, question identity and retention. Other surfaces are deferred.
 
 <Card icon="database">
 
 ```
-conversation — 636  →  copilot.conversations (proposed)
+conversation — 636  →  copilot.conversations (existing destination)
 ```
 
 `user_id`, `mode` text, `title`, `master_person_id`. Chat threads; `mode = "meeting_prep"` is the only mode observed. `where` clauses still use the legacy `$db.copilot_conversations` prefix — the table was renamed in Xano.
 
-Historical consolidation idea: one conversation row replaces prefix parsing. The current Phase I schema supports only `surface=outcome`, includes exact org scope and durable thread identity, and reserves other surfaces for later work; see the build plan SQL.
+Historical consolidation idea: one conversation row replaces prefix parsing. The Phase I service accepts only `surface=outcome` on the existing schema, with exact org scope and durable thread identity. Other surfaces remain deferred; see the build plan data model.
 
 </Card>
 
 <Card icon="database">
 
 ```
-copilot_chat_messages — 637  →  copilot.messages (proposed)
+copilot_chat_messages — 637  →  copilot.messages (existing destination)
 ```
 
 `conversation_id`, `role`, `content`, `template_name`, `template_props` json.
@@ -154,7 +157,7 @@ copilot_chat_messages — 637  →  copilot.messages (proposed)
 <Card icon="database">
 
 ```
-leverage_loop_conversations — 688  →  copilot.messages (proposed)
+leverage_loop_conversations — 688  →  copilot.messages (existing destination)
 ```
 
 `suggestion_request_id`, `role`, `content`. Interview transcript attached to a leverage-loop request. Folds into `copilot.messages` through the request's conversation row.
@@ -164,7 +167,7 @@ leverage_loop_conversations — 688  →  copilot.messages (proposed)
 <Card icon="database">
 
 ```
-outcome_conversations — 689  →  copilot.messages (proposed)
+outcome_conversations — 689  →  copilot.messages (existing destination)
 ```
 
 `suggestion_request_id`, `role`, `content`. Same fold as leverage loops.
