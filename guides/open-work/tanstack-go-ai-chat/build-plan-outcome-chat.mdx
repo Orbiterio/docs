@@ -22,9 +22,12 @@ Use this page as the implementation brief for **orbiter-backend** and **orbiter-
 
 ```text AI build instruction
 Implement Phase I of Build Plan — Outcome Chat in the existing Orbiter backend
-and frontend repositories. Follow their repository rules. First verify the
-request-table mapping, dependency versions, and authentication prerequisites
-below. Build the complete outcome intake flow, not a demo or contract shells.
+and frontend repositories. Follow their repository rules. The Phase I database
+schema is already built, merged, deployed and verified. Use the existing tables
+and columns below; no table creation, column additions or new migrations are
+Phase I deliverables. First verify the selected environment, dependency versions
+and authentication prerequisites. Implement the Go services/APIs and the
+TypeScript/React flow through explicit SUBMIT, including real end-to-end tests.
 Use the classifier system prompt on this page. Keep SUBMIT user-controlled.
 Use your browser/computer tools to operate the real authenticated app:
 click +, type a goal, answer the chat, review, click SUBMIT, refresh, and
@@ -61,92 +64,101 @@ Related references: [table inventory](/guides/open-work/tanstack-go-ai-chat), [m
 ## Schema preflight
 
 <Info>
-**Canonical AlloyDB table: `suggestions.suggestion_request`.** This is the existing request table confirmed by Mark and defined by backend `origin/main` revision `177a0a0be376331802c73cdf5398a392233bcc6e`, inspected on 2026-09-15. Use this table for outcome drafts and submitted requests. The preflight below verifies its columns, constraints, and migration baseline in the selected development environment; the table name is settled.
+**Schema complete — verified live on 2026-09-15.** Njogu's [backend PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) and [foreign-key fix PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) are merged and deployed. Read-only inspection of the backend's live dev AlloyDB database confirmed all five Phase I tables, all 72 expected columns, indexes, constraints and runtime access. The final foreign-key check passed at **10:37:57 UTC**. **No table creation, column additions or new migrations remain in this build.**
 </Info>
 
-Before authoring a migration, run these **read-only** queries against the explicitly selected development database:
+**Canonical request table: `suggestions.suggestion_request`.** `Request` below means the model stored in this table. The delivery wire field `request_suggestion_id` is a payload field for the same request ID; preserve it without treating it as a table name.
 
-```sql Request-table inventory
-SELECT table_schema, table_name, table_type
-FROM information_schema.tables
-WHERE table_schema = 'suggestions'
-  AND table_name IN ('suggestion_request', 'suggestion_batch')
-ORDER BY table_schema, table_name;
+| Verified item | Completed baseline |
+| --- | --- |
+| Backend revision | `edc3b71adef8effc431de964b7d757b31740dcd3` (PR #233 merged) |
+| Live target | GCP `orbiter-dev`, cluster `orbiter-dev`, instance `orbiter-dev-primary`, database `orbiter` |
+| Applied migrations | 188; latest `20260915131618_copilot_002_messages_run_fk_no_cascade.sql` |
+| Table definitions | 72 expected columns matched, including types, nullability and defaults |
+| Indexes and constraints | All 17 indexes across the five tables valid/ready; all constraints validated |
+| Runtime access | `orbiter-backend-run@orbiter-dev.iam` has schema usage and SELECT/INSERT/UPDATE/DELETE on all five tables |
+| Message/run retention | `copilot_messages_run_fk` uses `ON DELETE NO ACTION`; deleting a referenced run is blocked |
 
+Before application testing, confirm that the selected development/test database has this existing schema and record its identity and revision. These are **read-only environment checks**, not schema implementation tasks:
+
+```sql Existing Phase I schema inventory
 SELECT table_schema, table_name, column_name, data_type, is_nullable, column_default
 FROM information_schema.columns
-WHERE table_schema = 'suggestions'
-  AND table_name IN ('suggestion_request', 'suggestion_batch')
+WHERE (table_schema = 'suggestions' AND table_name = 'suggestion_request')
+   OR (table_schema = 'copilot'
+       AND table_name IN ('conversations', 'runs', 'messages', 'mutations'))
 ORDER BY table_schema, table_name, ordinal_position;
 
 SELECT conrelid::regclass AS child_table,
        confrelid::regclass AS parent_table,
-       pg_get_constraintdef(oid) AS definition
+       pg_get_constraintdef(oid) AS definition,
+       convalidated
 FROM pg_constraint
 WHERE contype = 'f'
-  AND (conrelid = to_regclass('suggestions.suggestion_batch')
-       OR confrelid = to_regclass('suggestions.suggestion_request'));
+  AND conrelid IN (
+    to_regclass('suggestions.suggestion_request'),
+    to_regclass('copilot.conversations'),
+    to_regclass('copilot.runs'),
+    to_regclass('copilot.messages'),
+    to_regclass('copilot.mutations')
+  );
 ```
 
-Also inspect the selected environment's migration version, indexes, request repositories, and ingest parent lookup. Record the database/environment name and backend revision, not credentials or customer data.
-
-| Finding | Required action |
-| --- | --- |
-| `suggestions.suggestion_request` and its columns/FKs match the expected baseline | Extend the existing table through the suggestions-owned repository and additive migration. Preserve `request_suggestion_id` in the existing delivery wire contract; it is a payload field, not a table name. |
-| The canonical table is missing in the selected environment, or its schema and migrations disagree | Resolve the environment/migration baseline before applying this build's migration. Do not create a replacement request table or rename the canonical table. |
-
-**Notation below:** `Request` means the `suggestion_request` model, physically stored in `suggestions.suggestion_request`. All SQL examples and request persistence use that table.
+If a selected environment is missing these tables or has the old cascading message/run foreign key, report an environment baseline mismatch. The authoritative schema is already in `orbiter-backend`; a stale environment is not a requirement to design replacement tables or migrations. Schema verification does not prove that the services, routes or UI are implemented.
 
 ### Reproducible local environment
 
-The schema was rebuilt from all **185 migrations** at backend revision `177a0a0be376331802c73cdf5398a392233bcc6e` in Docker AlloyDB Omni `16.8.0`. Latest migration: `20260914214645_suggestions_003_universe_loop_job.sql`; zero pending at inspection. This verifies repository-produced schema, not the live AlloyDB service.
+Use an isolated test environment with the verified existing schema for application and browser tests. The earlier Docker QA database `orbiter_chat_qa_20260915` was inspected at **185 migrations** on backend `177a0a0`; that snapshot predates Njogu's changes and is **not the current schema baseline**. The live dev verification above supersedes it. A refresh of that local database has not been verified.
 
-| Item | Local QA baseline / build requirement |
+| Item | Application build requirement |
 | --- | --- |
-| Docs branch | `tanstack_ai_build_qa`, based on `main` at `10e69e8` |
+| Backend | Revision `edc3b71` or a descendant containing both completed PRs; record the implementation commit |
 | Frontend inspected | `d754ba62c55e61d7354f197bf1742b5a0a25d74b`; record the actual implementation commit too |
-| Docker / database | Existing `orbiter-db` container; fresh `orbiter_chat_qa_20260915` database |
-| Database address | `orbiter-db.orb.local:5432`; this machine's `localhost:5432` reaches a separate PostgreSQL server |
+| Test database | Record the selected isolated database, connection identity and migration status; confirm the existing schema above |
+| Local address caution | `orbiter-db.orb.local:5432` reaches the existing Docker container; this machine's `localhost:5432` reaches a separate PostgreSQL server |
 | Docs preview | `http://localhost:3000`; this is Mintlify, not the chat application |
 | App and backend | Record the actual frontend URL/port and `ORBITER_BACKEND_URL`; run the app on a free port distinct from the docs |
 | Rollout/config | Add server-only `OUTCOME_CHAT_GO_ENABLED`, `OUTCOME_CHAT_APP_ORIGIN`, model IDs and signing-key configuration below |
 | Test identity | Synthetic authenticated account, matching `urn:orbiter:user_id` local UUID, selected local org claim, active account and membership |
 
-```bash Inspect the refreshed Docker database
-docker exec -it orbiter-db psql -U orbiter -d orbiter_chat_qa_20260915
-```
-
-The fresh database contains no user/org/request fixtures. Provision synthetic users and organizations through the backend's supported fixture/auth path before browser testing. Include a second user, a second organization, inactive/pending/revoked membership, and a personal-scope account. Confirm `users.users.active_account`, feature eligibility, organization deletion state, and `organizations.organization_memberships.status`. Never copy customer data or fabricate a token to bypass login. Record migration status and connection identity before tests; preserve the pre-existing `orbiter` database. On another machine, create an isolated QA database from the recorded migration revision and record its actual address.
+Provision synthetic users and organizations through the backend's supported fixture/auth path before browser testing. Include a second user, a second organization, inactive/pending/revoked membership, and a personal-scope account. Confirm `users.users.active_account`, feature eligibility, organization deletion state, and `organizations.organization_memberships.status`. Never copy customer data or fabricate a token to bypass login. Keep fixture and destructive retention tests in the isolated test environment.
 
 ### Phase I table checklist
 
-| Table | Verified current state | Phase I work |
+| Table | Verified current state | Existing role in the application build |
 | --- | --- | --- |
-| `suggestions.suggestion_request` | Exists, 22 columns | Add three columns below; same request ID from first input to SUBMIT |
-| `copilot.conversations` | Missing | Create thread, ownership and request binding |
-| `copilot.runs` | Missing | Create accepted-input metadata, pinned model-selection metadata and durable leases |
-| `copilot.messages` | Missing | Create ordered/versioned messages, question metadata and UI-library version |
-| `copilot.mutations` | Missing | Create operation/effect and submission receipts |
-| `users.users` | Exists | Reuse identity and account checks; synthetic QA fixture |
-| `organizations.organizations` | Exists | Reuse local org and deletion state |
-| `organizations.organization_memberships` | Exists | Verify current active membership, not just token claims |
+| `suggestions.suggestion_request` | Ready, 25 columns | Versioned intake and submission receipt; same request ID from first input to SUBMIT |
+| `copilot.conversations` | Ready, 13 columns | Thread, ownership, request binding and transcript version |
+| `copilot.runs` | Ready, 13 columns | Accepted-input metadata, pinned model-selection metadata and durable leases |
+| `copilot.messages` | Ready, 14 columns | Ordered/versioned messages, question metadata and UI-library version |
+| `copilot.mutations` | Ready, 7 columns | Operation/effect and submission retry receipts |
+| `users.users` | Exists | Identity and account checks; synthetic QA fixture |
+| `organizations.organizations` | Exists | Local org and deletion state |
+| `organizations.organization_memberships` | Exists | Current active membership, not just token claims |
 | `persons.persons` | Exists | Existing nullable request FK; `person_id` stays null |
-| `suggestions.suggestion_batch` and existing result/loop child tables | Exist | Preserve; Phase I creates no batch or result children |
+| `suggestions.suggestion_batch` and existing result/loop child tables | Exist | Preserve; Phase I creates no batch or result records |
 
-The registry is Go code/configuration exported over HTTP. No new registry, approval, form-state, memory, file, beneficiary, or result table is required for Phase I. UI edit caching below is local presentation state.
+All required tables and fields are available. The registry is Go code/configuration exported over HTTP. UI edit caching below is local presentation state. Neither requires another table.
 
 ### Verified backend baseline
 
-Inspect these paths at the pinned revision, then compare the implementation branch:
+Completed schema history, retained as a reference to the implementation already merged:
 
-- `migrations/20260910114408_suggestions_001_init.sql` creates `suggestions.suggestion_request`.
-- `migrations/20260914141151_suggestions_002_ingest.sql` adds `organization_id`; `suggestion_batch.suggestion_request_id` references that parent.
-- `migrations/20260914214645_suggestions_003_universe_loop_job.sql` adds `universe_job_id`, `batch_id`, `next_poll_at`, `poll_attempts`, `poll_deadline_at`, and `failure_reason`.
+| Completed migration | Deployed result |
+| --- | --- |
+| `20260915123425_suggestions_004_outcome_chat_intake.sql` — [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) | `context_version`, `intake_context` and `submission_receipt` on the existing request table |
+| `20260915123426_copilot_001_init.sql` — [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) | Four copilot tables, their indexes and relationships |
+| `20260915131618_copilot_002_messages_run_fk_no_cascade.sql` — [PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) | Blocks deletion of runs referenced by saved messages; applied at 10:30:55 UTC |
+
+The existing request table also retains the original request fields, organization scope, and Universe/loop worker bookkeeping from `suggestions_001_init`, `suggestions_002_ingest` and `suggestions_003_universe_loop_job`.
+
+Inspect these application paths at the pinned revision, then compare the implementation branch:
+
 - `internal/features/suggestions/service.go` currently restricts request creation/listing to legacy `loop`; its `DispatchRequest` marks processing and publishes a loop event. **Do not call it for this Phase I submit.**
 - `internal/platform/middleware/workos_auth.go` provides `RequireWorkOS`, `OrbiterUserID`, and `OrbiterOrgIDOrNil`.
 - `internal/platform/middleware/respond.go` and `errors.go` define the actual envelopes and uppercase error codes.
 
-The delivery wire field `request_suggestion_id` and the inspected database FK `suggestion_request_id` are distinct names for one correlation ID. Preserve the existing delivery wire contract. This page does not specify the future Backend-to-Universe request payload.
+The delivery wire field `request_suggestion_id` and the database FK `suggestion_request_id` are distinct names for one correlation ID. Preserve the existing delivery wire contract. This page does not specify the future Backend-to-Universe request payload.
 
 ## State contract
 
@@ -243,103 +255,101 @@ The context tool accepts explicit `additional_requirements:{upsert:[...],remove_
 
 ## Data model
 
-### Request columns and additive migration
+### Existing request columns
 
-The inspected request table already has UUID `id`, nullable `user_id`, nullable `organization_id`, `copilot_mode`, `status`, nullable `class_slug`, nullable beneficiary `person_id`, title fields, nullable TEXT `request_context`, nullable INT `number_of_results`, JSONB `llm_summary_context` (default `[]`), nullable `deliver_format`, BOOLEAN `modified`, and timestamps.
+`suggestions.suggestion_request` has 25 columns. Its original fields include UUID `id`, nullable `user_id`, nullable `organization_id`, `copilot_mode`, `status`, nullable `class_slug`, nullable beneficiary `person_id`, title fields, nullable TEXT `request_context`, nullable INT `number_of_results`, JSONB `llm_summary_context` (default `[]`), nullable `deliver_format`, BOOLEAN `modified`, timestamps, and the existing worker bookkeeping listed above.
+
+The three intake fields are already deployed:
+
+| Existing column | SQL type | Nullable | Default |
+| --- | --- | --- | --- |
+| `context_version` | `integer` | No | `0` |
+| `intake_context` | `jsonb` | No | `'{}'::jsonb` |
+| `submission_receipt` | `jsonb` | Yes | — |
 
 - For this surface, owner and org come from authenticated scope; `person_id` is null. Do not confuse WorkOS IDs with local UUIDs.
 - Titles are TEXT NOT NULL DEFAULT `''`; cap each at 500 characters. `modified` becomes true on post-create changes; `updated_at` gets the database time.
-- Do not overwrite legacy `llm_summary_context` to store an approval ID. The new receipt stores the approved snapshot separately.
-- Add these fields in the next **suggestions-owned** migration, not an unreviewed ALTER hidden in `copilot_001_init`. Do not use `IF NOT EXISTS` to conceal an incompatible existing column.
-
-```sql Conditional request migration after schema preflight
-ALTER TABLE suggestions.suggestion_request
-  ADD COLUMN context_version integer NOT NULL DEFAULT 0,
-  ADD COLUMN intake_context jsonb NOT NULL DEFAULT '{}',
-  ADD COLUMN submission_receipt jsonb;
-```
-
-Initialize `intake_context` for new chat drafts only. Historical rows with `{}` are not silently ready or imported into the new chat flow. The receipt remains null until explicit submission. Do not rewrite old migrations or drop any table/column in this documentation task.
+- Do not overwrite legacy `llm_summary_context` to store an approval ID. The existing `submission_receipt` column stores the approved snapshot separately.
+- Initialize `intake_context` for new chat drafts only. Historical rows with `{}` are not silently ready or imported into the new chat flow. The receipt remains null until explicit submission.
 
 ### Conversations and messages
 
-Create the next `copilot` migration after the request migration. These are proposed tables, not claims about the deployed database. All SQL row IDs use `ids.NewUUIDv7()`; SDK message and run IDs remain opaque strings.
+All four tables below exist in the verified AlloyDB schema. This is a field reference for queries, DTOs and Go persistence logic. Generate new row IDs in Go with `ids.NewUUIDv7()`; SDK message and run IDs remain opaque strings. SQL nullability does not replace the stricter service validation specified below.
 
-```sql Copilot tables
-CREATE SCHEMA copilot;
+#### Existing `copilot.conversations`
 
-CREATE TABLE copilot.conversations (
-  id             uuid PRIMARY KEY,                       -- ids.NewUUIDv7()
-  user_id        uuid REFERENCES users.users(id) ON DELETE SET NULL,
-  organization_id uuid REFERENCES organizations.organizations(id) ON DELETE RESTRICT,
-  surface        text NOT NULL,                          -- outcome for this phase; other surfaces deferred
-  surface_key    text NOT NULL,                          -- caller's thread key; client-minted uuid per new thread
-  surface_ref_id uuid REFERENCES suggestions.suggestion_request(id) ON DELETE RESTRICT, -- typed link: request.id for the outcome surface
-  person_id      uuid,                                   -- optional person context reserved for later surfaces
-  title          text,
-  transcript_version integer NOT NULL DEFAULT 0,
-  next_sequence  bigint NOT NULL DEFAULT 1,
-  archived_at    timestamptz,
-  created_at     timestamptz NOT NULL DEFAULT now(),
-  updated_at     timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT copilot_conversations_ref_uq UNIQUE (surface_ref_id)
-);
-CREATE UNIQUE INDEX copilot_conversations_key_uq
-  ON copilot.conversations (user_id, organization_id, surface, surface_key)
-  NULLS NOT DISTINCT WHERE user_id IS NOT NULL;
-CREATE INDEX copilot_conversations_user_idx
-  ON copilot.conversations (user_id, organization_id, updated_at DESC, id DESC);
+| Existing column | SQL type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | `uuid` | No | — |
+| `user_id` | `uuid` | Yes | — |
+| `organization_id` | `uuid` | Yes | — |
+| `surface` | `text` | No | — |
+| `surface_key` | `text` | No | — |
+| `surface_ref_id` | `uuid` | Yes | — |
+| `person_id` | `uuid` | Yes | — |
+| `title` | `text` | Yes | — |
+| `transcript_version` | `integer` | No | `0` |
+| `next_sequence` | `bigint` | No | `1` |
+| `archived_at` | `timestamptz` | Yes | — |
+| `created_at` | `timestamptz` | No | `now()` |
+| `updated_at` | `timestamptz` | No | `now()` |
 
-CREATE TABLE copilot.runs (
-  id uuid PRIMARY KEY,
-  conversation_id uuid NOT NULL REFERENCES copilot.conversations(id) ON DELETE CASCADE,
-  run_id text NOT NULL,
-  input_message_id text NOT NULL,
-  input_sha256 bytea NOT NULL,
-  input_metadata jsonb NOT NULL DEFAULT '{}',
-  execution_metadata jsonb NOT NULL DEFAULT '{}',          -- pinned model-selection snapshot, separate from accepted input
-  status text NOT NULL,
-  failure_reason text,                                  -- safe run failure code; distinct from request worker failure_reason
-  lease_token uuid NOT NULL,
-  lease_expires_at timestamptz NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (conversation_id, run_id)
-);
-CREATE UNIQUE INDEX copilot_runs_active_uq
-  ON copilot.runs (conversation_id) WHERE status = 'active';
+`id` is the primary key. Owner references `users.users` with `SET NULL`; org references `organizations.organizations` with `RESTRICT`; request binding references `suggestions.suggestion_request` with `RESTRICT`. `surface_ref_id` is unique. The existing thread-key unique index covers `(user_id, organization_id, surface, surface_key)` with `NULLS NOT DISTINCT` where `user_id IS NOT NULL`. The history index covers `(user_id, organization_id, updated_at DESC, id DESC)`.
 
-CREATE TABLE copilot.messages (
-  id              uuid PRIMARY KEY,                      -- ids.NewUUIDv7()
-  conversation_id uuid NOT NULL REFERENCES copilot.conversations(id) ON DELETE CASCADE,
-  message_id      text NOT NULL,
-  sequence        bigint NOT NULL,
-  revision        integer NOT NULL DEFAULT 1,
-  status          text NOT NULL,
-  role            text NOT NULL,                         -- user | assistant; tool results are assistant parts
-  parts           jsonb NOT NULL,                        -- full TanStack AI parts array for the message
-  question_context jsonb,
-  ui_library_version text,                              -- required on assistant messages, null on user messages
-  run_id          text NOT NULL,                         -- harness run; idempotent-retry key
-  turn_id         text NOT NULL,                         -- logical user turn; retries retain its identity
-  created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (conversation_id, message_id),
-  UNIQUE (conversation_id, sequence),
-  FOREIGN KEY (conversation_id, run_id) REFERENCES copilot.runs(conversation_id, run_id)
-);
+#### Existing `copilot.runs`
 
-CREATE TABLE copilot.mutations (
-  id uuid PRIMARY KEY,
-  conversation_id uuid NOT NULL REFERENCES copilot.conversations(id) ON DELETE CASCADE,
-  operation_id text NOT NULL,
-  operation_kind text NOT NULL,
-  input_sha256 bytea NOT NULL,
-  response_data jsonb NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (conversation_id, operation_id)
-);
-```
+| Existing column | SQL type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | `uuid` | No | — |
+| `conversation_id` | `uuid` | No | — |
+| `run_id` | `text` | No | — |
+| `input_message_id` | `text` | No | — |
+| `input_sha256` | `bytea` | No | — |
+| `input_metadata` | `jsonb` | No | `'{}'::jsonb` |
+| `execution_metadata` | `jsonb` | No | `'{}'::jsonb` |
+| `status` | `text` | No | — |
+| `failure_reason` | `text` | Yes | — |
+| `lease_token` | `uuid` | No | — |
+| `lease_expires_at` | `timestamptz` | No | — |
+| `created_at` | `timestamptz` | No | `now()` |
+| `updated_at` | `timestamptz` | No | `now()` |
+
+`id` is the primary key; `conversation_id` references the conversation with `CASCADE`. `(conversation_id, run_id)` is unique. The existing partial unique index permits one run with `status=active` per conversation. `execution_metadata` stores the pinned model-selection snapshot separately from accepted input. `failure_reason` is a safe run failure code, distinct from request worker failures.
+
+#### Existing `copilot.messages`
+
+| Existing column | SQL type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | `uuid` | No | — |
+| `conversation_id` | `uuid` | No | — |
+| `message_id` | `text` | No | — |
+| `sequence` | `bigint` | No | — |
+| `revision` | `integer` | No | `1` |
+| `status` | `text` | No | — |
+| `role` | `text` | No | — |
+| `parts` | `jsonb` | No | — |
+| `question_context` | `jsonb` | Yes | — |
+| `ui_library_version` | `text` | Yes | — |
+| `run_id` | `text` | No | — |
+| `turn_id` | `text` | No | — |
+| `created_at` | `timestamptz` | No | `now()` |
+| `updated_at` | `timestamptz` | No | `now()` |
+
+`id` is the primary key; `conversation_id` references the conversation with `CASCADE`. Both `(conversation_id, message_id)` and `(conversation_id, sequence)` are unique. `copilot_messages_run_fk` binds `(conversation_id, run_id)` to `copilot.runs(conversation_id, run_id)` with **`ON DELETE NO ACTION`**, verified after PR #233: a run referenced by saved messages cannot be deleted directly. `parts` stores the full TanStack AI parts array; tool results are assistant parts. The service requires `ui_library_version` on assistant messages and leaves it null on user messages.
+
+#### Existing `copilot.mutations`
+
+| Existing column | SQL type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | `uuid` | No | — |
+| `conversation_id` | `uuid` | No | — |
+| `operation_id` | `text` | No | — |
+| `operation_kind` | `text` | No | — |
+| `input_sha256` | `bytea` | No | — |
+| `response_data` | `jsonb` | No | — |
+| `created_at` | `timestamptz` | No | `now()` |
+
+`id` is the primary key; `conversation_id` references the conversation with `CASCADE`. `(conversation_id, operation_id)` is unique. `response_data` stores the committed response for an idempotent operation replay.
 
 Enums and JSON shapes are Go service validators, not SQL enum types or enum CHECK constraints. This phase accepts only `surface=outcome`, conversation `person_id=null`, UI roles `user|assistant`, and message status `streaming|complete|interrupted|error`. The frontend's existing `surface="outcomes"` maps explicitly to Go `"outcome"`; do not change other legacy surfaces globally.
 
@@ -1292,15 +1302,15 @@ Required correctness gates: every run preserves the expected class/explicit choi
 
 | Step | Implementation deliverables | Exit criteria |
 | --- | --- | --- |
-| 1. Preflight | Verify table mapping, backend branch/revision, auth claims and membership seam, signing-key provisioning, package versions | No unresolved schema identity or auth bypass; record blockers explicitly |
-| 2. Request domain | Suggestions-owned additive migration; registry/readiness; separate draft/context/submit service; transaction-bound `suggestionspub` | Service tests prove scope, reroute, count, version, and submit invariants |
-| 3. Copilot persistence | Copilot migration, sqlc queries, runs/messages/receipts, typed DTOs/mappers, module wiring and depguard | Concurrent/retry/crash tests pass on isolated database |
+| 1. Preflight | Confirm the selected environment uses the completed schema; verify backend revision, auth claims and membership seam, signing-key provisioning, package versions | Existing schema available; no unresolved auth bypass; record environment blockers explicitly |
+| 2. Request domain | Registry/readiness over the existing request table; separate draft/context/submit service; transaction-bound `suggestionspub` | Service tests prove scope, reroute, count, version, and submit invariants |
+| 3. Copilot persistence | sqlc queries over existing copilot tables, run/message/receipt persistence, typed DTOs/mappers, module wiring and depguard | Concurrent/retry/crash tests pass on isolated database |
 | 4. HTTP | All 14 Go routes, exact envelopes, signatures, OpenAPI fragment/root refs | Auth and contract tests cover every route; no `NOT_IMPLEMENTED` shells |
 | 5. Harness | Retarget outcome branch of existing server route, backend client, four model tools, explicit submit action, both prompt assets | No browser history authority; no double persistence owner |
 | 6. UI | Restricted OpenUI library, existing outcome surface wiring, query hooks, resume/error/archive/submit behavior | Actual + → intake → review → SUBMIT works with Go, not a mocked display |
 | 7. Verification | Deterministic tests, provider eval, autonomous real-browser journey, SQL oracle and rollout check | Evidence for the acceptance table below; unverified items remain open |
 
-Use the repository migration generator (`make migration name=<feature>_<next-sequence>_<description>`) rather than hard-coding timestamps or reusing `suggestions_001_init`. Apply only to the approved isolated development/test database. Production schema changes require separate approval; do not run reset/drop/down commands as part of a build test.
+Database schema work is complete. Start from backend revision `edc3b71` or a descendant containing PRs #232 and #233. The remaining deliverables are application logic, API contracts, TypeScript/React integration and the acceptance evidence below.
 
 ## Acceptance tests
 
@@ -1401,7 +1411,7 @@ Also run a separate browser fixture adding “No HOA, walkable to the beach, no 
 
 ### Checks and completion evidence
 
-Backend, after generating queries and applying reviewed migrations to an isolated test database:
+Backend, against an isolated test database with the verified existing schema:
 
 ```bash Backend verification
 make sqlc-generate

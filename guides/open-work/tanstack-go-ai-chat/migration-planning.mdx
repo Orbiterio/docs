@@ -1,6 +1,6 @@
 ---
 title: "Migration Planning"
-description: "Current Phase I migration decisions, historical Xano observations, and explicitly deferred chat work."
+description: "Completed Phase I schema, remaining application work, historical Xano observations, and deferred chat surfaces."
 icon: "route"
 ---
 
@@ -16,7 +16,8 @@ icon: "route"
 | AI loop | TypeScript `chat()` and `.server()` tools, including the bounded classifier; no Go LLM endpoints |
 | Model routing | Gemma for the configured opening user turns, then a second OpenRouter model; policy pinned per conversation and execution metadata per turn |
 | State authority | Go `suggestions.suggestion_request` and versioned intake; transcript/tool results are evidence and projections |
-| Persistence | Four new copilot tables: conversations, runs, messages, mutations; atomic Go checkpoints and effect receipts |
+| Database schema | Complete: PRs #232 and #233 merged, deployed and verified; no table creation, column additions or new migrations in the remaining Phase I build |
+| Persistence | Implement atomic Go checkpoints and effect receipts using the existing conversations, runs, messages and mutations tables |
 | Draft | Created once on first accepted input, before classification, with null class and null beneficiary |
 | Classifier | LLM call in TypeScript or deterministic accepted routing choice; Go validates registry membership and commits route |
 | Routing cap | At most two unresolved routing turns; fallback to `plan_outcome` still needs real goal, slots, result count and user SUBMIT |
@@ -31,7 +32,7 @@ icon: "route"
 | Unsent edits | Bounded session-local presentation cache; never authoritative intake or a new server table |
 | Verification | Agent operates the real browser flow and independently checks the final database record; every acceptance row has evidence |
 
-See [current API inventory](/guides/open-work/tanstack-go-ai-chat/apis#current-phase-i-authority) and [refreshed table inventory](/guides/open-work/tanstack-go-ai-chat#phase-i-build-authority). The local schema baseline is backend `177a0a0`, 185 migrations through `20260914214645`; the complete build environment is recorded in the plan.
+See [current API inventory](/guides/open-work/tanstack-go-ai-chat/apis#current-phase-i-authority) and [verified table inventory](/guides/open-work/tanstack-go-ai-chat#phase-i-build-authority). Backend [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) delivered the intake fields and four copilot tables; [PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) completed the message/run deletion guard. The live dev AlloyDB check on 2026-09-15 at 10:37:57 UTC confirmed 188 applied migrations through `20260915131618`, all required fields and `ON DELETE NO ACTION` on `copilot_messages_run_fk`. Backend baseline: `edc3b71adef8effc431de964b7d757b31740dcd3`. The earlier 185-migration Docker snapshot is stale; the plan records the current environment checks. Schema readiness does not establish API or browser-flow readiness.
 
 ### Chat harness — TanStack AI + OpenUI
 
@@ -47,7 +48,7 @@ Start intake on an exact configured Gemma model, then switch to a continuation c
 
 Exact model IDs, the opening-turn threshold and the winning continuation candidate remain to be selected. Compare candidates with repeated OpenUI multiple-choice/multi-select/free-text/skip flows through explicit Submit and independent SQL verification. Both models perform Phase I intake; working-phase agents, `draft_intro`, code mode, Gateway, memory and agent orchestration remain deferred.
 
-Phase II can add Universe dispatch and generation; Phase III may add alternate delivery formats and result actions. `deliver_format` remains in the existing table and is untouched. No destructive migration, mode rename, or legacy-row reinterpretation is part of Phase I.
+Phase II can add Universe dispatch and generation; Phase III may add alternate delivery formats and result actions. `deliver_format` remains in the existing table and is untouched. Phase I consumes the existing schema without a mode rename or legacy-row reinterpretation.
 
 ## Historical Xano outcomes — 2026-09-14 snapshot
 
