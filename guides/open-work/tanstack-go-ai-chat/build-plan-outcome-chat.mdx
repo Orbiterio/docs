@@ -1,74 +1,485 @@
 ---
 title: "Build Plan — Outcome Chat"
-description: "Step-by-step build scope for the outcome chat intake flow: first message to SUBMIT click."
+description: "Executable build spec for the outcome chat intake flow: tables, Go endpoints, TanStack AI harness, tools, prompts, and acceptance cases — detailed enough to hand to an agent."
+icon: "hammer"
 ---
 
 <Info>
-**Scope:** only the turns from `"I want to buy a house in Costa Rica"` → user clicks **SUBMIT** (request persisted, `status=submitted`). Out of scope: working phase, results rendering, `leverage_outcome` beneficiary context, `serendipity`, file attach, pitch profiles, Phase II Universe payload, Phase III delivery formats.
+**Scope:** only the turns from `"I want to buy a house in Costa Rica"` → user clicks **SUBMIT** (request persisted, `status=submitted`). Out of scope: working phase, results rendering, `leverage_outcome` beneficiary context assembly, `serendipity`, file attach, pitch profiles, Phase II Universe payload, Phase III delivery formats.
 </Info>
 
-## The flow being built
+**How to use this page:** it is a self-contained build spec. Two repos are touched — **orbiter-backend** (Go, AlloyDB, goose migrations, sqlc) and **orbiter-frontend** (TanStack Start, `@tanstack/ai` + `@tanstack/ai-react`, OpenUI). Every contract below is normative: implement exactly what is written unless a "verify" flag marks a spot where a migration may have landed after this doc's 2026-09-14 snapshot — recheck the working branch there before writing code.
 
-1. User clicks **+** → new outcome thread opens (OpenUI chat surface)
-2. Turn 1: user message → intake model calls `resolve_outcome` → `purchase_real_estate`, then speaks a one-sentence goal confirmation (required — routing turn must not end silent)
-3. Turns 2–N: `update_context` fills the class's slot schema; model streams OpenUI Lang (question + option components, or free-text prompt) rendered progressively
-4. Result-count gate: once slots are sufficient → "How many matches do you want?" (20 great / 100 broader / as many as you can find)
-5. Ready state → SUBMIT button enabled
-6. SUBMIT click → `submit_outcome_request` tool → Go dispatch endpoint → `suggestion_request` persisted, `status=submitted`, `request_id` returned
-7. Hard cap: no route after two intake turns → submit `confidence: low`
+## Locked decisions — do not re-litigate
 
-## Steps
-
-### 0. Model eval (blocks step 5)
-
-| Task | Done when |
-| --- | --- |
-| TTFT test: `google/gemma-4-31b-it` (Cerebras-pinned) vs DeepSeek V4.1 Flash, reasoning off, realistic intake prompt (~6k tokens) | Decision recorded: two-tier vs single-model harness |
-
-### 1. Go — thread persistence tables (migration)
-
-| Task | Done when |
-| --- | --- |
-| `copilot` schema migration: `conversations` (id, user_id, mode, title, person_id, timestamps) + `messages` (id, conversation_id, role, `parts` jsonb, created_at). `parts` stores the full TanStack AI parts array — text, tool-call, tool-result — not plain content | `make migration name=copilot_001_init`; applied; goose version advances |
-
-### 2. Go — endpoints
-
-| Route | Purpose | Done when |
+| Decision | Value | Source |
 | --- | --- | --- |
-| `POST /v1/copilot/threads/ensure` + `GET`/`POST /v1/copilot/threads/{id}/messages` | Thread load/save for the persistence middleware — **server-side thread store, client never supplies history** | Messages round-trip; parts JSONB preserved; ownership enforced |
-| `POST /v1/copilot/outcomes/drafts` | Create draft (`class_slug` optional, validated against registry) | Draft row in `suggestions.suggestion_request`, `status=draft` |
-| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Persist slot context + `number_of_results` (`update_context` calls this); `context_version` optimistic check | Context written; version conflict → 409 |
-| `POST /v1/copilot/outcomes/dispatch` | Owner + status guard → `status=submitted` (called by `submit_outcome_request`). **Phase I: no Universe call** | Status flips; request_id returned; double-submit → 409 |
-| Class registry | `class_slug` canonical set + `ValidClassSlug()` in `types.go` — all 26 slugs incl. `ask_back` | Invalid slug → `apperror.Validation` |
+| Chat loop location | TanStack AI server route (`chat()` + tools). Go owns persistence, dispatch, results — never the loop | Migration Planning 9/14 |
+| Classify | LLM classify via `resolve_outcome` tool against the canonical registry — not the Xano keyword ruleset, not a Go endpoint | Migration Planning 9/14 |
+| Dispatch consumer | Phase I: persist context + `status=submitted`, no downstream call. Phase II ships a Universe payload | Migration Planning 9/14 |
+| Delivery formats | Removed. `deliver_format` column exists on `main` and stays unwritten | Migration Planning 9/14 |
+| Pitch profiles | `files` feature owns them — no `/v1/copilot/outcomes/pitch-profiles/*` routes | Migration Planning 9/14 |
+| Rendering | OpenUI (`@openuidev/react-lang` + registered components) replaces Crayon; structured state moves to tool calls | Migration Planning 9/14 |
+| Client | `useChat` + OpenUI Renderer + persistence middleware — not the AG-UI bridge | Migration Planning 9/14 |
+| `leverage_outcome` | An outcome request + beneficiary `person_id` in the draft body — same `/v1/copilot/outcomes/*` routes | Migration Planning 9/14 |
+| Request table naming | One physical table: `suggestions.suggestion_request`. `request_suggestion` survives as the doc/v2-**wire** name — the ingest envelope field is `request_suggestion_id` (mapped to `suggestion_batch.suggestion_request_id` in DB) | merged `suggestions_001_init`/`002_ingest` |
 
-Feature placement: routes under `/v1/copilot/*` mount from the `copilot` feature (new module + `cross-feature-copilot` depguard block); writes to `suggestions.suggestion_request` go through `suggestionspub` — `copilot` never touches the `suggestions` schema directly.
+## Deltas vs. earlier drafts of this plan
 
-### 3. Frontend — harness server route
+These corrections come from reconciling this page against the merged table designs — apply them, don't resurrect the old shapes:
 
-| Task | Done when |
+1. **`copilot.conversations` carries `surface` + `surface_key` + `surface_ref_id`**, not a `mode` column. The Xano `meeting_prep:<id>` / `outcomes:<id>` / `leverage_loops:<id>` prefix-parsed `thread_id` is decomposed into structured fields; the Go side never parses prefixes.
+2. **`suggestion_request` needs `context_version` and `intake_context`** — the optimistic-check counter and the slot-schema JSONB the PATCH context contract requires. Verified absent from the merged `suggestions_001_init`/`002_ingest` DDL — `copilot_001_init` adds both (recheck the working branch anyway; if equivalents landed meanwhile, use those names).
+3. **`copilot_mode` values are `outcome | leverage_outcome | leverage_loop | serendipity`** — Xano's `loop` is renamed `leverage_outcome`; `leverage_loop` stays for the button-only surface; `serendipity` has no chat.
+4. **`status` adds `submitted`** between `draft` and `processing`: `draft | submitted | processing | suggestion | archived`. Xano's `processing` maps onto `submitted`+`processing` when reading old rows.
+5. **`copilot.messages` stores `parts` jsonb** (the full TanStack AI parts array — text, tool-call, tool-result parts), not Xano's `content`/`template_name`/`template_props` triple.
+6. **Idempotency is enforced, not stored-and-hoped:** unique `(conversation_id, run_id, turn_id)` on `copilot.messages`; `(request_id, approval_id)` semantics on dispatch.
+7. **`suggestion_request` is the ingest parent row — one table, two names by layer.** `suggestions_002_ingest` states it outright: "The guide's `request_suggestion` IS `suggestion_request` (`user_id` = `requested_by`, `copilot_mode` = `suggestion_type`, `person_id` = `beneficiary`)". AlloyDB has **only** `suggestions.suggestion_request` — the chat draft row and the delivery parent are the same row, and `suggestion_batch.suggestion_request_id` references it. `request_suggestion`/`request_suggestion_id` remains the correct name on the **wire** (v2 ingest envelope, OpenAPI `SuggestionBatch`) — keep using it there; don't create a second table and don't rename anything. The [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) DDL block showing a `request_suggestion` table is the doc-side alias, not a second physical table.
+
+## Data model
+
+### Existing — `suggestions.suggestion_request`
+
+Already on `main` — verified against `suggestions_001_init` + `suggestions_002_ingest` merged DDL below. The chat surface uses these columns; writes to `suggestions.*` go through `suggestionspub` — `copilot` never touches the schema directly.
+
+| Column | Type (as merged) | Chat use |
+| --- | --- | --- |
+| `id` | uuid PK (uuidv7 via `ids.NewUUIDv7()`) | `request_id` on the wire |
+| `user_id` | uuid → `users.users`, `ON DELETE SET NULL` | Owner; session-derived, never client-supplied. Ingest reads it as `requested_by` |
+| `organization_id` | uuid → `organizations.organizations`, `SET NULL` (added by `002`) | Caller's active org; nullable — don't block draft creation if unresolvable |
+| `copilot_mode` | text NOT NULL | `outcome` default; `leverage_outcome` when `person_id` set. Ingest reads it as `suggestion_type` |
+| `status` | text NOT NULL DEFAULT `'draft'` | `draft` → `submitted` on dispatch |
+| `class_slug` | text NULL | Written by drafts/classify; `ValidClassSlug()`-validated |
+| `person_id` | uuid → `persons.persons`, `SET NULL` | Beneficiary — set ⇒ `leverage_outcome`. Ingest reads it as `beneficiary_contact_id` |
+| `request_panel_title` | text NOT NULL DEFAULT `''` | List title; `update_context` may revise |
+| `request_header_title` | text NOT NULL DEFAULT `''` | Card header; set at draft create, revised on patch |
+| `request_context` | **text** NULL | The user's canonical ask — prompt text + running summary as **text**. Slots can't live here; that's what `intake_context` is for |
+| `llm_summary_context` | jsonb NOT NULL DEFAULT `'[]'` | Dispatch blob written at submit; see dispatch spec |
+| `number_of_results` | int NULL | Result-count gate answer. Existing DTO validators cap at `1–200`; `20` / `100` / `null` = "as many as you can find" |
+| `deliver_format` | text NULL | **Unused — never write it** |
+| `modified` | **boolean** NOT NULL DEFAULT `FALSE` | A "modified since create" **flag**, not a timestamp — set `TRUE` on any post-create write |
+| `created_at` / `updated_at` | timestamptz NOT NULL DEFAULT `now()` | Standard |
+
+Existing index `suggestion_request_user_mode_status_idx (user_id, copilot_mode, status, updated_at DESC)` already covers the requests-list query — no new index needed there.
+
+**Delta to add in `copilot_001_init` (verify against live migration first):**
+
+```sql
+ALTER TABLE suggestions.suggestion_request
+  ADD COLUMN IF NOT EXISTS context_version integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS intake_context  jsonb   NOT NULL DEFAULT '{}';
+```
+
+- `context_version` — optimistic concurrency counter for `PATCH …/context`; increments on every accepted patch.
+- `intake_context` — the resolved class's slot schema as filled so far: `{"slots": {"<slot_key>": {"value": <any>, "status": "empty|asked|filled"}}, "awaiting_result_count": bool, "confidence": "low|medium|high|null"}`.
+
+### New — `copilot` schema (`copilot_001_init`)
+
+```sql
+CREATE SCHEMA copilot;
+
+CREATE TABLE copilot.conversations (
+  id             uuid PRIMARY KEY,                       -- ids.NewUUIDv7()
+  user_id        uuid NOT NULL REFERENCES users.users(id) ON DELETE CASCADE,
+  surface        text NOT NULL,                          -- outcome | leverage_loop | meeting_prep
+  surface_key    text NOT NULL,                          -- caller's thread key; client-minted uuid per new thread
+  surface_ref_id uuid,                                   -- typed link: suggestion_request.id when surface='outcome'
+  person_id      uuid,                                   -- optional person context (beneficiary / attendee)
+  title          text,
+  archived_at    timestamptz,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT copilot_conversations_key_uq UNIQUE (user_id, surface, surface_key)
+);
+CREATE INDEX copilot_conversations_user_idx
+  ON copilot.conversations (user_id, updated_at DESC, id DESC);
+CREATE INDEX copilot_conversations_ref_idx
+  ON copilot.conversations (surface, surface_ref_id)
+  WHERE surface_ref_id IS NOT NULL;
+
+CREATE TABLE copilot.messages (
+  id              uuid PRIMARY KEY,                      -- ids.NewUUIDv7()
+  conversation_id uuid NOT NULL REFERENCES copilot.conversations(id) ON DELETE CASCADE,
+  role            text NOT NULL,                         -- user | assistant | tool
+  parts           jsonb NOT NULL,                        -- full TanStack AI parts array for the message
+  run_id          text,                                  -- harness run; idempotent-retry key
+  turn_id         text,                                  -- per-turn id; idempotent-retry key
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX copilot_messages_conv_idx
+  ON copilot.messages (conversation_id, created_at, id);
+CREATE UNIQUE INDEX copilot_messages_turn_uq
+  ON copilot.messages (conversation_id, run_id, turn_id)
+  WHERE run_id IS NOT NULL AND turn_id IS NOT NULL;
+```
+
+Rules the SQL can't express (enforce in Go): `surface`/`role` membership via `ValidX()`; `surface_ref_id` semantics per surface (`outcome` → `suggestion_request.id`, `leverage_loop` → its request id, `meeting_prep` → the meeting context id); `parts` is always a JSON **array** of part objects. `NULLS NOT DISTINCT` is not needed — `surface_key` is `NOT NULL`.
+
+### Class registry — `internal/features/copilot/types.go`
+
+One registry, all 26 slugs (union of Xano classify ruleset, Xano prompt map, and the frontend `ClassName` union — the drifted lists collapse here). `ask_back` is a sentinel, not a dispatchable class.
+
+```go
+type ClassEntry struct {
+  Slug        string      // canonical class_slug
+  Label       string      // display label
+  PromptAsset string      // assets/prompts file for the class question set
+  Slots       []SlotSpec  // required intake slots
+  Live        bool        // has a real question set this build (else generic fallback)
+}
+```
+
+`Live = true` for this build: `purchase_real_estate`, `find_investors`, `find_talent`, `find_customers`. All others route to the generic intake prompt. Full slug list (exactly these strings): `find_investors`, `find_talent`, `find_customers`, `find_advisors`, `find_cofounder`, `find_partners`, `find_collaborators`, `find_journalists`, `find_deal_flow`, `make_purchase`, `find_acquisition`, `find_speakers`, `find_job`, `get_advice`, `travel`, `find_co_investors`, `find_event_attendees`, `find_warm_intros`, `plan_outcome`, `research_company`, `research_person`, `research_topic`, `summarize_meeting`, `talent_agent_requests`, `purchase_real_estate`, `ask_back`.
+
+Initial `Slots` for the four live classes (registry may extend later — question wording lives in prompt assets, not here):
+
+| `class_slug` | Slots (`key` — required unless noted) |
 | --- | --- |
-| `POST /api/chat` route: `chat()` + `openRouterText` adapter picked per request from newest tool-result route state | Adapter switches between requests; never mid-loop |
-| `toolDefinition`s: `resolve_outcome`, `update_context`, `submit_outcome_request`, `re_route`, `handoff_to_akira` — `.server()` impls call Go via `backendFetch` | Tool calls hit Go; request_id from dispatch returned to model |
-| `defineAIPersistence` store → Go thread endpoints | Refresh mid-turn loses nothing; forged history impossible |
-| Route-state derivation: newest-first scan of `resolve_outcome`/`re_route`/`submit_outcome_request` results, re-injected as turn context | Compaction can't drop route state |
+| `purchase_real_estate` | `location`, `budget_range`, `property_type`, `timeline`, `financing` (cash/finance), `use` (primary/vacation/investment — optional) |
+| `find_investors` | `stage`, `sector`, `check_size`, `geography` (optional), `raise_amount` |
+| `find_talent` | `role`, `seniority`, `location` (remote ok), `skills`, `comp_range` (optional) |
+| `find_customers` | `icp_industry`, `company_size`, `geography`, `buyer_role` |
 
-### 4. Frontend — intake prompt + OpenUI
+`ValidClassSlug(slug string) bool` + `ClassEntryFor(slug)`; invalid slug → `apperror.Validation` with the valid list in `details`. No DB enum — Go constants + text columns per repo policy.
 
-| Task | Done when |
+## Go API — `internal/features/copilot`
+
+New feature module (`Module`/`Deps`/`New`/`RegisterHTTP`), routes under `/v1/copilot/*`, `{data, error, meta}` envelope, `RequireWorkOS`, owner = session user's `users.users.id` — **never** accept `user_id` from a client. Wire in `internal/app`; add `cross-feature-copilot` depguard block; import `suggestions` only via `suggestionspub`. OpenAPI: extend `api/openapi.yaml` (or a `copilot.openapi.yaml` per repo layout) with the routes below — plain strings + descriptions for enum-like fields, no OpenAPI enums.
+
+### `suggestionspub` contract the copilot feature needs
+
+Add/extend in `internal/features/suggestions/suggestionspub`:
+
+```go
+type RequestStore interface {
+  CreateDraft(ctx, CreateDraftParams) (SuggestionRequest, error)
+  PatchContext(ctx, PatchContextParams) (SuggestionRequest, error)  // context_version guard
+  Submit(ctx, SubmitParams) (SuggestionRequest, error)              // owner + state guard, approval replay
+  Get(ctx, id, ownerID uuid) (SuggestionRequest, error)
+  List(ctx, ListParams) (page []SuggestionRequest, nextCursor string, err error)
+}
+```
+
+All write methods take the resolved owner id; `PatchContext`/`Submit` re-check ownership + state inside their transaction.
+
+---
+
+### `POST /v1/copilot/threads/ensure`
+
+Find-or-create a conversation. Lookup order: `(user_id, surface, surface_key)` when `surface_key` sent; else `(user_id, surface, surface_ref_id)` when `surface_ref_id` sent; else create with a caller-supplied or server-minted `surface_key`.
+
+```json Request
+{
+  "surface": "outcome",
+  "surface_key": "9f1c2a44-…-client-uuid",
+  "surface_ref_id": null,
+  "person_id": null,
+  "title": null
+}
+```
+
+```json 200 data
+{
+  "conversation": {
+    "id": "uuid", "surface": "outcome", "surface_key": "…",
+    "surface_ref_id": null, "person_id": null, "title": null,
+    "archived_at": null, "created_at": "…", "updated_at": "…"
+  },
+  "created": true
+}
+```
+
+| Error | When |
 | --- | --- |
-| `BASE_VOICE` (Chief of Staff) + `INTAKE` prompt: class-selection rules, per-class question sets (live classes first — `purchase_real_estate`, `find_investors`, `find_talent`, `find_customers`), confirm-after-routing rule, two-turn cap, result-count gate | Prompt file versioned in repo |
-| OpenUI component library: question, option-list (3–5 + Other), multi-select, free-text, summary card, submit-ready card → generated system prompt via `@openuidev/lang-core` | Model output restricted to registered components |
-| `useChat` client + `@openuidev/react-lang` Renderer on text parts + strict-mode parse check | Option selections round-trip as user messages; invalid Lang lines surface as errors, not silence |
-| `+` button → new thread; SUBMIT button enabled on ready state → fires `submit_outcome_request` | Click → `status=submitted` → thread hands to results view (view itself out of scope) |
+| 400 `validation` | `surface` not in `ValidSurface()`; neither `surface_key` nor `surface_ref_id` on create path |
+| 403 `forbidden` | `surface_ref_id`/`person_id` resolves to a row owned by someone else |
+| 409 `conflict` | `surface_key` collision returning an `archived_at`-set row (treat as validation if simpler — pick one, document it) |
 
-### 5. Verify
+### `GET /v1/copilot/threads`
 
-| Task | Done when |
+Query: `surface?`, `surface_ref_id?`, `archived?` (default `false` — archived hidden), `limit` (1–50, default 20), `cursor?`. Keyset `(updated_at DESC, id DESC)` via the feature's cursor helper; `meta` = `pmw.Paged`.
+
+```json 200 data
+{ "threads": [ { "id", "surface", "surface_key", "surface_ref_id", "person_id", "title", "archived_at", "created_at", "updated_at" } ] }
+```
+
+### `GET /v1/copilot/threads/{id}/messages`
+
+Query: `limit` (default 50, max 200), `cursor?`. Ascending `(created_at, id)` keyset — hydration order.
+
+```json 200 data
+{
+  "messages": [
+    { "id": "uuid", "role": "user", "parts": [ { "type": "text", "text": "…" } ],
+      "run_id": "…", "turn_id": "…", "created_at": "…" }
+  ],
+  "next_cursor": "…"
+}
+```
+
+404 `notfound` when the conversation is missing or not owned (don't distinguish).
+
+### `POST /v1/copilot/threads/{id}/messages`
+
+The persistence middleware's write path. Max 50 messages per call.
+
+```json Request
+{
+  "run_id": "run-…",
+  "messages": [
+    { "turn_id": "t-1", "role": "user",      "parts": [ {"type": "text", "text": "I want to buy a house in Costa Rica"} ] },
+    { "turn_id": "t-2", "role": "assistant",  "parts": [ {"type": "tool-call", "name": "resolve_outcome", …}, {"type": "text", "text": "…"} ] },
+    { "turn_id": "t-3", "role": "tool",       "parts": [ {"type": "tool-result", "name": "resolve_outcome", "result": {…}} ] }
+  ]
+}
+```
+
+Insert each row `ON CONFLICT (conversation_id, run_id, turn_id) DO NOTHING`. Role validated against `user|assistant|tool`; `parts` must be a JSON array. Touch `conversations.updated_at = now()` in the same transaction.
+
+```json 200 data
+{ "stored_count": 2, "duplicated_count": 1, "last_message_id": "uuid" }
+```
+
+A retried call with identical keys returns 200 with `stored_count: 0` and the original `last_message_id` — never 409.
+
+### `PATCH /v1/copilot/threads/{id}`
+
+```json Request
+{ "title": "House in Costa Rica", "archived": true }
+```
+
+`archived: true` → set `archived_at = now()`; `false` → clear it. Response `data` = the conversation row. 404 not-owned.
+
+### `DELETE /v1/copilot/threads/{id}`
+
+Soft delete = set `archived_at`. 200 with `data: null`.
+
+---
+
+### `POST /v1/copilot/outcomes/drafts`
+
+Creates the `suggestion_request` draft. Called by the harness after `resolve_outcome` (or lazily inside `update_context` when no `request_id` exists yet).
+
+```json Request
+{
+  "conversation_id": "uuid",          // optional; binds copilot.conversations.surface_ref_id
+  "class_slug": "purchase_real_estate",
+  "person_id": null,                  // beneficiary uuid — presence ⇒ leverage_outcome
+  "request_context": "I want to buy a house in Costa Rica",
+  "request_panel_title": "Buy a house in Costa Rica"
+}
+```
+
+Writes: `copilot_mode = person_id ? "leverage_outcome" : "outcome"`, `status = 'draft'`, `class_slug` (validated — `ask_back` rejected here), `context_version = 0`, `intake_context` initialized to the class's null slot schema, `organization_id` from the caller's active org (nullable — don't block draft creation when org can't be resolved). If `conversation_id` is present: verify it exists, is owned, `surface = 'outcome'`; then set its `surface_ref_id = request.id` in the same transaction.
+
+```json 201 data
+{
+  "request": {
+    "id": "uuid", "status": "draft", "copilot_mode": "outcome",
+    "class_slug": "purchase_real_estate", "person_id": null,
+    "request_panel_title": "…", "request_context": "…",
+    "intake_context": {"slots": {…}, "awaiting_result_count": false, "confidence": null},
+    "context_version": 0, "number_of_results": null,
+    "created_at": "…", "updated_at": "…"
+  }
+}
+```
+
+| Error | When |
 | --- | --- |
-| Script the flow end-to-end: "I want to buy a house in Costa Rica" → `purchase_real_estate` → slots → count gate → SUBMIT → `submitted` | Request row correct; transcript rows in `copilot.messages` |
-| Off-script cases: ambiguous first message → `ask_back` clarification; two-turn cap → `confidence: low` submit; `re_route` correction; forged `submit_outcome_request` result rejected | Each behaves per spec |
-| Phoenix spans tagged `tier`, `outcome_type`, `model`, `provider`, `ttft_ms`, `output_tokens` | Latency/cost visible per tier |
+| 400 `validation` | bad `class_slug` (details carry the registry list); `class_slug = "ask_back"`; `person_id` malformed |
+| 404 `notfound` | `conversation_id` missing/not-owned |
+| 409 `conflict` | conversation already bound to a different live (`status != archived`) request |
+
+### `PATCH /v1/copilot/outcomes/drafts/{id}/context`
+
+The `update_context` tool's write. Partial update — absent fields unchanged.
+
+```json Request
+{
+  "context_version": 3,
+  "request_panel_title": "Costa Rica house",
+  "request_context": "…running summary…",
+  "intake_context": {"slots": {"location": {"value": "Costa Rica", "status": "filled"}, …}, "awaiting_result_count": true, "confidence": "high"},
+  "number_of_results": 20,
+  "class_slug": "purchase_real_estate"   // only via re_route
+}
+```
+
+Guards (single transaction): owner → 404; `status = 'draft'` → else 409 `invalid_state`; `context_version` equals stored → else 409 `version_conflict` with `details.current_version`. On success `context_version++`, `updated_at = now()`, `modified = TRUE`.
+
+```json 200 data
+{ "request_id": "uuid", "context_version": 4, "updated_at": "…" }
+```
+
+### `POST /v1/copilot/outcomes/dispatch`
+
+The `submit_outcome_request` tool's write. Phase I: persist + flip status — **no downstream call**.
+
+```json Request
+{
+  "request_id": "uuid",
+  "approval_id": "client-minted-uuid",
+  "dispatch_mode": "submit",
+  "constraints": {},
+  "tool_calls": []
+}
+```
+
+Guards (single transaction): owner → 404; `copilot_mode IN ('outcome','leverage_outcome')` → else 409 `invalid_mode`; `status`:
+
+| Stored status | Same `approval_id` recorded | Different/missing `approval_id` |
+| --- | --- | --- |
+| `draft` | n/a → submit | submit |
+| `submitted` | 200 replay (idempotent) | 409 `already_submitted` |
+| `processing`/`suggestion` | 200 replay | 409 `already_submitted` |
+| `archived` | 409 `invalid_state` | 409 `invalid_state` |
+
+On submit: `llm_summary_context` = dispatch blob `{"approval_id", "dispatch_mode", "requested_n": number_of_results, "constraints", "tool_calls", "submitted_at", "intake_summary": <final request_context>}`, `status = 'submitted'`, `modified = TRUE`, `updated_at = now()`. Phase II note: the Universe-bound envelope field is `request_suggestion_id` (the v2 wire name) — the payload ships `{request_suggestion_id: request.id, …}` even though the column is `suggestion_request`.
+
+```json 200 data
+{ "request_id": "uuid", "status": "submitted", "submitted_at": "…", "dispatch_started": false }
+```
+
+`dispatch_started` is always `false` in Phase I — it's the Phase II seam.
+
+### `GET /v1/copilot/outcomes/requests` + `GET /v1/copilot/outcomes/requests/{id}`
+
+Needed for draft resume + the three suggestion views.
+
+Query (list): `status?` — **empty excludes `archived`**; `modes?` — comma list, e.g. `leverage_loop,leverage_outcome` for the Leverage Loops view, `outcome` for Outcomes, `serendipity` for Serendipity; `query?` — case-insensitive substring on `request_panel_title`; `person_id?` — beneficiary filter; `limit`, `cursor` — keyset `(updated_at DESC, id DESC)`. Item = full request row. Single-get returns one row, 404 not-owned.
+
+## Harness — orbiter-frontend
+
+The existing `src/features/tanstack-ai-chat/` feature + `POST /api/tanstack-ai-chat` route is the base (it already has `chat()` + `openRouterText`, runtime-context plumbing, otel middleware, a typed tool registry, and tests). This build retargets it: Xano client → Go backend client, `orbiter_*` multi-action tools → the five named tools below, adds persistence middleware, route-state derivation, and OpenUI rendering. New route path: **`POST /api/chat`** (the old route can stay until cutover).
+
+### `POST /api/chat` route
+
+```text Request → response
+body: TanStack AI chat params (threadId, runId, messages[], forwardedProps)
+response: SSE via toServerSentEventsResponse(stream)
+auth: getAuth() WorkOS session; 401 without it
+```
+
+Per request:
+
+1. Load thread history **server-side** via the persistence store (below) — client-sent history is ignored except the newest user message.
+2. Derive route state (below) from the loaded history.
+3. Pick the adapter: `openRouterText(modelId)` where `modelId` = intake model before a route exists, working model after `resolve_outcome`/`re_route`. **Switch between requests only — never mid-loop.**
+4. Build system prompts: `BASE_VOICE` + `INTAKE` + generated OpenUI component prompt + injected `ROUTE_STATE` block.
+5. `chat({adapter, messages, systemPrompts, tools, stream: true, context, middleware: [otel, persistence]})`.
+
+New envs: `ORBITER_BACKEND_URL` (required), `INTAKE_MODEL`, `WORKING_MODEL` (defaults per eval outcome). Existing: `OPENROUTER_API_KEY`, `TANSTACK_AI_CHAT_MODEL` fallback.
+
+### `backendFetch` — server→Go client
+
+`src/features/tanstack-ai-chat/server/backend-client.server.ts` — same shape as `TanstackAiXanoServerClient` but: base `env.ORBITER_BACKEND_URL`, `Authorization: Bearer <workos token>` (Go verifies via `RequireWorkOS`), envelope unwrap `{data,error,meta}`, zod-validate `data`, throw typed `toolFailed` on `error.code`. Map Go error codes → tool-visible errors (`version_conflict`, `already_submitted`, `invalid_state`, `notfound`, `validation`).
+
+### Tools — `.server()` implementations
+
+| Tool | Input (zod) | Server call | Output |
+| --- | --- | --- | --- |
+| `resolve_outcome` | `{prompt: string, context?: object}` | **none — in-route LLM classify** against the registry (intake model, one sub-call) | `{class_slug, confidence: number, ambiguous: bool, summary: string}` |
+| `update_context` | `{request_id?: uuid, class_slug?: string, slots: object, number_of_results?: int, request_panel_title?: string, request_context?: string}` | `POST drafts` when `request_id` absent → `PATCH drafts/{id}/context` (sends current `context_version` from route state; retries once on 409 by re-reading) | `{request_id, context_version}` |
+| `submit_outcome_request` | `{request_id: uuid, approval_id: uuid}` | `POST /v1/copilot/outcomes/dispatch` | `{request_id, status: "submitted"}` |
+| `re_route` | `{class_slug: string, reason: string}` | `PATCH …/context` with `{class_slug}` | `{class_slug}` |
+| `handoff_to_akira` | `{reason: string, summary: string}` | none — terminal signal | `{handed_off: true}` |
+
+`draft_intro` (Sonnet) is **not** in this build — working-phase only.
+
+### Route state — newest-first derivation
+
+After loading history, scan parts newest→oldest for `tool-result` parts named `resolve_outcome`, `re_route`, `submit_outcome_request`. First hit wins per key:
+
+```ts
+type RouteState = {
+  class_slug: string | null;      // re_route beats resolve_outcome when newer
+  confidence: "low" | "medium" | "high" | null;
+  request_id: string | null;      // from update_context/submit results
+  status: "draft" | "submitted" | null;
+};
+```
+
+Inject as a system block every request (`ROUTE_STATE: class_slug=… confidence=… request_id=… status=…`) so compaction can never summarize it away. A forged client-sent `submit_outcome_request` result can never survive — history is server-loaded.
+
+### Persistence middleware — `defineAIPersistence`
+
+Store interface over the Go thread endpoints:
+
+| Hook | Implementation |
+| --- | --- |
+| `ensure/load` | `POST threads/ensure` (client supplies `surface` + `surface_key`) → `GET threads/{id}/messages` |
+| `save` | `POST threads/{id}/messages` — `{run_id, messages:[{turn_id, role, parts}]}` batched after each turn completes |
+
+Refresh mid-turn loses nothing; retried saves dedupe on the unique key.
+
+### Prompts — `src/features/tanstack-ai-chat/prompts/`
+
+Versioned in-repo. `base-voice.md` (Chief of Staff persona) + `intake.md` must encode, at minimum:
+
+- The 26-slug registry verbatim (class names + one-line labels) and the `ask_back` sentinel rule.
+- **Confirm-after-routing:** a turn that calls `resolve_outcome` must also speak a one-sentence goal confirmation — routing turns never end silent.
+- Per-class question sets for the four live classes; generic fallback for the rest.
+- Slot discipline: ask for missing required slots only; `update_context` on every turn that learns something; never invent values.
+- **Result-count gate:** once required slots are filled and count unasked → ask "How many matches do you want?" with options `20 great matches` / `100 broader` / `as many as you can find`; answers map to `number_of_results` = `20` / `100` / `null` (uncapped); set `awaiting_result_count` in `intake_context` until answered; `ready` only after it's answered.
+- **Two-turn cap:** no route after two intake turns → `submit_outcome_request` with `confidence: low`.
+- OpenUI output rules: emit only registered components; one question component per turn; text outside components allowed only as a one-line lead-in.
+
+### OpenUI components + client
+
+Register exactly these (generated system prompt via `@openuidev/lang-core`):
+
+| Component | Props | Use |
+| --- | --- | --- |
+| `question` | `text`, `options[]?`, `allow_freetext` | Primary ask each turn |
+| `option-list` | `options[]` (3–5) + `other: bool` | Single-select answers |
+| `multi-select` | `options[]` | Multi-pick slots |
+| `free-text` | `prompt` | Open-ended slot |
+| `summary-card` | `title`, `rows[]` | Recap before ready |
+| `submit-ready-card` | `title`, `cta_label` | Ready state → enables SUBMIT |
+
+Client (`use-tanstack-ai-chat.ts` + outcome surface): `useChat` → text parts through `@openuidev/react-lang` Renderer; **strict-mode parse check** — any line that fails Lang parse surfaces as an error card, never dropped silently (the OpenUI parser's default is to skip). Option selections post back as user messages. `+` button → `POST threads/ensure` (new `surface_key`) → new thread. **SUBMIT** enabled only when `submit-ready-card` rendered (or `confidence: low` cap hit) → mints `approval_id`, sends the submit message that triggers `submit_outcome_request` → on `status=submitted` hands the thread to the results view (view itself out of scope).
+
+## The scripted flow (what "done" looks like)
+
+1. `+` → `threads/ensure` (`surface:"outcome"`, fresh `surface_key`) → `201/200 {conversation, created:true}`
+2. User: *"I want to buy a house in Costa Rica"* → `chat()` turn 1 → model calls `resolve_outcome` → `{class_slug:"purchase_real_estate", confidence:high}` + speaks confirmation → `update_context` → `POST drafts` (creates row, binds `surface_ref_id`) → `PATCH context` (`slots.location` filled)
+3. Turns 2–N: questions via OpenUI `question`/`option-list` components; `update_context` patches each turn
+4. Slots filled → count gate question → `number_of_results` patched
+5. `submit-ready-card` → SUBMIT enabled
+6. SUBMIT → `submit_outcome_request` → `POST dispatch` → `status=submitted`, `request_id` returned
+7. Every turn persisted to `copilot.messages` with `run_id`/`turn_id` keys
+
+## Build order
+
+| # | Step | Done when |
+| --- | --- | --- |
+| 0 | Model eval — TTFT: `google/gemma-4-31b-it` (Cerebras-pinned) vs `deepseek-v4.1-flash`, reasoning off, ~6k-token realistic intake prompt | Decision recorded: two-tier vs single-model; `INTAKE_MODEL`/`WORKING_MODEL` set |
+| 1 | `copilot_001_init` migration (schema + two tables + `suggestion_request` delta) | `make migration name=copilot_001_init`; applied; goose version advances |
+| 2 | `suggestionspub` store + `internal/features/copilot` module + all 9 routes above | Every contract section implemented; `make sqlc-generate`; unit tests for guards/version/dedupe |
+| 3 | `POST /api/chat` + `backendFetch` + 5 tools + persistence + route-state | Tool calls hit Go; `request_id` round-trips; forged history impossible |
+| 4 | Prompts + OpenUI component set + strict parse + `+`/SUBMIT wiring | Option selections round-trip; invalid Lang lines error visibly |
+| 5 | Verify (below) | All cases pass; spans tagged |
+
+## Verify
+
+| Case | Expected |
+| --- | --- |
+| E2E: *"I want to buy a house in Costa Rica"* → `purchase_real_estate` → slots → count gate → SUBMIT | `suggestion_request` row `status=submitted`, `copilot_mode=outcome`, `class_slug` set, `intake_context` slots filled, `number_of_results` set; transcript rows in `copilot.messages` |
+| Ambiguous first message | `resolve_outcome` → `ask_back` → clarification turn, no draft row until a real class resolves |
+| Two-turn cap | `submit_outcome_request` fires with `confidence:"low"`; row still `submitted` |
+| `re_route` mid-flow | New `class_slug` patched; route state flips next request |
+| Refresh mid-turn | Server-loaded history replays; client can't inject a fake `submit_outcome_request` result |
+| `context_version` mismatch | 409 `version_conflict` + `current_version`; tool retries once then surfaces error |
+| Double SUBMIT (same `approval_id`) | 200 replay, one `submitted` row |
+| Double SUBMIT (different `approval_id`) | 409 `already_submitted` |
+| Message POST retry | `duplicated_count` > 0, no dup rows |
+| Non-owner access on any route | 404 (not 403) |
+| Invalid `class_slug` in drafts | 400 + valid-slug list in details |
+| Phoenix/otel | LLM spans carry `tier`, `outcome_type`, `model`, `provider`, `ttft_ms`, `output_tokens` |
+
+Backend checks before merge: `make sqlc-generate && go test ./internal/features/copilot/ -short && make test && make lint && npx @redocly/cli lint api/openapi.yaml`. Frontend: `pnpm test && pnpm check`.
 
 ## Explicit non-goals
 
-Working-phase model turns, `draft_intro`, result cards/nodes/trajectories, `leverage_outcome` `[HELPING TARGET]` context assembly, `serendipity`, `files` attach, pitch profiles, Universe payload (Phase II), CSV/collection/PDF (Phase III).
+Working-phase model turns, `draft_intro`, result cards/nodes/trajectories, `leverage_outcome` `[HELPING TARGET]` context assembly, `serendipity`, `files` attach, pitch profiles, Universe payload (Phase II), CSV/collection/PDF (Phase III), thread list UI beyond what `+`/resume needs, `meeting_prep`/`how_i_know` surfaces (the shared thread endpoints are surface-generic so those port later without new tables).
