@@ -19,13 +19,13 @@ tags:
       Versioned packages consumers read and upsert from. Row-derived projections carry an entity's attributes; the graph-derived subgraph projection carries its relationships, including edge types that have no backing row. Graph search finds ids a consumer does not yet hold; graph paths says how two entities connect.
   - name: Persona
     description: |
-      The persona build trigger (scope persona:build). Asks for a person's nine-dimension profile; the work runs in a worker, so the call reports what it set in motion rather than the persona itself.
+      Data-plane persona work: the persona build trigger (scope persona:build), synthetic archetype builds (synthetic_personas:build), person-to-person and archetype-to-person compares (personas:compare), and leverage loops (leverage_loops:run). The four scopes are independent. Builds and loops run in a worker, so their triggers answer 202 with what they set in motion (200 when a fresh persona already exists); compares and GET reads return results.
   - name: Graph
     description: |
-      Operator-only graph seeding (scope graph:seed). Not part of the consumer contract — self-hosted clients never call these.
+      Operator-only graph seeding and FalkorDB ops. Staff only (WorkOS role `admin`); no scope grants this. Not part of the consumer contract — self-hosted clients never call these.
   - name: Admin
     description: |
-      Management plane: client registry and API-key lifecycle (scope clients:manage). Not part of the consumer contract — self-hosted clients never call these.
+      Management plane: client registry, scope replacement, API-key lifecycle and entity merge review. Staff only (WorkOS role `admin`); no scope grants this. Not part of the consumer contract — self-hosted clients never call these.
   - name: Agents
     description: |
       Management plane for the agentic enrichment tier: re-drive stalled Deep Bio jobs, or research one person again on purpose. Staff-only (WorkOS role admin, no scope grants them) because each call can spend provider credit. Not part of the consumer contract — an agent's output leaves through the publish projections like any other fact.
@@ -343,6 +343,78 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/leverage-loops:
+    post:
+      operationId: createLeverageLoop
+      tags:
+        - Persona
+      summary: File a leverage loop
+      description: |
+        Files a leverage loop: who, out of the candidates the caller already knows, should the target be introduced to. The App owns who-knows-whom, so it pushes the whole candidate pool; the pipeline resolves them, builds the target's persona, scores both lanes, shortlists, drafts and judges the introductions. Minutes of work never run inline: the job is filed, a worker is nudged, and this call answers 202 with the job's bookkeeping. Poll `GET /v1/leverage-loops/{id}` with `job_id`, or set `callback_url` to be told. Idempotent on `suggestion_request_id`: a repeat returns the existing job, still 202, and does not nudge the worker again. `requested` is `false` only when the job was filed but the worker nudge failed. The body may be sent with `Content-Encoding: gzip` and is capped at 8 MiB either way; gzip at 20k candidates. When `callback_url` is set, the final `delivering` stage POSTs a `LeverageLoopWebhook` body to it; the row settles `delivered` only after the callback has answered, so a GET issued from inside the callback handler may still read `delivering` — take the suggestions from the webhook body and poll afterwards. The `X-Orbiter-Signature` header carries `sha256=<hex HMAC-SHA256 of the raw body>` keyed with the shared webhook secret, and is absent when the service has no secret configured — reject unsigned bodies in production. Up to four attempts, retried only on connection errors, 408, 429 and 5xx (not 501), with jittered exponential backoff (windows of 2s, 4s, 8s); any other answer of 300 or above fails on the first attempt. A failed delivery does not fail the job: `status` still settles `delivered`, the failure is recorded in `error`, and the GET remains the recovery path. Requires scope `leverage_loops:run`, which is independent of `persona:build` — a client may be entitled to personas without the loop, or the reverse.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeverageLoopRequest'
+      responses:
+        '202':
+          description: The job, new or the existing one for this `suggestion_request_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: The target person is unknown to the Universe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/leverage-loops/{id}:
+    get:
+      operationId: getLeverageLoop
+      tags:
+        - Persona
+      summary: Poll a leverage loop
+      description: |
+        The polling read, and the recovery path when a webhook delivery failed. `id` is the `job_id` returned when the loop was filed, not the `suggestion_request_id`. `judge` and `suggestions` appear only once `status` is `delivered`; until then the response is the job's bookkeeping alone, and `error` carries the stage failure once it is `failed`. Requires scope `leverage_loops:run`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The loop's `job_id`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The job; suggestions and the judge verdict ride along once delivered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
   /v1/enrichment/companies/{id}/social-insights:
@@ -1497,9 +1569,9 @@ paths:
                 scopes:
                   type: array
                   items:
-                    type: string
+                    $ref: '#/components/schemas/ConsumerScope'
                   description: |
-                    Entitlement scopes — data plane only (read:entity, read:person, read:company, read:film_tv, projections:pull, subgraph:read, graph:search, graph:paths, investor_narrative:read, corrections:propose, enrich:company, enrich:person, enrich:film_tv, social_media_insights:company, social_media_insights:person, deep_research:person). Unknown scopes are rejected; management actions are role-guarded and have no scope.
+                    Entitlement scopes, data plane only. Unknown scopes are rejected; management actions are role-guarded and have no scope.
                 entitlements:
                   type: object
                   description: |
@@ -1573,6 +1645,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IssuedKeyEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/clients/{id}/scopes:
+    post:
+      operationId: updateConsumerClientScopes
+      tags:
+        - Admin
+      summary: Replace a client's scopes
+      description: |
+        Management plane. Replaces the client's whole scope array — this is not a merge, so send the full set the client should keep. `[]` is allowed and strips every scope: it is the kill-switch. Scopes are read fresh on every request, so the change takes effect on the client's next call while its keys stay valid — no key needs to be revoked or reissued. Idempotent; a disabled client's scopes stay editable. Requires an authenticated admin user (role `admin`); consumer API keys are always rejected here.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  uniqueItems: true
+                  items:
+                    $ref: '#/components/schemas/ConsumerScope'
+                  description: |
+                    The complete new scope set. Empty strips every scope.
+              required:
+                - scopes
+              additionalProperties: false
+      responses:
+        '200':
+          description: The client with its new scopes (no key material).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumerClientEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -5061,6 +5184,569 @@ components:
         - data
         - error
         - meta
+    LeverageLoopRequest:
+      type: object
+      required:
+        - suggestion_request_id
+        - target_entity_id
+        - candidate_entity_ids
+      properties:
+        suggestion_request_id:
+          type: string
+          format: uuid
+          description: |
+            The App's id for one user's request to make suggestions for one target. The idempotency key: a repeat returns the existing job.
+        target_entity_id:
+          type: string
+          format: uuid
+          description: The canonical universe entity id of the person to introduce.
+        candidate_entity_ids:
+          type: array
+          minItems: 1
+          description: The pool the App already knows the target can reach.
+          items:
+            type: string
+            format: uuid
+        callback_url:
+          type: string
+          format: uri
+          description: |
+            Where to POST the `LeverageLoopWebhook` once delivered. Omit to poll instead.
+      additionalProperties: false
+    LeverageLoopJudge:
+      type: object
+      description: The judge's verdict over the drafted set; present only once delivered.
+      required:
+        - selected
+        - rejected
+        - needs_rewrite
+        - thin_results
+        - set_rationale
+      properties:
+        selected:
+          type:
+            - array
+            - 'null'
+          items:
+            type: object
+            required:
+              - candidate_id
+              - rank
+              - mechanism
+              - rationale
+              - flags
+            properties:
+              candidate_id:
+                type: string
+              rank:
+                type: integer
+              mechanism:
+                type: string
+              rationale:
+                type: string
+              flags:
+                type:
+                  - array
+                  - 'null'
+                items:
+                  type: string
+            additionalProperties: false
+        rejected:
+          type:
+            - array
+            - 'null'
+          items:
+            type: object
+            required:
+              - candidate_id
+              - reason
+              - note
+            properties:
+              candidate_id:
+                type: string
+              reason:
+                type: string
+              note:
+                type: string
+            additionalProperties: false
+        needs_rewrite:
+          type:
+            - array
+            - 'null'
+          items:
+            type: object
+            required:
+              - candidate_id
+              - note
+            properties:
+              candidate_id:
+                type: string
+              note:
+                type: string
+            additionalProperties: false
+        thin_results:
+          type: boolean
+        set_rationale:
+          type: string
+      additionalProperties: false
+    LeverageLoopSuggestion:
+      type: object
+      required:
+        - suggestion_id
+        - candidate_entity_id
+        - lane
+        - rank
+        - flags
+      properties:
+        suggestion_id:
+          type: string
+          format: uuid
+        candidate_entity_id:
+          type: string
+          format: uuid
+        candidate_name:
+          type: string
+        lane:
+          type: string
+          description: |
+            `peer` ranks by persona-to-persona similarity with the target; `complement` by the best of the archetypes built from the target.
+          enum:
+            - peer
+            - complement
+        rank:
+          type: integer
+        headline:
+          type: string
+        why:
+          type: string
+        mechanism:
+          type: string
+        rationale:
+          type: string
+        flags:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+      additionalProperties: false
+    LeverageLoopPackageWhy:
+      type: object
+      required:
+        - headline
+        - body
+      properties:
+        headline:
+          type: string
+        body:
+          type: array
+          description: The WHY's paragraphs, in order.
+          items:
+            type: string
+      additionalProperties: false
+    LeverageLoopPackageHook:
+      type: object
+      required:
+        - entity_id
+        - entity_type
+        - angle
+        - text
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        angle:
+          type: string
+          enum:
+            - mechanism
+            - rationale
+        text:
+          type: string
+      additionalProperties: false
+    LeverageLoopPackageEntity:
+      type: object
+      required:
+        - entity_id
+        - entity_type
+        - role
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        role:
+          type: string
+          enum:
+            - suggested
+            - beneficiary
+      additionalProperties: false
+    LeverageLoopPackageActionGroup:
+      type: object
+      required:
+        - ref
+        - rank
+        - trajectory_ref
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        trajectory_ref:
+          type:
+            - 'null'
+      additionalProperties: false
+    LeverageLoopPackageEmailDraft:
+      type: object
+      required:
+        - subject
+        - message
+      properties:
+        subject:
+          type: string
+        message:
+          type: string
+      additionalProperties: false
+    LeverageLoopPackageDraftEmail:
+      type: object
+      required:
+        - emails
+        - draft
+      properties:
+        emails:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        draft:
+          $ref: '#/components/schemas/LeverageLoopPackageEmailDraft'
+      additionalProperties: false
+    LeverageLoopPackageDraftSMS:
+      type: object
+      required:
+        - mobile_phones
+        - draft
+      properties:
+        mobile_phones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        draft:
+          type: object
+          required:
+            - message
+          properties:
+            message:
+              type: string
+          additionalProperties: false
+      additionalProperties: false
+    LeverageLoopPackageMakeIntro:
+      type: object
+      required:
+        - workflow
+        - recipients
+        - steps
+      properties:
+        workflow:
+          type: string
+          enum:
+            - double_opt_in
+        recipients:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            required:
+              - entity_id
+              - entity_type
+              - emails
+            properties:
+              entity_id:
+                type: string
+                format: uuid
+              entity_type:
+                type: string
+              emails:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+            additionalProperties: false
+        steps:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+            required:
+              - rank
+              - step
+              - label
+              - recipient_entity_ids
+              - draft
+            properties:
+              rank:
+                type: integer
+              step:
+                type: string
+                enum:
+                  - ask_beneficiary
+                  - ask_suggested_person
+                  - introduce
+              label:
+                type: string
+              recipient_entity_ids:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+              draft:
+                $ref: '#/components/schemas/LeverageLoopPackageEmailDraft'
+            additionalProperties: false
+      additionalProperties: false
+    LeverageLoopPackageAction:
+      type: object
+      description: |
+        `make_intro` when both parties have an email, `draft_email` when the candidate has one, `draft_sms` when the candidate has an E.164 phone. `params` is typed by `action_type`.
+      required:
+        - ref
+        - action_type
+        - rank
+        - label
+        - target_entity_id
+        - group_ref
+        - params
+      properties:
+        ref:
+          type: string
+        action_type:
+          type: string
+          enum:
+            - make_intro
+            - draft_email
+            - draft_sms
+        rank:
+          type: integer
+        label:
+          type: string
+        target_entity_id:
+          type: string
+          format: uuid
+          description: The beneficiary for `make_intro`, the candidate otherwise.
+        group_ref:
+          type: string
+        params:
+          oneOf:
+            - $ref: '#/components/schemas/LeverageLoopPackageDraftEmail'
+            - $ref: '#/components/schemas/LeverageLoopPackageDraftSMS'
+            - $ref: '#/components/schemas/LeverageLoopPackageMakeIntro'
+      additionalProperties: false
+    LeverageLoopPackageSuggestion:
+      type: object
+      description: |
+        One candidate. A `placeholder` sends `why`, `badge` and `hooks` as null, `score` as `{}` and every array empty. Fields the loop never fills (`trajectories`, `suggested_sequencing`, `paths`, `evidence`, `key_people`, `suggestion_mode`) are always empty or null.
+      required:
+        - source_ref
+        - rank
+        - entity_id
+        - entity_type
+        - content_status
+        - suggestion_mode
+        - badge
+        - why
+        - score
+        - trajectories
+        - suggested_sequencing
+        - key_people
+        - hooks
+        - paths
+        - evidence
+        - entities
+        - action_groups
+        - actions
+      properties:
+        source_ref:
+          type: string
+          description: The suggestion id for a ready pick, `candidate:<entity id>` for a placeholder.
+        rank:
+          type: integer
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          enum:
+            - persons
+        content_status:
+          type: string
+          enum:
+            - ready
+            - placeholder
+        suggestion_mode:
+          type:
+            - 'null'
+        badge:
+          type:
+            - string
+            - 'null'
+        why:
+          oneOf:
+            - $ref: '#/components/schemas/LeverageLoopPackageWhy'
+            - type: 'null'
+        score:
+          type: object
+          description: '`lane` and `verifier_flags` for a ready pick; `{}` for a placeholder.'
+          additionalProperties: true
+        trajectories:
+          type: array
+          maxItems: 0
+          items: {}
+        suggested_sequencing:
+          type: array
+          maxItems: 0
+          items: {}
+        key_people:
+          type:
+            - 'null'
+        hooks:
+          type:
+            - array
+            - 'null'
+          description: The judge's `mechanism` and `rationale` as approach angles on the candidate.
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageHook'
+        paths:
+          type: array
+          maxItems: 0
+          items: {}
+        evidence:
+          type: array
+          maxItems: 0
+          items: {}
+        entities:
+          type: array
+          description: The candidate as `suggested` and the target as `beneficiary`.
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageEntity'
+        action_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageActionGroup'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageAction'
+      additionalProperties: false
+    LeverageLoopPackage:
+      type: object
+      description: |
+        The v2 suggestion package, present once `status` is `delivered` or `failed`. It is what the App backend stores: the selected picks as `ready` suggestions with their WHY, and the judge's rewrite requests as `placeholder` suggestions. Tenant scope (organisation, requester, beneficiary) is absent; the App holds it on the request it filed. `entity_type` values are the App's node taxonomy (`persons`). Email and phone alternatives come from the entity's identifiers, in stored order; an action is omitted when its party has none. Drafts are derived from the headline and WHY until the generator writes them.
+      required:
+        - schema_version
+        - suggestion_request_id
+        - status
+        - generated_at
+        - suggestions
+      properties:
+        schema_version:
+          type: integer
+          description: Always 2.
+        suggestion_request_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: |
+            `complete` for a delivered loop, `partial` when the judge called the results thin, `failed` when the pipeline failed (with `suggestions: []`).
+          enum:
+            - complete
+            - partial
+            - failed
+        generated_at:
+          type: string
+          format: date-time
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageSuggestion'
+      additionalProperties: false
+    LeverageLoop:
+      type: object
+      required:
+        - job_id
+        - suggestion_request_id
+        - status
+        - requested
+        - target_entity_id
+        - scored_count
+        - dropped_count
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: The id to poll with.
+        suggestion_request_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: |
+            The stage the loop is at. Terminal states are `delivered` and `failed`.
+          enum:
+            - queued
+            - resolving
+            - persona
+            - scoring
+            - shortlisting
+            - generating
+            - verifying
+            - judging
+            - delivering
+            - delivered
+            - failed
+        requested:
+          type: boolean
+          description: |
+            Meaningful only on the first 202 for a `suggestion_request_id`: `false` means the row was filed but the worker nudge failed. A repeat POST and the GET always report `true`.
+        target_entity_id:
+          type: string
+          format: uuid
+          description: The canonical id of the target, merge chain resolved.
+        scored_count:
+          type: integer
+        dropped_count:
+          type: integer
+        error:
+          type: string
+          description: |
+            Present only when something failed: the stage error when `status` is `failed`, or the webhook failure (prefixed `webhook: `) when `status` is `delivered` but the callback could not be reached or answered 300 or above. Truncated to 700 characters.
+        judge:
+          $ref: '#/components/schemas/LeverageLoopJudge'
+        suggestions:
+          type: array
+          description: Present only once `status` is `delivered`.
+          items:
+            $ref: '#/components/schemas/LeverageLoopSuggestion'
+        package:
+          $ref: '#/components/schemas/LeverageLoopPackage'
+      additionalProperties: false
+    LeverageLoopEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/LeverageLoop'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
     SocialActivity:
       type: object
       description: One recent (~60 day) social activity observation.
@@ -6603,6 +7289,30 @@ components:
         - data
         - error
         - meta
+    ConsumerScope:
+      type: string
+      description: Data-plane entitlement scope; management actions are role-guarded and have no scope.
+      enum:
+        - read:entity
+        - read:person
+        - read:company
+        - read:film_tv
+        - projections:pull
+        - subgraph:read
+        - graph:search
+        - graph:paths
+        - investor_narrative:read
+        - corrections:propose
+        - enrich:company
+        - enrich:person
+        - enrich:film_tv
+        - social_media_insights:company
+        - social_media_insights:person
+        - deep_research:person
+        - persona:build
+        - synthetic_personas:build
+        - personas:compare
+        - leverage_loops:run
     ConsumerClient:
       type: object
       description: A registered consumer client. Never carries key material.
