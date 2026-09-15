@@ -12,7 +12,30 @@ icon: "comments"
 All table access is inline in the endpoints — no `function.run` calls, so nothing hides in sub-functions. See [APIs](/guides/open-work/tanstack-go-ai-chat/apis) for the per-endpoint breakdown and the proposed Go API spec.
 </Info>
 
-## Table access matrix
+## Phase I build authority
+
+Use [Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat) as the current implementation contract. Go runs only in `orbiter-backend`; React UI and the TypeScript TanStack AI server route run in `orbiter-frontend`. The TypeScript tools call Go HTTP APIs for persistence. Only outcome intake through explicit SUBMIT is in Phase I; the Xano inventory below includes other surfaces and future work.
+
+The TypeScript harness starts on Gemma, then switches to a second model through OpenRouter after a configurable number of accepted user turns. Compare continuation candidates using real OpenUI buttons and full Submit journeys; Go persists model selection for retry consistency. See the [model bake-off contract](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#gemma-to-second-model-bake-off).
+
+### Refreshed AlloyDB schema — 2026-09-15
+
+All 185 migrations from backend `177a0a0be376331802c73cdf5398a392233bcc6e` were applied to fresh Docker database `orbiter_chat_qa_20260915` in `orbiter-db` (AlloyDB Omni 16.8.0); latest migration `20260914214645`, zero pending. This is a local schema rebuild, not a live AlloyDB inspection. Connect through `orbiter-db.orb.local:5432` on this machine; `localhost:5432` points elsewhere.
+
+| Phase I table | Current schema | Planned change |
+| --- | --- | --- |
+| `suggestions.suggestion_request` | Existing, 22 columns | Add `context_version`, `intake_context`, `submission_receipt`; retain same request ID through submit |
+| `copilot.conversations` | Missing | Create ownership, thread key, request link and transcript version |
+| `copilot.runs` | Missing | Create accepted-input and model-selection metadata (`execution_metadata`), plus fenced lease |
+| `copilot.messages` | Missing | Create ordered SDK parts, revisions, question metadata and UI-library version |
+| `copilot.mutations` | Missing | Create logical-turn effect and submit receipts |
+| `users.users`, `organizations.organizations`, `organizations.organization_memberships` | Existing | Reuse account, org and current membership checks; provision synthetic QA fixtures |
+| `persons.persons` | Existing | Request FK dependency only; beneficiary remains null |
+| `suggestions.suggestion_batch` and result/loop children | Existing | Preserve; Phase I writes no result rows |
+
+The class registry is versioned Go code, not a new table. Unsent UI fields use a bounded browser session cache. The build plan defines exact ownership/deletion rules, additive SQL and browser-to-database assertions.
+
+## Table access matrix — historical Xano snapshot
 
 Seven Xano tables carry all data traffic. Only `query`, `get`, `add`, `edit` are used — no deletes, bulk, or direct SQL.
 
@@ -28,13 +51,13 @@ Seven Xano tables carry all data traffic. Only `query`, `get`, `add`, `edit` are
 
 ## Xano → AlloyDB coverage
 
-Half the tables already exist on `main` — the `suggestions` and `relationships` features landed mid-September. The merged design **keeps the Xano name** `suggestion_request` (not `request_suggestion` as earlier drafts had it).
+Half the tables already exist on `main` — the `suggestions` and `relationships` features landed mid-September. The canonical AlloyDB request table is **`suggestions.suggestion_request`**, keeping the Xano name `suggestion_request`. Use this existing table for all outcome request persistence.
 
 | Xano table | AlloyDB table | Status |
 | --- | --- | --- |
 | `contacts` | `persons.contacts` | Exists — redesigned, diff below |
 | `user` | `users.users` | Exists — redesigned, diff below |
-| `suggestion_request` | `suggestions.suggestion_request` | **Exists on main** (`suggestions_001_init` + `suggestions_002_ingest`, merged 9/10 & 9/14) — Xano name kept; diff below |
+| `suggestion_request` | `suggestions.suggestion_request` | **Exists on main** (`suggestions_001_init`, `suggestions_002_ingest`, `suggestions_003_universe_loop_job`) — Xano name kept; diff below |
 | `master_person_relationship` | `relationships.relationships` | **Exists on main** (`relationships_001_init`, merged 9/8) — diff below |
 | `conversation` | `copilot.conversations` *(proposed)* | Missing — new feature |
 | `copilot_chat_messages` | `copilot.messages` *(proposed)* | Missing — new feature |
@@ -87,8 +110,9 @@ Exists on `main` — `internal/features/suggestions` already serves it. The merg
 | `deliver_format` | `deliver_format` | Column exists on `main` but is **unused** — delivery formats removed entirely (decision 9/14, see Migration Planning); results return to UI, alternate formats become Phase III context-menu APIs |
 | `current_step`, `progress` | — | **Not migrated** — draft progress tracking not carried over |
 | — | `organization_id` uuid | New (002): org scoping, `SET NULL` |
+| — | `universe_job_id`, `batch_id`, `next_poll_at`, `poll_deadline_at`, `failure_reason`; `poll_attempts` | New (003): worker bookkeeping; Phase I submit leaves nullable fields null and attempts 0 |
 
-The earlier `request_suggestion` naming in [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) was superseded — the merged migration keeps `suggestion_request` and adds the ingest siblings (`suggestion_batch`, `suggestion`, `suggestion_node`, `suggestion_trajectory`, `suggestion_action_group`, `suggestion_action`, `ingest_error`).
+For [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables), the physical request table is `suggestions.suggestion_request`. The delivery payload field `request_suggestion_id` refers to that row; it is not a table name. The merged migration adds the ingest siblings (`suggestion_batch`, `suggestion`, `suggestion_node`, `suggestion_trajectory`, `suggestion_action_group`, `suggestion_action`, `ingest_error`).
 
 ## `master_person_relationship` → `relationships.relationships`
 
@@ -101,9 +125,9 @@ Exists on `main` — `internal/features/relationships` serves it:
 | `my_person_id` int | `contact_id` uuid | Xano's self-person link became a `persons.contacts` FK, `SET NULL` |
 | — | `organization_id` uuid | New: org scoping |
 
-## Missing tables — build spec inputs
+## Historical Xano transcript shapes
 
-Only the thread/transcript family is unbuilt. Column lists from the Xano schema; Go side uses uuidv7 FKs and Go-layer enums per repo policy.
+The blocks below document source-table shapes, not copy-ready Go DDL. Phase I creates all four copilot tables listed above; use the build plan for leases, receipts, tenant scope, question identity and retention. Other surfaces are deferred.
 
 <Card icon="database">
 
@@ -113,7 +137,7 @@ conversation — 636  →  copilot.conversations (proposed)
 
 `user_id`, `mode` text, `title`, `master_person_id`. Chat threads; `mode = "meeting_prep"` is the only mode observed. `where` clauses still use the legacy `$db.copilot_conversations` prefix — the table was renamed in Xano.
 
-Proposed shape: `id`, `user_id`, `surface` text (`meeting_prep` / `leverage_loop` / `outcome`), `surface_ref_id` uuid nullable, `title`, `person_id`, timestamps — one row per thread, absorbing the `meeting_prep:<id>` / `leverage_loops:<id>` / `outcomes:<id>` prefix parsing the Xano endpoints do in `thread_id`.
+Historical consolidation idea: one conversation row replaces prefix parsing. The current Phase I schema supports only `surface=outcome`, includes exact org scope and durable thread identity, and reserves other surfaces for later work; see the build plan SQL.
 
 </Card>
 
@@ -152,4 +176,4 @@ outcome_conversations — 689  →  copilot.messages (proposed)
 - **Deprecation guard.** Xano `suggestion_request` is superseded by `suggestions.suggestion_request` — see [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables). Do not delete the Xano table until the TanStack AI endpoints are complete and Mark approves.
 - **`contacts` stays read-only here** — writes flow through other API groups.
 - **Name collision.** Xano "outcomes" (suggestion requests/results) is a different domain from the existing Go `outcomes` feature (`outcomes.investment_theses`). The chat endpoints belong in a new feature (`copilot` proposed) — do not wire them into `internal/features/outcomes`.
-- **Interview endpoints are stateless** — the four `*/interview` endpoints call OpenRouter and return content without persisting; persistence happens only via the draft/dispatch/context endpoints on `suggestion_request`.
+- **Historical Xano interview endpoints are stateless** — the four `*/interview` endpoints call OpenRouter and return content without persisting; persistence happens only via the draft/dispatch/context endpoints on `suggestion_request`.
