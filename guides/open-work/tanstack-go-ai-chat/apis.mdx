@@ -10,13 +10,21 @@ icon: "code"
 
 Proposed Go routes follow orbiter-backend conventions: `/v1/` prefix, `{data, error, meta}` envelope, `RequireWorkOS` auth, owner from session. The `suggestions` and `relationships` features already exist on `main` — request/result endpoints extend `suggestions` (`suggestions.suggestion_request`, Xano name kept) and `relationships`; the remaining surface is a proposed `copilot` feature for threads/messages. See [table mapping](/guides/open-work/tanstack-go-ai-chat).
 
+**Canonical AlloyDB request table:** `suggestions.suggestion_request`. All Go request reads and writes below use this existing table.
+
 <Info>
 **Name collision:** Xano "outcomes" (suggestion requests/results) is not the Go `outcomes` feature (`outcomes.investment_theses` = investor profiles). Chat outcome endpoints are proposed under `/v1/copilot/outcomes/*` to keep them out of that feature.
 </Info>
 
+## Current Phase I authority
+
+[Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#api-contracts) defines the complete current request/response, auth, retry, transaction and acceptance contracts. The Xano tables below are a historical inventory, not DTO templates. Go runs only in `orbiter-backend`; `orbiter-frontend` owns React UI and the TypeScript TanStack AI server, classification, tools, SSE and OpenUI validation. Backend access is through authenticated HTTP APIs.
+
+Phase I uses `copilot_mode=outcome`, null beneficiary, null-class initial drafts and explicit user SUBMIT. It has four copilot tables (conversations/runs/messages/mutations), the existing `suggestions.suggestion_request`, and no generation/result writes. See the [refreshed table baseline](/guides/open-work/tanstack-go-ai-chat#phase-i-build-authority).
+
 ## Threads — shared transport
 
-The thread endpoints serve every surface. `thread_id` carries a surface prefix (`meeting_prep:<key>`, `leverage_loops:<request_id>`, `outcomes:<request_id>`) that the handler parses to route messages into the right transcript table.
+The historical Xano thread endpoints serve every surface. Their `thread_id` carries a surface prefix (`meeting_prep:<key>`, `leverage_loops:<request_id>`, `outcomes:<request_id>`) that the handler parses to route messages into the right transcript table. The current Go Phase I routes use structured IDs and only the outcome surface.
 
 ### Existing Xano APIs
 
@@ -29,18 +37,26 @@ The thread endpoints serve every surface. `thread_id` carries a surface prefix (
 | `PATCH /threads/{thread_id}` | Rename / archive thread metadata | `conversation` W | Shell |
 | `DELETE /threads/{thread_id}` | Delete/archive a thread | `conversation` W | Shell |
 
-### Proposed Go spec — `internal/features/copilot`
+### Current Phase I Go thread routes
 
-| Route | What it should do | Tables |
-| --- | --- | --- |
-| `POST /v1/copilot/threads/ensure` | Find-or-create by (`user_id`, `surface`, `surface_key`) — no prefix parsing; caller passes structured fields | `copilot.conversations` R/W |
-| `GET /v1/copilot/threads` | Paginated list, optional `surface` filter | `copilot.conversations` R |
-| `GET /v1/copilot/threads/{id}/messages` | Cursor-paginated messages via `conversation_id` — one table regardless of surface | `copilot.conversations`, `copilot.messages` R |
-| `POST /v1/copilot/threads/{id}/messages` | Append batch of messages; service-layer dedupe; owner check via conversation | `copilot.conversations` R/W, `copilot.messages` R/W |
-| `PATCH /v1/copilot/threads/{id}` | Update `title`/`archived_at` | `copilot.conversations` W |
-| `DELETE /v1/copilot/threads/{id}` | Soft-delete/archive (200 + null-data envelope) | `copilot.conversations` W |
+All IDs are scoped to the authenticated local user and exact nullable organization. Only `surface=outcome` is accepted. Signed TypeScript harness writes are required for run acquisition/checkpoint/finish; no client-authored assistant history.
 
-## How I Know
+| Route | Current contract |
+| --- | --- |
+| `POST /v1/copilot/threads/ensure` | Idempotent live-owner/org/surface/key ensure; no prefix parsing |
+| `GET /v1/copilot/threads` | Owner-scoped cursor history, explicit archived filter |
+| `GET /v1/copilot/threads/{id}/messages` | All pages at one transcript version; SDK IDs/parts, question and UI-library metadata |
+| `POST /v1/copilot/threads/{id}/messages` | Lease/revision-guarded assistant checkpoints, preserving committed tool pairs |
+| `PATCH /v1/copilot/threads/{id}` | Rename/archive/restore; reject live active run |
+| `DELETE /v1/copilot/threads/{id}` | Idempotent soft archive; no row deletion |
+| `POST /v1/copilot/threads/{id}/runs` | Accept fresh structured input or reload an original accepted retry input; return accepted turn index, inherited model/policy metadata and lease/effect state to harness only |
+| `PATCH /v1/copilot/threads/{id}/runs/{run_id}` | Pin model metadata with `configure_execution`, renew or terminalize; fenced, idempotent writes |
+
+The [model bake-off contract](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#gemma-to-second-model-bake-off) defines the signed execution snapshot. Model calls and Gemma-to-continuation switching stay in TypeScript; Go stores the selection and accepted turn index.
+
+See the build plan for exact payloads and errors. The TypeScript route uses Go acquisition responses for retry metadata; no new public run-detail endpoint is assumed.
+
+## How I Know — later phase
 
 Relationship interviews: a multi-turn LLM interview whose state persists on the person relationship row.
 
@@ -52,15 +68,15 @@ Relationship interviews: a multi-turn LLM interview whose state persists on the 
 | `GET /how-i-know/relationships/{master_person_id}` | Read transcript, summary, completion flag, nuggets for the auth user + person | `master_person_relationship` R | Implemented |
 | `PUT /how-i-know/relationships/{master_person_id}` | Upsert running/final interview state (add if absent, edit if present); `interview_complete` gate for final save | `master_person_relationship` R/W, `contacts` R | Implemented |
 
-### Proposed Go spec
+### Later-phase proposal — not a Phase I contract
 
 | Route | What it should do | Tables |
 | --- | --- | --- |
-| `POST /v1/copilot/how-i-know/interview` | Same stateless turn: load target context, call LLM client, return content. No persistence | `persons.contacts`, `persons.persons` R |
+| Relationship interview orchestration | Future TypeScript TanStack server flow; any required Go context/read/write APIs need their own build plan | `persons.contacts`, `persons.persons` R |
 | `GET /v1/copilot/how-i-know/relationships/{person_id}` | Read interview state for (`user_id`, `person_id`) | `relationships.relationships` R |
 | `PUT /v1/copilot/how-i-know/relationships/{person_id}` | Upsert transcript/summary/nuggets/complete with `transcript_version` optimistic check | `relationships.relationships` R/W, `persons.contacts` R |
 
-## Leverage Loops (`leverage_outcome`)
+## Leverage Loops (`leverage_outcome`) — later phase
 
 <Info>
 **Renamed flow.** These endpoints are the `leverage_outcome` mode — an outcome request *for a specific person* ("I want to help Katelyn hire a chief of staff"), carrying a beneficiary `master_person_id`/contact. `POST /leverage-loops/interview` is that mode's interview; `leverage_loop` itself has no AI chat, only a button. See [Migration Planning](/guides/open-work/tanstack-go-ai-chat/migration-planning).
@@ -81,10 +97,10 @@ Draft → interview → context patch → dispatch lifecycle on `suggestion_requ
 | `GET /leverage-loops/results/{result_id}/actions` | Actions attached to loop result cards | result tables | Shell |
 | `GET /leverage-loops/results/{result_id}/trajectories` | Trajectories attached to loop result cards | result tables | Shell |
 
-### Proposed Go spec
+### Later-phase proposal — not a Phase I contract
 
 <Note>
-**Decided:** the `leverage_outcome` chat flow folds into `/v1/copilot/outcomes/*` — the draft body carries the beneficiary `person_id`/`contact_id`. `/v1/leverage-loops/*` stays exclusively the button-only leverage loop already on `main`. Results land in the **unified** `suggestion*` tables, not `leverage_loop_*`.
+**Deferred design direction:** beneficiary outcomes may extend `/v1/copilot/outcomes/*` with a reviewed beneficiary/mode contract. The current Phase I draft rejects non-null `person_id`; no mode rename is authorized by this table. `/v1/leverage-loops/*` keeps its existing button-only behavior. Future beneficiary results would use the unified `suggestion*` tables.
 </Note>
 
 | Route | What it should do | Tables |
@@ -125,42 +141,35 @@ Same lifecycle as leverage loops plus classification, clarifications, file attac
 | `GET /outcomes/results/{result_id}/actions` | Actions attached to result cards | result tables R | Shell |
 | `GET /outcomes/results/{result_id}/trajectories` | Trajectories attached to result cards | result tables R | Shell |
 
-### Proposed spec — harness + Go split
+### Current Phase I harness and Go split
 
-<Note>
-**Decided:** classify/interview/clarifications do **not** become Go endpoints. The loop runs in the TanStack AI server route as tools; Go owns persistence, dispatch, and results. See [Migration Planning — Chat harness](/guides/open-work/tanstack-go-ai-chat/migration-planning).
-</Note>
+The four registered model tools run as TypeScript `.server()` implementations in `orbiter-frontend`. The Go request row is authoritative; transcript tool results mirror committed state. No model tool can submit.
 
-**Harness tools** (TypeScript server route — replace Xano's LLM endpoints):
+| Tool / action | Current behavior |
+| --- | --- |
+| `resolve_outcome` | Bounded TypeScript classifier call or accepted routing choice; commit route through Go context API |
+| `update_context` | One consolidated, evidence-backed context effect per accepted turn; Go derives discrete count/slot/skip choices from accepted metadata |
+| `re_route` | Explicit user correction; one reset effect per turn, followed by context extraction into the new schema |
+| `handoff_to_akira` | Go atomically persists terminal exit and run; no external handoff |
+| `submitOutcome` / internal `submit_outcome_request` | Trusted user-action handler only; omitted from `chat({tools})` and OpenUI runtime actions |
+| Intake conversation | Existing TypeScript `chat()` route streams restricted OpenUI Lang; Go owns checkpoints and state |
 
-| Tool | Replaces | Calls |
-| --- | --- | --- |
-| `resolve_outcome` | `POST /outcomes/classify` | LLM classify against canonical registry — no Go call |
-| `update_context` | `PATCH .../context`, `PATCH .../submit-metadata` | `PATCH /v1/copilot/outcomes/drafts/{id}/context` |
-| `submit_outcome_request` | `POST /outcomes/dispatch` | `POST /v1/copilot/outcomes/dispatch` (Phase I: persist + `submitted`) |
-| `re_route` / `handoff_to_akira` / `draft_intro` | — | Route correction / out-of-scope exit / Sonnet intro drafts |
-| interview turns | `POST /outcomes/interview`, `POST /outcomes/find-talent/interview`, `POST /outcomes/clarifications` | The `chat()` loop itself — OpenUI Lang out, no Go call |
+| Go route | Current contract |
+| --- | --- |
+| `GET /v1/copilot/outcomes/classes` | Optional `registry_version`; immutable supported registry, explicit unavailable-version failure |
+| `POST /v1/copilot/outcomes/drafts` | First accepted input binds one null-class request to the conversation before classification |
+| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Atomic typed domain change + tool checkpoint + logical-turn receipt; no arbitrary JSON state replacement |
+| `POST /v1/copilot/outcomes/dispatch` | Explicit user click, reviewed version, scope/readiness/no-active-run checks; frozen snapshot/receipt, status submitted |
+| `GET /v1/copilot/outcomes/requests` | Owner/org-scoped bound outcome requests; no beneficiary/multi-mode result feed |
+| `GET /v1/copilot/outcomes/requests/{id}` | Authoritative RequestView and public receipt for resume/review |
 
-**Go endpoints:**
+These six outcome routes plus the eight thread routes are the **14 Phase I Go routes**. There are no Go classify/interview/clarification endpoints. Public API details, exact receipt JSON and SQL acceptance checks live in the build plan, not a second contract on this page.
 
-| Route | What it should do | Tables |
-| --- | --- | --- |
-| `POST /v1/copilot/outcomes/drafts` | Create/update draft — optional `class_slug` pre-seeded from `resolve_outcome` | `suggestions.suggestion_request` R/W |
-| `PATCH /v1/copilot/outcomes/drafts/{id}/context` | Persist summary/title/context + `number_of_results`/constraints w/ `context_version` check (called by `update_context`; `deliver_format` removed — Phase III) | `suggestions.suggestion_request` R/W |
-| `POST /v1/copilot/outcomes/dispatch` | Owner + status guard; persist dispatch context; set `status=submitted` (called by `submit_outcome_request`) — Phase II adds Universe payload | `suggestions.suggestion_request` R/W |
-| `POST /v1/copilot/outcomes/contact-actions` | Record card action against the request/result | `suggestions.suggestion_request`, `suggestions.suggestion` R/W |
-| `POST /v1/copilot/outcomes/files` | Attach file to draft — reuse `files` feature upload + link table | `files.files`, `files.request_files` *(proposed)* W |
-| `GET /v1/copilot/outcomes/requests` | List by status, cursor pagination | `suggestions.suggestion_request` R |
-| `GET /v1/copilot/outcomes/results` | Result cards by `request_id` | `suggestions.suggestion` R |
-| `GET /v1/copilot/outcomes/results/{id}/nodes` | Card node children | `suggestions.suggestion_node` R |
-| `GET /v1/copilot/outcomes/results/{id}/actions` | Card actions | `suggestions.suggestion`, `suggestion_action_group`, `suggestion_action` R |
-| `GET /v1/copilot/outcomes/results/{id}/trajectories` | Card trajectories | `suggestions.suggestion`, `suggestion_trajectory` R |
-| `GET /v1/pitch-profiles/latest` | Latest profile for caller — **`files` feature route** (decided: not `copilot`) | `files.pitch_profiles` R |
-| `POST /v1/pitch-profiles/{id}/summarize` | Rewrite summary post-edit | `files.pitch_profiles`, `files.pitch_profile_narratives` R/W |
-| `GET /v1/pitch-profiles/{request_id}` | Readiness + fields | `files.pitch_profiles` R |
-| `PATCH /v1/pitch-profiles/{request_id}` | Update fields w/ `profile_version` check | `files.pitch_profiles` R/W |
+### Later-phase API candidates
 
-## Other contract groups — shells only
+Result nodes/actions/trajectories, beneficiary outcomes, files, contact actions and pitch profiles remain outside this build. Pitch profiles belong to `files`; future result reads use the existing suggestions tables. Their old Xano contracts may inform later designs but must not be copied into the current Phase I routes. Existing button-only `loop` behavior and tables remain unchanged.
+
+## Other contract groups — historical shells, later phases
 
 All shells; proposed tables are inference from the contract, flagged accordingly.
 
@@ -176,6 +185,7 @@ All shells; proposed tables are inference from the contract, flagged accordingly
 
 ## Notes
 
-- Four `api.request` calls to OpenRouter (`/chat/completions`) across the interview endpoints — the Go rebuild puts these behind the platform LLM client, not inline handlers.
-- Shell endpoints have full input contracts in Xano already — the Go DTOs can be generated from them nearly 1:1.
-- `threads/{id}/messages` POST is the only multi-table writer: conversation ensure + per-surface transcript dedupe/insert. In Go this becomes one service method over `copilot.conversations` + `copilot.messages`.
+- Historical Xano interview endpoints call OpenRouter directly. The replacement AI orchestration runs in TypeScript inside `orbiter-frontend`; Go provides domain APIs and persistence only.
+- Xano shell DTOs are not the Phase I contract: input ownership, retry, accepted answers, counts, receipts and submission were redesigned in the build plan.
+- Context changes atomically write the request, assistant checkpoint and operation receipt in Go. The TypeScript harness awaits commit before emitting success.
+- Browser completion means an actual authenticated chat → review → SUBMIT → reload journey and an independent assertion on the same `suggestions.suggestion_request` row.
