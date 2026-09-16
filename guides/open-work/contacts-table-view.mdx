@@ -6,7 +6,7 @@ icon: "table"
 ---
 
 <Info>
-**Workshop page — decisions locked 2026-09-16.** Twelve scope questions were answered in one session (see [Decisions](#decisions)); nothing is built yet. This page is the implementation brief for **orbiter-backend** (Go) and **orbiter-frontend** (TypeScript/React). Items under [Assumed defaults](#assumed-defaults) were chosen by the author and can be overridden without reopening the workshop. Items under [Later](#later-not-in-v1) are explicitly out of v1.
+**Implementation plan — audited 2026-09-16.** The twelve workshop decisions remain the product scope. The audit below corrects implementation gaps and incorporates the full-width screen requirement. This is a specification, not a claim that the feature has been built or tested. This page is the implementation brief for **orbiter-backend** (Go) and **orbiter-frontend** (TypeScript/React). Items under [Assumed defaults](#assumed-defaults) were chosen by the author and can be overridden without reopening the workshop. Items under [Later](#later-not-in-v1) are explicitly out of v1.
 </Info>
 
 ## Start here
@@ -16,10 +16,10 @@ icon: "table"
 | Repository / runtime | Owns |
 | --- | --- |
 | `orbiter-backend` — Go | `GET /v1/contacts/table` row projection, custom-field definitions and values, saved views, query log. All database access. |
-| `orbiter-frontend` — TanStack Start server, TypeScript | `POST /api/contacts-view-query`: the `chat()` loop, system prompt, tool definitions, streaming, query-log write. No Go, no business writes. |
+| `orbiter-frontend` — TanStack Start server, TypeScript | `POST /api/contacts-view-query`: the `chat()` loop, system prompt, tool definitions, streaming, verified authentication, model-run telemetry. No Go, no business writes. |
 | `orbiter-frontend` — browser, React | `/contacts` route, `contacts-view` feature, TanStack Table v9 + TanStack Virtual, client tools that mutate table state and call Go with the user's own session, confirm cards, person sheet reuse. |
 
-Go runs only in orbiter-backend. The LLM loop runs only in the TanStack Start server. Every write to Go is made from the browser with the user's session, exactly like every other feature; the BFF never holds a privileged credential.
+Go runs only in orbiter-backend. The LLM loop runs only in the TanStack Start server. Business writes to Go originate in the browser with the user's session. The BFF verifies that session before spending model tokens and records model-run telemetry; browser receipts record actual tool outcomes. Neither runtime holds a privileged business-write credential.
 
 ```text AI build instruction
 Implement Contacts View in the existing Orbiter repositories, following each
@@ -27,23 +27,47 @@ repository's CLAUDE.md. Work phase by phase in the order on this page and stop
 at every gate until its checks pass. Before Phase 1, verify the schema
 preflight and the package versions. Add the "Contacts View" command to the ⌘K
 palette exactly as specified under "Palette command", gated by
-VITE_CONTACTS_VIEW. Use the QueryInput component as-is for the query bar; do
+VITE_CONTACTS_VIEW. Use the shared QueryInput component for the query bar; do
 not build a new composer. Use TanStack Table v9 (useTable + tableFeatures),
 not the v8 useReactTable API and not the legacy export. Every tool the model
 can call is a client tool defined once in tools/definitions.ts; the server
 route only runs the model. Writes that touch many rows or other features must
-go through the approval interrupt and a preview card; never apply them on the
+go through the pinned SDK approval API and a frozen preview card; never apply them on the
 model's say-so. Use your browser tools on the real authenticated app to
 exercise the palette, the route, scrolling 20k rows, editing a custom cell,
 saving a view, and a query that filters, then a query that bulk-sets a field
 with approval. Capture evidence; report blocked or skipped checks honestly.
-Do not change production schemas, publish, commit, or deploy without
-authorization.
+Use isolated implementation branches and disposable test fixtures. Follow the
+user's current authorization for commits, publishing and deployments; this
+plan does not itself authorize production data changes.
 ```
 
-**Reading order:** [Decisions](#decisions) → [Screen](#screen) → [Navigation and palette command](#navigation-and-palette-command) → [Rows endpoint](#rows-endpoint) → [Custom fields](#custom-fields) → [Saved views](#saved-views) → [Frontend feature](#frontend-feature) → [AI query bar](#ai-query-bar) → [Build phases and gates](#build-phases-and-gates) → [Acceptance tests](#acceptance-tests).
+**Reading order:** [Audit findings](#audit-findings-and-implementation-baseline) → [Decisions](#decisions) → [Screen](#screen) → [Navigation and palette command](#navigation-and-palette-command) → [Rows endpoint](#rows-endpoint) → [Custom fields](#custom-fields) → [Saved views](#saved-views) → [Frontend feature](#frontend-feature) → [AI query bar](#ai-query-bar) → [Build phases and gates](#build-phases-and-gates) → [Acceptance tests](#acceptance-tests).
 
 Related pages: [Tanstack Go AI Chat](/guides/open-work/tanstack-go-ai-chat) (table inventory, `contacts` → `persons.contacts` mapping), [Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat) (the house style for Go + TanStack AI builds; this plan deliberately needs none of its harness-signature machinery), [Contacts Interaction Log](/guides/open-work/contacts-interaction-log) (source of the momentum and meeting columns), [Migrations & sqlc](/guides/orbiter-backend/database/migrations).
+
+## Audit findings and implementation baseline
+
+The source audit inspected docs `56198b3`, frontend `fafd172c` on `feat/outcome-chat`, and backend `71e0ce2` on 2026-09-16. These are local source observations; they do not establish deployed state. The historical dev response examples below were supplied by the earlier workshop and were not re-fetched in this audit. At implementation time record the actual branch, commit, lockfile and migration head in `contacts-view-build-evidence.md`; preserve other worktrees and uncommitted work.
+
+The original owner-scoped endpoint, browser-side table operations, typed fields and preview-before-write design are retained. The following corrections are release requirements:
+
+| Finding | Required correction | Proof |
+| --- | --- | --- |
+| P1: a page-owned Header would omit or duplicate persistent chrome | Extend `WorkspaceShell` to include `/contacts`; reuse its Header and the top navigation row. One panel spans all three Discover panel positions. | Screen geometry and header mount tests. |
+| P1: a live target was resolved again after Apply | Freeze exact contact ids, field values and definition revision when the preview opens. Reject stale approvals. | Change filter, selection, data and definition while the card is open; no write until a fresh approval. |
+| P1: grouped/virtual rows were used for counts and bulk scope | Derive matching **leaf contacts** before grouping, expansion and virtualization. | Collapsing all groups leaves count and target ids unchanged. |
+| P1: loading/capped data was presented as complete | Track hydration state explicitly; broad AI actions require complete hydration. At the cap, allow individual/manual selection workflows only. | Page failure, retry, cap and concurrent insert cases. |
+| P1: decode-only cookie auth could trigger paid model calls | Verify bearer via the authenticated Go current-user endpoint before model invocation. Enforce the server feature gate, rate and request bounds. | Forged/expired bearer and disabled flag yield zero provider calls. |
+| P1: snippets mixed SDK generations and invented completion hooks | Installed SDK uses `addToolApprovalResponse`; SSE helper accepts no `onFinish`. Use the single [harness contract](/guides/open-work/contacts-table-view/ai-query-harness). | Compile spike and approval round-trip test against pinned dependencies. |
+| P1: bulk retries and field deletion had race conditions | Transactional validation, definition locks, durable idempotency receipts, per-chunk progress and deletion ordering. | Concurrent write/delete/retry integration tests. |
+| P2: email SQL and nickname route were guessed | Use `email_addresses.contact_emails`, `email_addresses.email_addresses.address`; implement the missing nickname HTTP route. | sqlc generation, migrated database query and route tests. |
+| P2: telemetry claimed success before browser execution | One query log per logical turn; separate requested, approved, executed, partial, cancelled and failed outcomes. | One turn across several SSE requests has one log row and actual counts. |
+| P2: mutable state and persistence rules were underspecified | One state reducer, one filter evaluator, user-scoped caches, versioned saved state and chronological undo. | Pure state tests and account-switch regression. |
+
+**Dependency truth:** v9 is confirmed by the [official migration guide](https://tanstack.com/table/latest/docs/framework/react/guide/migrating). Pin a concrete v9 version and compatible Store/Virtual dependencies after a compile spike; the draft's `9.2.4` registry claim was not verified in this audit. Keep the installed AI package set unless an actual compatibility test fails. Avoid copying APIs from moving `latest` documentation over installed signatures.
+
+**Scope of this change:** the two planning pages are the deliverable. The implementation agent builds the feature in the frontend and backend repositories; it must not infer that these documentation edits create database tables or ship UI.
 
 ## Decisions
 
@@ -61,7 +85,7 @@ Each answer was chosen from options with a stated recommendation; the recommende
 | 8 | Custom-field ownership | **Per user in v1, `scope_type` + `scope_id` in the schema for org-shared later.** | No migration when org sharing arrives. |
 | 9 | Which contacts are rows? | **All of my contacts, with an All / Personal / Shared scope switch when I belong to at least one org.** | Every row is `user_id = caller` and `merged_into_contact_id IS NULL`, the same predicates as `ListContactsByUser`. Org membership does not change ownership: a contact added while an org was active is still mine. What differs is sharing. `visibility = 'private'` keeps a contact off every org surface (the org graph, teammates); `'visible'` shares it with the orgs I belong to; `organization_id` records which org was active when the contact was created (nullable, attribution only, per `organizations_002`). The switch is a filter on those two columns, not a different query. |
 | 10 | Row interaction | **Name opens the existing PersonSheet; inline edit for custom cells, note and nickname; row checkboxes feed the global node-selection store.** | Reuses `PersonSheet` (mounted in `_authed.tsx`, driven by the `person` search param) and `useNodeSelectionStore`, so Email Outreach Composer and add-to-collection work unchanged. |
-| 11 | Bulk write policy | **Always preview and confirm.** Field creation is the one exception: additive, applied immediately, undone by delete. | Every many-row or cross-feature write shows affected count, sample rows and the exact change; nothing writes without the Apply click. |
+| 11 | Bulk write policy | **Always preview and confirm.** Field creation is the one exception: additive, applied immediately; removing an unused field is a separate field-manager action. | Every many-row or cross-feature write shows affected count, sample rows and the exact change; nothing writes without the Apply click. |
 | 12 | Rollout | **`VITE_CONTACTS_VIEW` flag hides the palette command and redirects the route.** | Same shape as the `VITE_TANSTACK_AI_CHAT_*` flags. Ships dark, enabled per environment. |
 
 ### Assumed defaults
@@ -71,40 +95,48 @@ Chosen by the author; override in place without reopening the workshop.
 - **Route** `/contacts`. Palette command id `contacts-view`, label "Contacts View", category Navigation, lucide `TableIcon`. No hotkey in v1.
 - **Default columns, in order:** select, Name (pinned start), Title, Company, Location, Email, Last activity, Kind, Momentum, Emails, Meetings, Connected, Note, Nickname, Added. Visibility and Org exist as columns but start hidden. Custom columns append after Added in `position` order.
 - **Scope switch:** rendered in the toolbar only when the user has at least one org membership (from the existing `useBackendMe()` data). **All** (default) shows every row; **Personal** filters `visibility = private`; **Shared** filters `visibility = visible`. An optional second filter narrows Shared to the org that was active at creation (`organization_name`). Both are ordinary column filters through the same store, so they sort, group, save with views and are reachable by the AI. Users with no org see no switch and all rows.
-- **Row cap** 25,000 with a banner ("showing the first 25,000 of N; narrow with search"); page size 1,000 per request; compact 40 px rows.
+- **Row cap** 25,000; page size 1,000; compact 40 px rows. Banner: "Loaded 25,000 of N contacts. Search applies to loaded contacts only." Search cannot fetch omitted contacts in this client-side design. Broad AI actions remain disabled at the cap; show an explicit explanation.
 - **Custom field types in v1:** `text`, `number`, `date`, `checkbox`, `select`, `multi_select`, `url`. `person_ref` and `company_ref` wait for a picker (see Later).
 - **Model:** `CONTACTS_VIEW_QUERY_MODEL` server env, defaulting to the chat BFF default `anthropic/claude-sonnet-4.5` via OpenRouter, provider sort `throughput`. Bake off cheaper tool-callers after Phase 5.
-- **Conversation memory:** last 10 user/assistant pairs, reset when the route unmounts. `describe_table` tool outputs are dropped from history after the turn they served.
-- **Query log:** fire-and-forget `POST /v1/contacts/table/query-log` from the BFF after each turn, using the user's bearer.
+- **Conversation memory:** up to 10 complete user turns with their assistant/tool-result groups, bounded by bytes and tokens; reset when the route unmounts. Prune complete groups, never individual tool results.
+- **Query log:** authenticated, idempotent per-turn receipt endpoint; the BFF supplies model timing and the browser supplies actual execution outcomes. See [Query log](#query-log).
 - **Export CSV:** out of v1.
 
 ## Screen
 
+**Locked UI requirement:** Contacts View is full screen like Discover. Its single panel occupies the union of Discover's left, center and right panels, including the space between them. All chrome **above** the panels stays the same: workspace navigation, widget bar, selection control, notifications, organization switcher and avatar. The query component sits at the **lower center** of the single panel, with the same appearance and behavior as Discover's query component.
+
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ Header (global: logo, palette button, avatar)                                │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ Contacts  (All · Personal · Shared)  [View ▾] [Save] [Columns ▾] [Group ▾] [Fields] │
-│ 🔍 quick search             filter chips: Company = Acme ×  Momentum ≥ 3 ×   │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ☐ │ Name ▲        │ Title        │ Company  │ Location │ Last activity │ Tier │
-│ ☐ │ Ada Lovelace  │ CTO          │ Acme     │ London   │ 2d ago        │ 1    │
-│ ☐ │ Grace Hopper  │ Rear Admiral │ Navy     │ NYC      │ 3w ago        │ 2    │
-│   │ … virtualized rows (only the visible window is in the DOM) …             │
-│                                                                              │
-│                                                                              │
-├──────────────────────────────────────────────────────────────────────────────┤
-│ ✓ Filtered to 42 contacts at Acme, sorted by last activity.  [Undo]          │
-│ ┌ Apply to 42 rows? Set Tier = 1 · Ada Lovelace, Grace Hopper, +40 ┐         │
-│ │                                             [Cancel]   [Apply]   │         │
-│ └──────────────────────────────────────────────────────────────────┘         │
-│ ┌──────────────────────────────────────────────────────────────────┐         │
-│ │ Filter, sort, group, or add a column…                     🎤  ↵ │         │
-│ └──────────────────────────────────────────────────────────────────┘         │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ EXISTING WORKSPACE CHROME: nav · widgets · selection · notifications · user │
+├────────────────────────────────────────────────────────────────────────────┤
+│ ┌────────────────── ONE FULL-WIDTH CONTACTS PANEL ────────────────────────┐ │
+│ │ Contacts  All / Personal / Shared  View  Save  Columns  Group  Fields   │ │
+│ │ Search contacts…   active filter chips                  count / status │ │
+│ │───────────────────────────────────────────────────────────────────────│ │
+│ │ checkbox | Name | Company | …             sticky table header          │ │
+│ │                         virtualized rows                              │ │
+│ │              one horizontal/vertical table scrollport                 │ │
+│ │                                                                       │ │
+│ │                 result / Undo / approval card                          │ │
+│ │             [ shared Discover QueryInput          mic ↵ ]              │ │
+│ └───────────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The bottom composer is `QueryInput` from `src/components/global/query-input.tsx` with `hideFilters` and `floatOverlay`, placed in the same `sticky bottom-0` wrapper Discover uses (`discover-canvas.tsx`). The response strip above it shows the model's one-line summary, applied-change chips, an Undo button, and the pending approval card.
+### Layout contract and reuse
+
+1. `_authed.tsx` already mounts `WorkspaceShell`, which owns `Header`. Add `/contacts` (and its normalized trailing-slash form) to the shell's header visibility test. `ContactsViewPage` must **not** mount `Header`, Widgets, notifications, PersonSheet or another WorkspaceShell. Preserve their instances when moving between views.
+2. Reuse the top navigation/chrome from `src/components/global/top-nav.tsx`. It currently derives its tab from `/network` search state. Introduce a small explicit standalone-route mode, or extract its presentational row, so `/contacts` has no falsely selected Discover tab and existing tab clicks navigate to `/network` with the chosen view. Keep the existing controls, spacing and interactions; no new Contacts `ActiveView` enum or TopNav tab is needed.
+3. Match the `/network` outer gutters, top-row height, bottom inset, `--bg-page`, `--panel-surface`, 18 px panel radius, border and shadow. Use a one-column grid with rows `auto minmax(0,1fr)`; do not retain empty SideNav/right-rail tracks or placeholders. If using the shared three-column grid wrapper, the panel must span `1 / -1` and no side-panel components mount.
+4. The panel is `min-h-0 min-w-0 flex flex-col overflow-hidden`. Toolbar and query dock are non-scrolling siblings of a `min-h-0 flex-1 overflow-auto` table scrollport. Sticky column headers stick inside that scrollport. Horizontal scroll moves columns, never the toolbar, app chrome or composer. Use shared spacing tokens; no viewport-sized fixed offsets inside cells.
+5. Reuse `QueryInput` with `hideFilters`, `floatOverlay`, `collapsible`, `ariaLabel="Contacts table query"`, its voice behavior, loading hint, stop/retry hooks and draft lifecycle. Center a responsive dock with the same measured composer width as Discover at the same viewport, capped to panel width minus its inset. The table panel stays full width; the input does not stretch across the entire grid. Keep the response strip/approval card within that centered dock. Store the width rule in one shared token or small layout primitive if needed.
+6. `floatOverlay` already portals a fixed visual to the body and measures a sentinel. Keep the sentinel in the centered dock, reserve its actual expanded height, and test its portal against modal/sheet z-index and focus behavior. Never position it relative to horizontal table scroll. The final row and focused cell must remain reachable above the expanded dock. Resizing, zoom and composer collapse must not cover cells.
+7. Name opens the existing PersonSheet as an overlay. Field manager and confirmations use existing dialog/popover primitives. They do not add a permanent second or third panel. Show table-only errors inside the single panel; shared chrome remains usable.
+
+### Visual acceptance
+
+At 1440×900 and 1280×800, capture Discover and Contacts in the same session. The Contacts panel's left, right, top and bottom edges match the union of Discover's three panels within 2 CSS px; shared chrome stays at the same coordinates. The composer center matches the panel center within 2 CSS px. At 768×1024, 390×844 and 200% zoom: toolbar controls wrap or move into an accessible overflow menu, only the grid scrolls horizontally, and the composer stays within the panel. Also test expanded widgets, notifications open, PersonSheet open, reduced motion, empty/loading/error states and a tall approval card. Screenshot evidence is a gate, not a replacement for functional tests.
 
 ## Navigation and palette command
 
@@ -120,7 +152,7 @@ The three existing navigation commands navigate with `navigate({ to: "/" })` (Ac
 
 ### Steps for the AI agent
 
-1. **Add the feature flag** in `src/env.ts`. In the client schema block add `VITE_CONTACTS_VIEW: tanstackAiChatFlagSchema` (the existing schema that parses the string `"true"` to a boolean) and in the `runtimeEnv` block add `VITE_CONTACTS_VIEW: import.meta.env.VITE_CONTACTS_VIEW`. In the server block add `CONTACTS_VIEW_QUERY_MODEL: z.string().min(1).optional()` with its `process.env` mirror. Add both keys to `.env.example` and the Netlify environment for staging.
+1. **Add the feature flag** in `src/env.ts`. In the client schema block add `VITE_CONTACTS_VIEW: tanstackAiChatFlagSchema` (the existing schema that parses the string `"true"` to a boolean) and in the `runtimeEnv` block add `VITE_CONTACTS_VIEW: import.meta.env.VITE_CONTACTS_VIEW`. In the server block add `CONTACTS_VIEW_QUERY_MODEL: z.string().min(1).optional()` with its `process.env` mirror. Add both keys to `.env.example`; configure staging when rollout is authorized. Add a server `CONTACTS_VIEW_ENABLED` gate as well: a hidden palette command is not API access control.
 
 2. **Create the route file** `src/routes/_authed/contacts.tsx` (skeleton below). Run `pnpm dev` once so the router plugin regenerates `src/routeTree.gen.ts`; never edit that file by hand.
 
@@ -170,6 +202,7 @@ type ContactsSearchParams = {
   "active-tab"?: string;
 };
 
+// Interface sketch: use shared UUID schemas for view/person ids in production.
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
 export const Route = createFileRoute("/_authed/contacts")({
@@ -178,12 +211,13 @@ export const Route = createFileRoute("/_authed/contacts")({
   },
   validateSearch: (search: Record<string, unknown>): ContactsSearchParams => ({
     view: str(search.view),
-    q: str(search.q),
+    q: typeof search.q === "string" ? search.q.slice(0, 200) : undefined,
     person: str(search.person),
     "active-tab": str(search["active-tab"]),
   }),
   loader: async ({ context: { queryClient } }) => {
-    // Warm defs, views and the first rows page. Errors never block navigation.
+    // Warm only the first page; render recoverable query errors inside the panel.
+    // Pass authenticated user/environment keys from the route context in real code.
     await Promise.allSettled([
       queryClient.ensureQueryData(contactFieldDefsQueryOptions()),
       queryClient.ensureQueryData(contactViewsQueryOptions()),
@@ -197,7 +231,7 @@ export const Route = createFileRoute("/_authed/contacts")({
 });
 ```
 
-`ContactsViewPage` renders the global `Header` from `src/components/global/header.tsx` above the table, the same way `EmailInboxPage` does.
+`ContactsViewPage` consumes the existing `WorkspaceShell` and shared top navigation, then renders exactly one panel. See the [layout contract](#layout-contract-and-reuse); Header ownership stays in the shell.
 
 ## Rows endpoint
 
@@ -212,7 +246,7 @@ export const Route = createFileRoute("/_authed/contacts")({
 
 There is no `sort` or `query` param: order is fixed for a stable keyset and every sort and filter happens in the browser (decision 2).
 
-Success envelope is the standard `{data, error, meta}` via `pmw.OKMeta`, with `data` an array of rows and `meta` carrying `total`, `nextCursor` (empty string on the last page) and `fieldDefsVersion` (max `updated_at` of the caller's field definitions, so the client can detect drift).
+Success envelope is the standard `{data, error, meta}` via `pmw.OKMeta`, with `data` an array of rows and `meta` carrying `total`, `nextCursor` (empty string on the last page) and `fieldDefsVersion` (an owner-scoped monotonically increasing schema revision, including deletions; see the mutation contract).
 
 ### Row shape
 
@@ -236,7 +270,6 @@ Success envelope is the standard `{data, error, meta}` via `pmw.OKMeta`, with `d
   "location_formatted": "London, United Kingdom",
   "primary_email": "ada@acme.com",
   "email_count": 2,
-  "status_connected": false,
   "connected_at": null,
   "last_activity_at": "2026-09-12T08:15:00Z",
   "last_activity_kind": "email",
@@ -428,7 +461,8 @@ What this tells the build:
 ```sql internal/features/persons/queries/listings.sql — new query
 -- name: ListContactTableRowsByUser :many
 -- Flat row projection for Contacts View. Fixed keyset on (created_at DESC, id DESC);
--- all sorting/filtering is client-side. Excludes merged-away tombstones.
+-- all sorting/filtering is client-side. Add the first-page upper bound
+-- from the pagination contract when implementing the cursor.
 SELECT
     c.id                        AS contact_id,
     c.person_id,
@@ -446,7 +480,7 @@ SELECT
     mc.logo                     AS company_logo,
     ploc.id                     AS location_id,
     ploc.formatted_location     AS location_formatted,
-    pe.email_address            AS primary_email,
+    pe.address                  AS primary_email,
     COALESCE(ec.email_count, 0)::int AS email_count,
     c.connected_at,
     c.last_activity_at,
@@ -467,20 +501,20 @@ FROM persons.contacts c
 JOIN persons.persons mp ON mp.id = c.person_id
 LEFT JOIN companies.companies mc ON mc.id = mp.current_company_id
 LEFT JOIN locations.primary_locations ploc ON ploc.id = mp.primary_location_id
-LEFT JOIN persons.contacts_interaction_log il ON il.contact_id = c.id
+LEFT JOIN persons.contacts_interaction_log il ON il.contact_id = c.id AND il.user_id = c.user_id
 LEFT JOIN organizations.organizations org ON org.id = c.organization_id
 LEFT JOIN LATERAL (
     -- first email by creation; reuse the exact tables ListUserContactEmails joins
-    SELECT ea.email_address
-    FROM persons.contact_emails ce
-    JOIN emailaddresses.email_addresses ea ON ea.id = ce.email_address_id
+    SELECT ea.address
+    FROM email_addresses.contact_emails ce
+    JOIN email_addresses.email_addresses ea ON ea.id = ce.email_address_id
     WHERE ce.contact_id = c.id
-    ORDER BY ce.created_at ASC
+    ORDER BY ce.created_at ASC, ce.id ASC
     LIMIT 1
 ) pe ON TRUE
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS email_count
-    FROM persons.contact_emails ce
+    FROM email_addresses.contact_emails ce
     WHERE ce.contact_id = c.id
 ) ec ON TRUE
 WHERE c.user_id = sqlc.arg(user_id)
@@ -493,14 +527,25 @@ LIMIT sqlc.arg(row_limit);
 ```
 
 <Note>
-Confirm the two email table names against `ListUserContactEmails` in `queries/contacts.sql` before generating; the lateral joins above name them from the `ContactEmail` wire shape (`contact_id`, `email_address_id`) and must match the real schema. The `'infinity'` sentinel replaces the `NOW()` default used by `ListContactsByUser` so a contact created between two page requests is not skipped. Run `make sqlc-generate` after editing.
+The email schema names and `address` column above were verified in `queries/contacts.sql`. Run `make sqlc-generate` against the implementation branch and execute the query on a migrated disposable database. The SQL is a projection template; the pagination requirements below still need implementation. `infinity` is an initial comparison sentinel, not a consistent snapshot across HTTP requests.
 </Note>
+
+### Pagination and consistency requirements
+
+- Query with `limit + 1`; return at most `limit`, and encode the last **returned** tuple only when the extra row exists. Validate timestamp and UUID together; malformed, overlong (over 1 KiB), wrong-version or partially populated cursors return 400. Do not widen the shared 200-row paginator for unrelated endpoints.
+- Count and rows must use identical ownership, merge and person-join predicates. Add `CountContactTableRowsByUser`; run first-page count and rows in one short consistent read transaction. Check a partial index on `(user_id, created_at DESC, id DESC) WHERE merged_into_contact_id IS NULL` with `EXPLAIN (ANALYZE, BUFFERS)` before adding a duplicate index. Email lookup needs an index starting with `contact_id`.
+- Carry the first page's upper tuple in subsequent opaque cursors, and bound every page by it. This makes inserts above that tuple appear on Refresh rather than midway through hydration. It is **not** an MVCC snapshot: deletes, merges, updates and backdated inserts can still change the data. Never hold a database transaction open across page requests. Document `total` as observed at hydration start, deduplicate by `contact_id`, and refresh on detected drift.
+- Expose `fieldDefsVersion` from a per-user schema revision row, not `MAX(updated_at)`: deleting the newest or last definition must change the revision. If pages disagree, reload definitions and start a new hydration generation. Unknown keys are ignored until reconciled; never render a field using the wrong type.
+- Joined organization names are attribution, not proof of current sharing access. Enforce the existing org-name visibility policy before exposing a name for a membership the caller has lost. Scope switch labels describe contact visibility; they do not promise that every current teammate can see the contact.
+- Missing rollup row means nullable/unknown totals and momentum, not invented `cold` or zero. Keep `total_email_activity` distinct from rollup `total_emails`. Verify the producer's actual momentum vocabulary in Phase 0; the example values are not a backend enum. Deterministic primary email uses `(ce.created_at, ce.id)` ascending. It is a display choice, not an outreach deliverability decision.
+- Merge policy must include custom fields: preserve winner values, copy loser-only keys, surface differing non-empty values for existing merge policy, and never transfer another owner's definitions. Extend contact-merge regression tests. Contact deletion removes values with the contact; field deletion strips values on both active and merged contacts owned by the caller.
+
 
 ## Custom fields
 
 ### Schema
 
-Migration `migrations/{ts}_persons_021_contact_custom_fields.sql`. The `persons` feature is at `020`, so this is `021`; re-timestamp to "now" right before merge (see `migrations/CLAUDE.md`).
+Proposed migration `migrations/{ts}_persons_021_contact_custom_fields.sql`. The inspected migration head is `020`; allocate the next available sequence on the actual implementation branch and re-timestamp before merge (see `migrations/CLAUDE.md`). The DDL below is the starting schema; also add the revision/idempotency tables required by [Mutation integrity](#mutation-integrity).
 
 ```sql persons_021_contact_custom_fields.sql
 -- +goose Up
@@ -546,7 +591,7 @@ DROP INDEX IF EXISTS persons.contact_field_defs_scope_key_uniq;
 DROP TABLE IF EXISTS persons.contact_field_defs;
 ```
 
-`scope_id` has no foreign key because it is polymorphic; the service enforces `scope_type='user' AND scope_id = caller` on every write in v1.
+`scope_id` has no foreign key because it is polymorphic. On every list/read/write, the service derives `scope_type='user'`, `scope_id=caller` and `created_by_id=caller`; reject attempts to supply a different scope. Ownership must appear in SQL predicates too. `field_type` and `key` are immutable; archive hides a field and rejects new value writes but preserves existing data.
 
 ### Value shapes
 
@@ -562,6 +607,8 @@ Values are keyed by definition **id** (stable, never renamed), not by `key`.
 | `multi_select` | array of option id strings | each a live option id, max 25, deduplicated |
 | `url` | string | parses as `http` or `https` |
 
+Also bound labels to 60 characters, option labels to 60, options to 100, and every value map to 5 entries. Numeric precision is validated, never silently rounded; use decimal-aware comparison for allowed precision and reject unsafe numeric range. Empty text/URL and empty multi-select normalize to clearing; checkbox `false` and number `0` remain real values. Dates are date-only strings, never shifted by time zone. Option IDs are stable server-issued UUIDs. Reject duplicate option labels after trim/case normalization and unknown object keys.
+
 Clearing a value removes the key: `custom_fields = custom_fields - $key`. Setting merges: `custom_fields = custom_fields || jsonb_build_object($key, $value)`.
 
 ### Endpoints
@@ -575,11 +622,46 @@ All under the `persons` feature, inside the `/contacts` route group, owner-scope
 | `updateContactFieldDef` | `PATCH /v1/contacts/fields/{field_id}` | `label`, `options` (add, relabel, recolor, reorder), `position`, `archived`. Removing an option that any contact still uses returns 409 `option_in_use` unless `reassign_to` names another option id. |
 | `deleteContactFieldDef` | `DELETE /v1/contacts/fields/{field_id}` | One transaction: delete the definition and `UPDATE persons.contacts SET custom_fields = custom_fields - $id WHERE user_id = $caller AND custom_fields ? $id`. |
 | `setContactFieldValues` | `PATCH /v1/contacts/{contact_id}/fields` | Body `values` map of definition id to value or `null`. Validates each against its definition; 404 when the contact is not the caller's. |
-| `bulkSetContactFieldValues` | `POST /v1/contacts/fields/bulk` | Body `contact_ids` (1–2,000) and `values` map. One `UPDATE … WHERE id = ANY($1) AND user_id = $2 AND merged_into_contact_id IS NULL`. Returns `updated` count. Idempotent by construction. |
+| `bulkSetContactFieldValues` | `POST /v1/contacts/fields/bulk` | Body `contact_ids` (1–2,000) and `values` map. One `UPDATE … WHERE id = ANY($1) AND user_id = $2 AND merged_into_contact_id IS NULL`. Returns `requested`, `updated`, `unchanged`, `operation_id`, `chunk_id` and authoritative changed row values/revisions. All ids must be owned and live before any row is changed. Atomic per chunk, with a durable idempotency receipt; a repeated HTTP request must not overwrite a later user edit. |
 
 Errors follow the repository envelope: 400 `VALIDATION_FAILED` with `{field, issue}` details, 404 `NOT_FOUND` for foreign or merged contacts, 409 `CONFLICT` with `reason` = `option_in_use` or `limit_reached`.
 
 sqlc queries to add in a new `queries/contact_fields.sql`: `ListContactFieldDefsByScope`, `GetContactFieldDef`, `InsertContactFieldDef`, `UpdateContactFieldDef`, `DeleteContactFieldDef`, `StripContactFieldKey`, `CountContactsUsingOption` (GIN `@>` containment), `SetContactCustomFields` (single), `BulkSetContactCustomFields`.
+
+### Mutation integrity
+
+Implement these rules in the `persons` service/repository boundary, shared by manual and AI-driven writes:
+
+- A user-scoped `contact_field_schema_state` row holds a monotonic `revision`. Definition create/update/archive/delete locks it for update and increments it in the same transaction. Value mutations lock it for share while validating definitions and updating rows. Lock schema first, then contacts in sorted id order, everywhere. This prevents a concurrent value writer from resurrecting a deleted field key.
+- Validate the entire request before writing: 1–2,000 **unique** contact ids, 1–5 owned active field ids, all values valid, all contacts live and owned. A missing/foreign/merged id aborts the whole chunk with generic 404; there is no silent intersection or partial unauthorized success. An empty input is 400. Do not reveal which foreign id exists.
+- Single-cell requests carry `expected_updated_at` from the row DTO; compare-and-set returns 409 `stale_contact` on conflict. Update the timestamp in the same transaction. Definition/view PATCH requests similarly carry their last version. Do not auto-overwrite a conflict; refetch and show the current value. Use the repository's timestamp precision consistently in wire and SQL.
+- Bulk requests include `operation_id`, `chunk_id`, `expected_field_defs_version`, the frozen ids/values and per-contact expected revisions. Store an owner-scoped operation/chunk receipt with payload hash and result in the same transaction as the write. Same key and hash returns the original result; a changed payload returns 409. Lock/replay the receipt before checking stale row versions on retries. Retain receipts for at least seven days; clients never retry an expired operation silently.
+- Each chunk is atomic. Several chunks are **not** one transaction. Process sequentially, record committed ids and counts after every chunk, stop on the first failure and show completed/failed/not-started counts. On uncertain transport outcome, retry the same chunk key or read the receipt; do not create a new operation. A conflict needs a new preview for unfinished rows. Cancellation stops future chunks and cannot undo committed chunks.
+- Apply JSONB changes atomically in SQL; do not write back a whole JSON object fetched earlier. For a mixed map, remove null-valued keys and merge non-null entries once. Increment `updated_at` only on actual changes. Preserve unrelated custom keys. Run delete-key SQL for all owned contacts, including tombstones.
+- Field option removal/reassignment is a transaction under the definition lock: validate replacement ids, rewrite scalar and array values (deduplicate arrays), then update options/revision. Archived options/fields are not offered for new writes. Concurrent limit checks (50 fields) and slug allocation use the scope lock/unique index; map collisions to domain errors.
+- Hard field deletion shows the field manager's own destructive confirmation with affected count. Creating a field is additive; global table Undo does not delete it or erase values written later.
+- `PATCH /v1/contacts/{contact_id}/nickname` is **new work**. `UpdateContactNickname` SQL exists but the inspected handler exposes no nickname route. Add owner checks, nullable/trimmed nickname validation (max 120 characters), revision handling, DTO, OpenAPI and tests. Extend the note route compatibly with optional revision preconditions for existing consumers; table edits always send one.
+
+### Supporting persistence and HTTP contracts
+
+Add these tables alongside the field migration (or a separate next-numbered migration) and include them in sqlc schema inputs. Use existing repository idempotency infrastructure if it already satisfies these exact guarantees; do not maintain two receipt stores for the same endpoint.
+
+| Table | Required columns and constraints |
+| --- | --- |
+| `persons.contact_field_schema_state` | `user_id UUID PRIMARY KEY REFERENCES users.users(id) ON DELETE CASCADE`, `revision BIGINT NOT NULL DEFAULT 0`, `updated_at TIMESTAMPTZ NOT NULL`. Lazily insert with conflict-safe semantics before locking. Never remove/recreate it when the last field is deleted. |
+| `persons.contact_view_mutation_receipts` | `user_id UUID` FK cascade, `operation_id UUID`, `chunk_id INTEGER`, `kind TEXT`, `payload_hash TEXT`, `result JSONB`, `created_at TIMESTAMPTZ`, `expires_at TIMESTAMPTZ`; primary key `(user_id, operation_id, chunk_id)`, expiry index. Commit receipt and mutation together. A rolled-back mutation has no completed receipt. |
+
+Use UUID operation ids and nonnegative chunk indexes. Field/view creation uses chunk zero with its same stable operation id. A concurrent request with the same receipt key waits for the first transaction and replays its result; no “in progress” success response. Result storage is private and bounded to the endpoint's 2,000-row maximum. Cleanup uses the existing scheduled maintenance path with the seven-day minimum retention; expiry never makes a known completed operation safe to replay under a new id.
+
+- `PATCH /contacts/{id}/fields`: `{values, expected_updated_at, expected_field_defs_version, operation_id}`; return authoritative `{contact_id, custom_fields, updated_at, field_defs_version}` inside the standard envelope. Share validation with bulk.
+- `POST /contacts/fields/bulk`: `{contact_ids, values, expected_updated_at: {contactId: timestamp}, expected_field_defs_version, operation_id, chunk_id}`. The revision map must match the exact deduplicated id set. Return `{operation_id, chunk_id, requested, updated, unchanged, rows}`; each row includes id, changed values and new revision. No missing-row successes. Bound actual body bytes to 512 KiB, reject before decode; field/view bodies to 64 KiB. Document these limits in OpenAPI.
+- `GET /contacts/table/operations/{operation_id}/chunks/{chunk_id}`: owner-scoped receipt lookup for reconciling unknown transport outcomes, standard envelope; 404 means no committed receipt **yet**, not proof an in-flight request cannot still commit. Retry the identical request/key to serialize with an in-flight writer.
+- Field/view POST takes `operation_id`; PATCH takes `expected_updated_at` in addition to changed properties. Service-returned DTOs include `updated_at`; frontend exposes that as `version` where the tool uses `expectedVersion`. Do not confuse a view's optimistic concurrency token with `state.version`, its JSON schema version. Field lists include the monotonic schema revision in meta; archive/delete/update all increment it.
+- Implement owner-scoped list/view/definition DTOs and envelopes in the OpenAPI fragment and add root `paths` references. Static `/table`, `/fields`, `/views` routes must not fall through UUID contact parsing. Contract-test 400 validation, 401 auth, 404 ownership, 409 version/option/limit conflicts and 413 size bounds. No enum CHECK constraints or OpenAPI enums; Go owns enum validation under repository policy.
+
+Collection operation receipts belong to the existing collection service if new support is needed. Inject/reuse its public boundary; Contacts must not write collection tables directly. Rollout is blocked until new-collection retry and membership deduplication have real integration evidence.
+
+**Cache reconciliation:** cancel in-flight refetches before optimistic edits; patch every matching page of `InfiniteData`, preserving `pages` and `pageParams`. Track an edit token per contact/cell and roll back only that token's patch, never a whole stale query snapshot. Serialize writes to one contact so note/nickname/custom-cell edits cannot race locally. Replace with the server response on success and invalidate dependent contact list/person-sheet queries. Bulk writes patch only acknowledged chunks; refresh after partial/unknown outcomes. A reload from another tab may conflict and must not be silently lost.
 
 ## Saved views
 
@@ -591,20 +673,23 @@ CREATE TABLE persons.contact_views (
     id          UUID        PRIMARY KEY,
     user_id     UUID        NOT NULL REFERENCES users.users(id) ON DELETE CASCADE,
     name        TEXT        NOT NULL,
+    name_key    TEXT        NOT NULL,   -- trimmed/case-folded by the service
     state       JSONB       NOT NULL DEFAULT '{}'::jsonb,   -- ContactsViewState, versioned
     is_default  BOOLEAN     NOT NULL DEFAULT FALSE,
     position    INTEGER     NOT NULL DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX contact_views_user_name_uniq ON persons.contact_views (user_id, name);
+CREATE UNIQUE INDEX contact_views_user_name_uniq ON persons.contact_views (user_id, name_key);
 CREATE INDEX contact_views_user_position_idx ON persons.contact_views (user_id, position);
+CREATE UNIQUE INDEX contact_views_one_default_per_user
+    ON persons.contact_views (user_id) WHERE is_default;
 
 -- +goose Down
 DROP TABLE IF EXISTS persons.contact_views;
 ```
 
-Routes: `GET /v1/contacts/views`, `POST /v1/contacts/views`, `PATCH /v1/contacts/views/{view_id}` (name, state, position, is_default; setting a default clears the previous one in the same transaction), `DELETE /v1/contacts/views/{view_id}`. Name is 1–60 chars, max 50 views per user, state bounded to 32 KiB. Go stores `state` opaquely; the browser owns its schema.
+Routes: `GET /v1/contacts/views`, `POST /v1/contacts/views`, `PATCH /v1/contacts/views/{view_id}` (name, state, position, is_default; setting a default clears the previous one in the same transaction), `DELETE /v1/contacts/views/{view_id}`. Name is 1–60 chars, max 50 views per user, state bounded to 32 KiB. The browser owns schema migration and column semantics; Go requires an object with a supported integer `version`, bounded depth/size and no unknown top-level state properties. Treat unknown future versions as unsupported, not as a default state to overwrite. Lock the owner row while changing the default; the partial unique index prevents concurrent double defaults.
 
 ```json ContactsViewState v1 — stored in contact_views.state and in localStorage
 {
@@ -621,24 +706,28 @@ Routes: `GET /v1/contacts/views`, `POST /v1/contacts/views`, `PATCH /v1/contacts
 }
 ```
 
-The client validates loaded state with zod, drops unknown column ids (a deleted field), and migrates older `version`s forward. URL: `/contacts?view=<id>` selects a saved view; with no `view`, the last unsaved state from localStorage key `contacts-view:last-state:v1` applies, else the default view. Any local edit to a saved view marks it dirty; "Save view" overwrites, "Save as" creates.
+The client validates loaded state with zod, drops deleted/archived column ids from every slice (filters, sorting, grouping, order, visibility, sizing, both pin lists), and migrates older versions forward. Preserve required select/name columns, deduplicate ids, clamp widths to 80–600 px and restore default order for newly discovered columns. Cleaning a saved state marks it dirty; it does not silently persist a rewrite. URL: `/contacts?view=<id>` selects a saved view; with no `view`, the last unsaved state from localStorage key `contacts-view:<environment>:<user-id>:last-state:v1` applies, else the user's saved default, else the built-in default. Invalid/inaccessible/deleted `?view=` shows a recoverable notice and does not silently overwrite another view. Any local edit to a saved view marks it dirty; "Save view" overwrites with its revision, "Save as" creates. Name uniqueness uses a trimmed, case-insensitive key and a unique index on that key. Handle 409 stale version without overwriting. `q`, when explicitly present in the URL, overrides the loaded global search, including an empty string to clear; Back/Forward reapplies the selected view once without a URL/store effect loop. Dirty state gets Save / Discard / Cancel before changing views. Only `view`, `q` and existing sheet params go in the URL; other state round-trips through the saved view, not encoded URL JSON. Selection, transcript, pending approval and undo history are never saved.
 
 ### Query log
 
-Migration `persons_023_contact_view_query_log.sql`: `persons.contact_view_query_log (id UUID PK, user_id UUID FK cascade, prompt TEXT, model TEXT, tool_calls JSONB, applied BOOLEAN, latency_ms INTEGER, error TEXT, created_at TIMESTAMPTZ)`. Route `POST /v1/contacts/table/query-log`, body under 16 KiB, returns 202. Written by the BFF after each turn with the user's bearer; never read by the UI in v1.
+Proposed migration `persons_023_contact_view_query_log.sql`: store `id`, `user_id`, `view_session_id`, `turn_id`, bounded prompt (max 8,000 characters), model, tool result summaries, status, applied boolean, latency, error code and timestamps. Add a unique key on `(user_id, view_session_id, turn_id)`. The [harness telemetry contract](/guides/open-work/contacts-table-view/ai-query-harness#telemetry-and-completion) defines ownership of receipt fields and finalization.
+
+`POST /v1/contacts/table/query-log` accepts an idempotent partial receipt under 32 KiB and returns 200 with the repository envelope after persistence. It must merge fields deterministically, never downgrade terminal execution status on a late model receipt. Owner always comes from authentication. No UI read endpoint in v1. Browser-reported results are telemetry, not authoritative authorization/audit evidence; committed write receipts are the source of truth for database effects. Do not log contact rows, email addresses, notes, tokens or raw snapshots. Prompt text is private user content: restrict access and use the existing retention policy (default 30 days if none is defined).
 
 ## Frontend feature
 
 ### Packages and preflight
 
 ```bash
-pnpm add @tanstack/react-table@^9 @tanstack/react-virtual@^3
-pnpm dlx shadcn@latest add table
+# Resolve versions in the compile spike, then pin them in package.json/lockfile.
+pnpm info @tanstack/react-table version peerDependencies
+pnpm info @tanstack/react-virtual version peerDependencies
+# Reuse the existing table primitive if present; inspect generator diffs before accepting.
 ```
 
-- `@tanstack/react-table` **v9** (`9.2.4` on npm on 2026-09-16) is the target. Its API differs from the v8 code most generated snippets use; see [Resources](#resources-to-digest) for the gotcha list. `@tanstack/react-store` is already in the tree (0.8.0), which v9 needs.
+- `@tanstack/react-table` **v9** is the target; resolve and record an exact registry version in Phase 0. Its API differs from the v8 code most generated snippets use; see [Resources](#resources-to-digest) for the gotcha list. A transitive Store package is not evidence of a compatible direct peer; check the chosen v9 peer range and add/pin the required direct peer.
 - A transitive **v8** copy (`@tanstack/react-table@8.21.3`, pulled in by `@thesysai/genui-sdk`) already exists in the lockfile. pnpm keeps the two apart, but never import from `@tanstack/react-table/legacy`, and grep the feature folder for `useReactTable` and `getCoreRowModel` in the Phase 2 gate.
-- `@tanstack/ai` 0.38.0, `@tanstack/ai-react` 0.16.0, `@tanstack/ai-openrouter` 0.15.4 are installed. `toolDefinition().client()`, `needsApproval`, `createChatClientOptions` and `clientTools` are present in those versions. Verify in Phase 0 that `useChat` returns `interrupts` with `resolveInterrupt` for the approval flow; if not, upgrade the three `@tanstack/ai*` packages together and re-run the existing `tanstack-ai-chat` tests before continuing.
+- `@tanstack/ai` 0.38.0, `@tanstack/ai-react` 0.16.0, `@tanstack/ai-openrouter` 0.15.4 are installed. `toolDefinition().client()`, `needsApproval`, `createChatClientOptions` and `clientTools` are present in those versions. The installed `useChat` exposes `addToolApprovalResponse({ id, approved })`, with pending approvals in message parts. It does not expose `interrupts`/`resolveInterrupt`. Use the installed API and verify approve/deny/cancel behavior in a compile/runtime spike; do not upgrade the AI stack just to match a newer example.
 - Verify the exact v9 export names used in `table-features.ts` against `node_modules/@tanstack/table-core/dist/esm/index.d.ts` (names such as `filterFn_inDateRange` and `sortFn_datetime` are asserted from the docs, not from the installed package).
 
 ### Folder layout
@@ -658,7 +747,7 @@ src/features/contacts-view/
 │   ├── use-delete-contact-view.ts
 │   └── wire.ts                         # ContactTableRowWire → ContactTableRow
 ├── components/
-│   ├── contacts-view-page.tsx          # Header + toolbar + table + query bar
+│   ├── contacts-view-page.tsx          # one panel + shared top nav + toolbar + table + query dock
 │   ├── contacts-toolbar.tsx            # scope switch, view picker, save, columns, group, fields, search, chips
 │   ├── contacts-table.tsx              # useTable + useVirtualizer + grid-display <table>
 │   ├── cells/                          # name-cell, company-cell, activity-cell, custom-field-cell (+ editors)
@@ -684,11 +773,55 @@ src/features/contacts-view/
     └── contact-view.ts
 ```
 
-The server side is one file: `src/routes/api/contacts-view-query.ts`.
+The route file is thin. Put auth, request bounds, run orchestration and stream handling under `features/contacts-view/server/` as described in the harness. Reuse only shared helpers whose types and authentication actually match this surface; do not cast it to an Outcome/Xano runtime context.
 
 ### Data hydration
 
-`use-contacts-table-rows.ts` is a `useInfiniteQuery` with `queryKey: ["contacts-table-rows"]`, `getNextPageParam` reading `meta.nextCursor`, and an effect that calls `fetchNextPage` until `hasNextPage` is false or the 25,000-row cap is reached. Rows render after the first page while the rest stream in; the toolbar shows "loading 3,200 of 8,410". `staleTime` 5 minutes. Mutations elsewhere that must invalidate it: add contact (`use-add-to-contacts.ts`), contact merge, set note, and every mutation in this feature. Use `backendFetchMeta` from `src/integrations/backend` (this is its first list consumer; it returns the envelope `meta`).
+`use-contacts-table-rows.ts` uses `useInfiniteQuery`, `backendFetchMeta` and a user/environment-scoped key factory, for example `contactsViewKeys.rows(environment, userId)`. Pass the AbortSignal through each request. Drain **one** next-page request at a time; guard `hasNextPage`, `isFetchingNextPage`, the generation id and the cap. Retry the failed page with bounded exponential backoff (three attempts), then expose Retry/Refresh. Do not loop on repeated/empty cursors. Deduplicate by contact id, cancel on unmount/sign-out and discard responses from earlier users/generations. Disable persisted query caching for this dataset.
+
+| Dataset state | UI and allowed behavior |
+| --- | --- |
+| `initial_loading` | Toolbar skeleton and stable grid shell; query submission disabled. |
+| `hydrating` | Loaded rows usable for browsing and individual editing; show loaded/observed-total progress. Disable AI submissions and all/filtered bulk selection until complete. |
+| `complete` | All query tools and preview workflows enabled. Counts come from leaf contacts, not DOM rows. |
+| `partial_error` | Keep loaded rows, show failed-page Retry and Refresh; broad operations stay disabled. |
+| `capped` | Explicit loaded-only banner; manual filter/search applies to the loaded subset. AI bar explains the cap and stays disabled in v1. Explicit row selection/manual actions identify the loaded subset. |
+| `refreshing` | Keep previous rows with a stale indicator; invalidate pending previews; never mix pages from generations. Swap after refreshed hydration succeeds. |
+
+Refresh starts from page one with a new generation, restoring valid view state and pruning unavailable selection. Avoid automatic whole-dataset refetch on every focus. `staleTime` is five minutes; an explicit Refresh control and targeted mutation invalidation handle freshness. Add/merge/delete, note/nickname/visibility changes and custom-field mutations must invalidate this key factory, including writes from PersonSheet. Schema changes reload definitions and sanitize view state. Org changes refresh membership/attribution but do not change the `user_id=caller` row scope.
+
+### Code ownership and clean-code rules
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| React Query | Rows, definitions, views, receipts and fetch status | A duplicate persisted copy in Zustand. |
+| Per-route store | Versioned view state, session selection, state revision and bounded Undo | Server rows, credentials, provider SDK or network requests. |
+| `lib/column-registry.ts` | Stable ids, types, allowed operators, editability, widths, accessors | Display-name matching as database identity. |
+| `lib/filters.ts` + `lib/derive-contacts.ts` | Pure validation/evaluation and matching leaf ids from current immutable rows/state | React hooks or IO. |
+| `lib/view-state.ts` | Pure `applyViewCommand`, sanitize/migrate, defaults and inverse snapshots | TanStack instance reads after an asynchronous React render. |
+| `lib/target.ts` + `lib/preview.ts` | Resolve/freeze/validate targets and format trusted preview data | Executing mutations or using model text as the preview. |
+| `lib/execution.ts` | Sequential mutation orchestration, receipts and progress | Rendering UI or inventing a generic workflow framework. |
+| Cells and controls | Render and dispatch typed commands/intents | Direct fetches, schema validation copies or business rules. |
+| AI adapters | Validate tool input, dispatch the same commands, serialize bounded results | A second filtering engine or direct store field assignment. |
+| Go handlers / services / repositories | Parse/DTO; authorization+validation+transactions; SQL+mapping | Generated sqlc types exposed as domain types or unrelated cross-feature imports. |
+
+Create the store once per mounted route provider, not as an SSR module singleton. UI and tools use the same `applyViewCommand` function and filter evaluator; the table's filter function calls that evaluator. A tool computes results from the **next** state synchronously, rather than reading stale `table.getRowModel()` after setting Zustand. Keep derived indexes/matching ids memoized by row generation and state revision; render selectors stay narrow. Prefer focused files and explicit interfaces; keep Go's roughly 300-line rule. No `any` casts to bypass SDK errors, duplicate schema constants or generic “base” abstractions for a single feature.
+
+### Filter, selection and undo semantics
+
+- Column filters combine with AND. A column has one predicate: `add` upserts by column id, `replace` replaces all column predicates, `remove` takes ids only, and `clear` removes column filters. These do not clear quick search unless the command explicitly does so. Empty/missing input is rejected for operations that require values.
+- Text `includes`/`equals`/`in` normalize case and surrounding whitespace; ids/options use exact identity. `in` means any listed value; on multi-select it means nonempty intersection. `not_in` means no intersection for nonempty values; use `is_empty` when emptiness is intended. Number comparisons are numeric; `between` is inclusive and ordered. `false` and `0` are not empty. Missing/null/empty string/empty array are empty. Other predicates exclude nulls.
+- Date-only custom fields use calendar strings. Timestamp filtering uses the user's IANA time zone: `before D` is before local start of day D; `after D` is at/after start of the next day; `on_or_after D` is at/after start of D; `between [A,B]` is `[start(A), start(B+1))`. Add these distinct ops to the schema and test DST. “No interaction since D” includes null activity via a bounded `includeEmpty` flag on that date predicate; do not pretend `before` matches null.
+- Sorts have an explicit null-last policy and contact-id tie-breaker. Group only supported categorical columns, at most two; grouping and collapse never alter matching counts or target ids. Count contacts, not groups. Numeric aggregation is opt-in sum; other columns show no fabricated aggregates. Header checkbox operates on matching contacts, not virtualized rows. Selection survives filtering; show “N selected, M hidden by filters.”
+- Checkbox/Name stay visible, pinned start, and first in that order. Deduplicate show/hide/pin/order lists, reject contradictory lists and unknown ids, and append omitted columns in existing relative order. Do not store display widths, date formatting or labels as contact identity.
+- The route owns selection mode `contacts-view`. Activate it on entry and restore the previous mode on exit only if still active. Add a minimal atomic `replaceNodesForMode` store action: existing `selectNodes` is additive and cannot implement a replacement safely. Row checkboxes are authoritative on this route; do not synchronize in both directions with effects. Map contacts to unique person ids for global handoff and report deduplication. Preserve other modes' selection.
+- Undo is chronological, bounded to 50 entries and limited to view-state/selection changes. Store one before/after entry per completed AI turn (or manual gesture), excluding no-ops. Do not offer per-chip arbitrary undo when later changes depend on it. Field creation, saved-view writes, values and collection/outreach actions are not reversed by view Undo. Switching users or saved views clears Undo. Escape cancels editing, never silently undoes a database mutation.
+
+### Editing and accessibility
+
+Use a named table/grid with column headers, `aria-sort`, labeled row checkboxes and accessible filter/editor controls. For a virtual grid expose logical row count/index and maintain one roving focus cell; keyboard movement scrolls the destination into view before focusing it. Do not announce spacer rows as data. Enter/F2 starts an editor, Escape cancels, Tab commits once and moves to the next editable cell; IME composition must not submit. Sorting/filtering/grouping with an open editor commits valid edits or keeps focus with an error. Use local cell drafts, not a whole-table render on every keystroke. A validation/conflict error keeps the draft and identifies the cell. Announce result counts/loading/approval in a polite live region; errors use alerts. Test name-link clicks separately from checkbox clicks and field-editor events.
+
+Use the existing focus-trapped sheet/dialog primitives. Closing PersonSheet preserves `view`, `q`, scroll anchor and focus; when its original row disappears, return focus to the table heading. Save field-manager forms only after their validation passes. Zero contacts, zero filtered matches, no custom definitions, stale definitions, offline, 401, 409, 429 and 5xx all need explicit recoverable UI states.
 
 ### Table setup
 
@@ -727,134 +860,26 @@ export const contactsTableFeatures = tableFeatures({
 export type ContactsTableFeatures = typeof contactsTableFeatures;
 ```
 
-- **Columns** come from `createColumnHelper<ContactsTableFeatures, ContactTableRow>()`. Core columns are static; custom columns are generated from field definitions with `id: "cf_" + def.id`, `accessorFn: row => row.custom_fields[def.id] ?? null`, `meta: { fieldDef }`, `filterFn: "contactOp"`, a type-aware `sortFn`, and `aggregationFn` `uniqueCount`. Rebuild the column array with `useMemo` on the defs query.
+- **Columns** come from `createColumnHelper<ContactsTableFeatures, ContactTableRow>()`. Core columns are static; custom columns are generated from field definitions with `id: "cf_" + def.id`, `accessorFn: row => row.custom_fields[def.id] ?? null`, `meta: { fieldDef }`, `filterFn: "contactOp"`, a type-aware `sortFn`, and aggregation only where explicitly supported by the registry (numeric sum or categorical unique count when requested). Rebuild the column array with `useMemo` on the defs query.
 - **Row id** is `getRowId: row => row.contact_id`, so selection and edits survive re-sorts.
-- **One filter function, many ops.** `contactOp` reads a filter value of shape `{ op, value }` (ops: `includes`, `equals`, `in`, `not_in`, `gt`, `gte`, `lt`, `lte`, `between`, `before`, `after`, `is_empty`, `not_empty`) and dispatches on the column's `meta.type`. This keeps the AI tool schema and the UI chips identical and avoids registering a dozen built-ins.
+- **One filter function, many ops.** `contactOp` reads a filter value of shape `{ op, value, includeEmpty? }` (ops: `includes`, `equals`, `in`, `not_in`, `gt`, `gte`, `lt`, `lte`, `between`, `before`, `after`, `on_or_after`, `is_empty`, `not_empty`) and dispatches on the column's `meta.type`. This keeps the AI tool schema and the UI chips identical and avoids registering a dozen built-ins.
 - **State** lives in one zustand store (`use-contacts-view-state.ts`) holding `ContactsViewState` plus an undo stack, passed to `useTable` as `state` with matching `on*Change` handlers. One writer means the UI, the URL, localStorage, saved views and the AI client tools all mutate the same object. Use the `useTable` selector argument to subscribe only to what each component reads, and `table.Subscribe` around the body.
-- **Virtualization**: `useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => 40, overscan: 12, getItemKey: i => rows[i].id })` over `table.getRowModel().rows`. Grid-display `table` with a sticky `thead`, `tbody` at `getTotalSize()` height, rows absolutely positioned with `translateY(virtualRow.start)`. Fixed row height; no `measureElement`. Column virtualization is not needed under 40 columns.
-- **Editing**: `tableMeta.updateCell(contactId, columnId, value)`; custom cells, Note and Nickname are editable (Enter or F2 to edit, Esc to cancel, Tab commits and moves right). Edits are optimistic via `queryClient.setQueryData` on the rows query, then `PATCH /v1/contacts/{id}/fields`, `PATCH /v1/contacts/{id}/note`, or the nickname endpoint. Core person columns are read-only.
-- **Selection**: `rowSelection` → effect in `use-sync-row-selection.ts` writes `SelectedNode { id: person_id, type: "person", name, imageUrl: avatar }` entries into `useNodeSelectionStore` under mode `"contacts-view"`, so **Email Outreach Composer** (`useSelectedNodes`) and add-to-collection work unchanged.
+- **Virtualization**: `useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => 40, overscan: 12, getItemKey: i => rows[i].id })` over `table.getRowModel().rows`. Grid-display `table` with a sticky `thead`, `tbody` at `getTotalSize()` height, rows absolutely positioned with `translateY(virtualRow.start)`. Fixed row height; no `measureElement`. V1 can contain about 70 columns (core plus 50 custom fields). Test that maximum at 20k rows; start with row virtualization and enforce the cell/latency budgets below. Add column virtualization only if that measured worst case fails, preserving pinned columns and accessibility.
+- **Editing**: `tableMeta.updateCell(contactId, columnId, value)`; custom cells, Note and Nickname are editable (Enter or F2 to edit, Esc to cancel, Tab commits and moves right). Edits are optimistic via `queryClient.setQueryData` on the rows query, then `PATCH /v1/contacts/{id}/fields`, `PATCH /v1/contacts/{id}/note`, or the nickname endpoint. Core person columns are read-only. Follow the revision and cache rules in [Mutation integrity](#mutation-integrity).
+- **Selection**: `use-sync-row-selection.ts` atomically replaces the route mode with `SelectedNode { id: person_id, type: "person", name, imageUrl: avatar }` entries in `useNodeSelectionStore` under mode `"contacts-view"`, so **Email Outreach Composer** (`useSelectedNodes`) and add-to-collection work unchanged.
 - **Person sheet**: clicking a name runs `navigate({ search: prev => ({ ...prev, person: row.person_id }) })`; `PersonSheet` in `_authed.tsx` opens from the `person` param.
-- **Faceting** (`getFacetedUniqueValues`) powers both the filter chips' value pickers and the snapshot the model receives.
-- **Scope switch** (All / Personal / Shared) writes a `visibility` column filter through the same store and clears it for All; the optional org narrowing writes an `organization_name` filter. It renders only when `useBackendMe()` reports at least one organization. Because it is state, not a query, it round-trips through saved views and the URL like any other filter.
+- **Faceting** (`getFacetedUniqueValues`) can power contextual UI pickers. Build the model's explicitly unfiltered, privacy-allowlisted facet summary separately from loaded rows as specified in the harness.
+- **Scope switch** (All / Personal / Shared) writes a `visibility` column filter through the same store and clears both visibility and org-attribution filters for All; the optional org narrowing writes an `organization_name` filter. It renders only when `useBackendMe()` reports at least one organization. It round-trips through saved-view state selected by the URL; unsaved filters are not serialized into the URL.
 
 ## AI query bar
 
-<Note>
-The copy-ready harness (full system prompt, snapshot renderer, every tool schema, the server route, the client wiring and the golden prompt set) lives on [AI Query Harness](/guides/open-work/contacts-table-view/ai-query-harness). This section states the design; that page is what the agent implements from.
-</Note>
+[AI Query Harness](/guides/open-work/contacts-table-view/ai-query-harness) is the single source for the prompt, tool contracts, snapshot, approval lifecycle, authenticated BFF, transport and model tests. Do not duplicate its prompt in a route file. Use the same commands, filters, target resolver and mutations as the manual UI.
 
-### UI
+The bar uses the [Screen](#screen) layout and shared `QueryInput`. It remains a compact command surface: one result sentence, change chips, chronological view Undo, and a trusted approval card. There is no extra chat panel. Show Stop during a running turn, Retry on retryable transport failure, and Apply/Cancel only on a valid frozen preview. The response strip states whether a result is proposed, applied, cancelled, partial or failed. A stop after a committed write reports that write; it cannot claim “nothing changed.”
 
-`query-bar.tsx` renders `QueryInput` with `hideFilters`, `floatOverlay`, `placeholder="Filter, sort, group, or add a column…"`, `isLoading` while a turn streams, and `loadingHint` cycling short verbs the way Discover does. `onSubmit(value)` calls `sendMessage(value)`; the `teamIds` and `deepResearch` arguments are ignored. Voice input and the mic toggle work with no changes because they are inside `QueryInput`.
+The installed approval method is `addToolApprovalResponse({ id, approved })`. Pending tools have `approval-requested` state in the message parts. Never wire a second `resolveInterrupt` path. Every bulk/collection/outreach call passes the same frozen-preview gate, including manual toolbar actions that touch many contacts. Field creation and an explicitly requested view save keep their workshop exception; saved-view overwrites must name an existing view and carry its version.
 
-Above the input, the response strip shows: the assistant's one-line summary, chips for each applied change (click a chip to undo just that change), a global Undo (pops the store's undo stack), and, when an approval interrupt is pending, the approval card.
-
-### Server route
-
-`src/routes/api/contacts-view-query.ts`, `POST`, modeled on `src/routes/api/tanstack-ai-chat.ts`:
-
-1. `chatParamsFromRequest(request)`; require the session via `getGcpAuth()` and the bearer via `requireBearerToken` from `tanstack-ai-chat/server/request.ts` (the bearer is only used for the query-log write).
-2. Parse `forwardedProps` with `contactsViewSnapshotSchema` (below). Reject bodies over 64 KiB and snapshots with more than 60 columns or 50 field definitions.
-3. Trim `messages` to the last 10 user/assistant pairs server-side as well as client-side.
-4. `chat({ adapter: openRouterText(model, { apiKey }), messages, systemPrompts: [SYSTEM_PROMPT, renderSnapshot(snapshot)], tools: CONTACTS_VIEW_TOOL_DEFINITIONS, middleware: [otel, errorLog] })` → `toServerSentEventsResponse`. Tool definitions are passed **without** implementations; every tool executes in the browser.
-5. On stream end, `POST /v1/contacts/table/query-log` with prompt, model, tool calls and latency, fire-and-forget.
-
-Model id: `env.CONTACTS_VIEW_QUERY_MODEL ?? env.TANSTACK_AI_CHAT_MODEL ?? "anthropic/claude-sonnet-4.5"`. Confirm the OpenRouter adapter passes `provider.sort = "throughput"`; if the adapter has no hook for provider preferences, set it through the adapter's request options or note the gap in the Phase 5 gate.
-
-```ts contactsViewSnapshotSchema — forwardedProps sent with every turn
-{
-  today: "2026-09-16",
-  rowCount: 8410,
-  filteredRowCount: 42,
-  selectedCount: 0,
-  columns: [
-    { id: "name", label: "Name", type: "text", visible: true, pinned: "start" },
-    { id: "company_name", label: "Company", type: "text", visible: true },
-    { id: "last_activity_at", label: "Last activity", type: "date", visible: true },
-    { id: "cf_0192…", label: "Tier", type: "select", visible: true,
-      options: [{ id: "tier-1", label: "Tier 1" }, { id: "tier-2", label: "Tier 2" }] }
-  ],
-  state: {
-    sorting: [{ id: "last_activity_at", desc: true }],
-    columnFilters: [{ id: "company_name", value: { op: "in", value: ["Acme"] } }],
-    grouping: [],
-    globalFilter: ""
-  },
-  facets: {
-    company_name: ["Acme", "Globex", "Initech", "…top 20 by count"],
-    location_formatted: ["London, United Kingdom", "New York, NY", "…"],
-    last_activity_kind: ["email", "calendar_event"]
-  },
-  savedViews: [{ id: "…", name: "Warm investors" }],
-  collections: [{ id: "…", name: "Q4 outreach" }]
-}
-```
-
-### Tools
-
-All tools are defined once in `tools/definitions.ts` with `toolDefinition({ name, description, inputSchema, outputSchema, needsApproval? })` and implemented in `tools/client-tools.ts` with `.client((input, ctx) => …)`, where `ctx` carries the store, the table instance, the query client and the mutations. They are wired with `createChatClientOptions({ connection: fetchServerSentEvents("/api/contacts-view-query"), tools: clientTools(...), context })` and `useChat`. The browser holds the dataset, so target resolution (which rows a filter matches) can only happen there; that is why there are no server tools.
-
-| Tool | Input (zod, summarized) | Effect | Approval |
-| --- | --- | --- | --- |
-| `describe_table` | none | Returns the current snapshot. Lets the model re-read after a change. | no |
-| `set_filters` | `mode: replace or add or remove or clear`, `filters: [{ columnId, op, value }]` | Validates column ids and op/type pairs; applies; returns `filteredRowCount`. | no |
-| `set_sort` | `sorting: [{ columnId, desc }]` | Replaces sorting. | no |
-| `set_grouping` | `columnIds: string[]` | Replaces grouping; expands all groups. | no |
-| `set_columns` | `show?`, `hide?`, `order?`, `pinStart?`, `pinEnd?` (column id arrays) | Visibility, order, pinning. | no |
-| `set_search` | `query: string` | Global filter. | no |
-| `select_rows` | `scope: filtered or all or none` or `contactIds[]` | Sets `rowSelection`, which syncs to the node-selection store. | no |
-| `reset_view` | none | Back to the default view; pushes to undo. | no |
-| `save_view` | `name`, `overwrite?: boolean` | `POST` or `PATCH /v1/contacts/views` with the current state; navigates to `?view=`. | no |
-| `create_field` | `label`, `field_type`, `options?: [{ label, color? }]` | `POST /v1/contacts/fields`, invalidates defs, shows the new column. | no (decision 11 exception) |
-| `bulk_set_field_values` | `target: filtered or selected or contactIds[]`, `values: { fieldId: value or null }` | Resolves target to contact ids in the browser, calls `POST /v1/contacts/fields/bulk` in chunks of 2,000, patches the rows cache. | **yes** |
-| `add_to_collection` | `target`, `collectionId` or `newCollectionName` | Resolves person ids; `POST /collection-nodes` with `person_ids` in batches (confirm the Go batch limit in Phase 0). | **yes** |
-| `open_outreach` | `target` | Sets selection to the target then `window.postMessage({ target: "EmailOutreach", data: { action: "open", useSelectedNodes: true } })`. | **yes** |
-
-Approval flow: `needsApproval: true` pauses the tool call in the `approval-requested` state and surfaces a `tool-approval` interrupt. `approval-card.tsx` renders `previewFor(toolName, input, rows)` from `lib/preview.ts` (affected count, five sample names, the exact change) and calls `resolveInterrupt(true)` on Apply or `resolveInterrupt(false)` on Cancel; the client tool then runs (or not) automatically. The model never receives a success output for an unapproved write.
-
-### System prompt
-
-```text System prompt — copy verbatim into contacts-view-query.ts
-You operate a contacts table for one user. You have tools that change how the
-table is displayed, create custom columns, set values on rows, and hand rows to
-other features. You never answer questions from your own knowledge about the
-contacts; everything you know about them is in the TABLE SNAPSHOT below.
-
-Rules
-1. Act with tools. Only use column ids that appear in the snapshot. If the
-   user names a column that does not exist, ask one short question or, when
-   the intent is clearly a new attribute, call create_field first.
-2. "also", "and", "plus" mean add to the current filters (mode "add").
-   "only", "just", "instead" mean replace. "clear", "reset", "everyone" mean
-   clear. When unsure, prefer add.
-3. Map language to ops: "at/from/in <company or place>" -> in; "before/after/
-   since/last N days" -> before/after using today's date from the snapshot;
-   "no/without/missing" -> is_empty; "has/with" -> not_empty; numbers with
-   more/less/over/under -> gt/lt.
-4. For select and multi_select columns, use option ids from the snapshot,
-   never labels. If a label has no option, offer to create it with
-   create_field or an option update, do not guess.
-5. Writes that touch rows (bulk_set_field_values, add_to_collection,
-   open_outreach) require the user's approval in the UI. Call the tool once
-   with the exact target and change; do not claim the write happened until the
-   tool returns a result. If the tool returns cancelled, acknowledge and stop.
-6. After applying changes, reply in one sentence with what changed and the
-   resulting row count, for example: "Filtered to 42 contacts at Acme, sorted
-   by last activity." No lists, no markdown, no questions unless required.
-7. Never call more than five tools in one turn. Never call set_filters and
-   reset_view in the same turn.
-8. If the request is not about this table (general questions, email drafting,
-   research), say in one sentence that this bar only changes the table and
-   suggest Akira for the rest.
-
-TABLE SNAPSHOT
-{{snapshot}}
-```
-
-### Conversation handling
-
-`useChat` keeps the transcript in component state. Before each send, the client trims to the last 10 pairs and strips `describe_table` tool outputs older than the current turn. Leaving the route unmounts the hook and forgets the transcript. Nothing is written to `/v1/copilot` threads; the copilot harness-signature rules from the outcome chat plan do not apply because no server-authored history exists.
+Unmount aborts model IO, denies unresolved approvals, prevents late callbacks from changing state, clears transcript and temporary preview maps, and restores the selection mode. It does not roll back already committed mutations. A remount starts a fresh view session and never auto-resumes a write.
 
 ## Build phases and gates
 
@@ -862,33 +887,85 @@ Each phase ends with a gate. Do not start the next phase until the gate passes; 
 
 | Phase | Repo | Deliverables | Gate |
 | --- | --- | --- | --- |
-| **0 Preflight** | both | Confirm `dev` (frontend) and `main` (backend) are current. Verify package versions and the `@tanstack/ai` interrupt API. Verify v9 export names. Confirm the `POST /collection-nodes` `person_ids` batch limit and the email table names for the lateral joins. Add env keys and flags. Environments: `dev.orbiter.io` calls `https://backend-dev.orbiter.io`; the OpenAPI spec lists the staging Cloud Run origin separately. | Written checklist with each item ticked or marked blocked. |
-| **1 Rows endpoint** | backend | Migration 021 (custom_fields column and defs table). Query, repo, service, handler, DTO, OpenAPI, tests. | `go test ./internal/features/persons/...` green; integration test pages through three pages of 1,000 with a seeded user, excludes merged rows, never returns another user's rows; local timing under 300 ms per page at 10k rows. Docs repo: sync the Orbiter Backend nav after the spec lands. |
-| **2 Route and table** | frontend | Flag, route, palette command, `contacts-view` feature (read-only), hydration, virtualization, faceting, person sheet, selection sync, quick search, column visibility, sort, filter chips. | ⌘K → Contacts View works with the flag on and is absent with it off. 20,000 synthetic rows scroll without frame drops; sort and filter apply under 100 ms; selecting rows then ⌘⇧E opens Outreach with those people. `grep -r "useReactTable\|getCoreRowModel" src/features/contacts-view` is empty. `pnpm biome check`, `pnpm test`, `CI=true pnpm build` pass. |
-| **3 Custom fields** | both | Field endpoints and sqlc queries; field manager UI; dynamic columns; inline editing for custom cells, note, nickname. | Create each of the seven types, set a value inline, reload and see it; delete a field and confirm its key vanished from `custom_fields` in the database; option-in-use returns 409 and the UI offers reassignment. |
-| **4 Saved views** | both | Views table, endpoints, `?view=` param, localStorage last-state, toolbar view picker, save and save-as, default view. | Save a view with filters, sort, hidden columns and pinning; open `/contacts?view=<id>` in a fresh tab and get the same table; delete the field one filter references and confirm the view still loads without that filter. |
-| **5 Query bar, read-only tools** | frontend | Server route, snapshot, prompt, `describe_table`, `set_filters`, `set_sort`, `set_grouping`, `set_columns`, `set_search`, `select_rows`, `reset_view`, response strip, undo. | A golden file of 20 prompts with expected state deltas passes (`src/features/contacts-view/tests/golden-prompts.test.ts`, run against the real model in CI-manual mode and against recorded responses in CI). Multi-turn "also" and "instead" behave. Query log rows appear in `persons.contact_view_query_log`. |
-| **6 Write tools with approval** | frontend | `create_field`, `save_view`, `bulk_set_field_values`, `add_to_collection`, `open_outreach`, approval card, previews. | Bulk-set 42 rows only after Apply; Cancel leaves the database unchanged (verify by query). Add-to-collection lands the same person ids the preview showed. Outreach opens with the filtered people. |
+| **0 Preflight** | both | Record baseline commits and choose isolated implementation branches from the intended current bases; do not switch another active task's checkout. Compile a v9 table and one approved/denied client tool with the pinned SDK; verify auth and current-user endpoint. Verify v9 export names. Confirm collection batch limits/idempotency and actual momentum vocabulary; inventory note/nickname/merge writers. Add env keys and flags. Environments: `dev.orbiter.io` calls `https://backend-dev.orbiter.io`; the OpenAPI spec lists the staging Cloud Run origin separately. | Written checklist with each item ticked or marked blocked. |
+| **1 Rows endpoint** | backend | Field/value schema plus schema revision and write receipts; choose unused migration numbers. Query, repo, service, handler, DTO, OpenAPI, tests. | `go test ./internal/features/persons/...` green; integration test pages through three pages of 1,000 with a seeded user, excludes merged rows, never returns another user's rows; local timing under 300 ms per page at 10k rows. Docs repo: sync the Orbiter Backend nav after the spec lands. |
+| **2 Route and table** | frontend | Flag, route, palette command, `contacts-view` feature (read-only), hydration, virtualization, faceting, person sheet, selection sync, quick search, column visibility, sort, filter chips. | ⌘K → Contacts View works with the flag on and is absent with it off. Layout and performance gates below pass; selecting rows then ⌘⇧E opens Outreach with those people. `rg -e useReactTable -e getCoreRowModel src/features/contacts-view` is empty. Scoped Biome, feature tests, type checking and `CI=true pnpm build` pass; record baseline failures separately. |
+| **3 Custom fields** | both | Field/value endpoints, revision and receipt handling, missing nickname route, merge policy, field manager and all editors. | Create each of the seven types, set a value inline, reload and see it; delete a field and confirm its key vanished from `custom_fields` in the database; option-in-use returns 409 and the UI offers reassignment. |
+| **4 Saved views** | both | Views and query-log schemas/endpoints; scoped local state, URL precedence, view picker, save/save-as, concurrency and unique default. | Save a view with filters, sort, hidden columns and pinning; open `/contacts?view=<id>` in a fresh tab and get the same table; delete the field one filter references and confirm the view still loads without that filter. |
+| **5 Query bar, read-only tools** | frontend | Server route, snapshot, prompt, `describe_table`, `set_filters`, `set_sort`, `set_grouping`, `set_columns`, `set_search`, `select_rows`, `reset_view`, response strip, undo. | The harness read-only golden subset (cases 1–13, 17, 20, 22, 24–29 and 31–33) with expected state deltas passes (`src/features/contacts-view/tests/golden-prompts.test.ts`, run against the real model in CI-manual mode and against recorded responses in CI). Multi-turn "also" and "instead" behave. Query log migration/endpoint from Phase 4 already exists; per-turn model and browser receipts merge correctly. |
+| **6 Write tools with approval** | frontend | `create_field`, `save_view`, `bulk_set_field_values`, `add_to_collection`, `open_outreach`, approval card, previews. | All deterministic harness cases pass; bulk-set 42 rows only after Apply; Cancel leaves the database unchanged (verify by query). Add-to-collection lands the same person ids the preview showed. Outreach opens with the filtered people. |
 | **7 QA and rollout** | both | Browser regression suite, staging flag on, dogfood week, prod flag. | Regression suite green on staging twice; no P1s from dogfood; flag flipped in prod by Mark. |
 
 ## Acceptance tests
 
-1. Palette lists "Contacts View" under Navigation only when `VITE_CONTACTS_VIEW=true`; Enter navigates to `/contacts`; with the flag off `/contacts` redirects to `/`.
-2. A user with 8,410 contacts sees all rows after hydration; the toolbar count matches `meta.total`; a second user's contacts never appear.
-3. A contact merged into another (tombstoned) does not appear.
-4. Scrolling 20,000 rows keeps under 200 DOM rows at any time.
-5. Sorting by Company, filtering Company in [Acme], grouping by Location, hiding Note and pinning Name all round-trip through a saved view and the URL.
-6. Each custom-field type accepts a valid value and rejects an invalid one with a field-level error; clearing removes the key from JSONB.
-7. Deleting a field removes its column, its values on every contact of the user, and any saved-view reference.
-8. Row checkboxes select nodes visible to Email Outreach Composer; clearing selection clears them.
-9. Clicking a name opens PersonSheet for that `person_id`; closing it keeps the table state.
-10. "show everyone at Acme" produces `set_filters` with `op: in`; "also sorted by last activity" adds a sort without touching filters; "reset" restores the default view.
-11. "add a Tier column with options 1, 2, 3" creates a `select` field and the column appears without reload.
-12. "set everyone at Acme to Tier 1" shows an approval card with the count and samples; Cancel writes nothing; Apply updates exactly those rows and the cache.
-13. "add these to my Q4 outreach collection" adds the filtered people once, with no duplicates on repeat.
-14. A request unrelated to the table gets the one-sentence redirect to Akira and calls no tools.
-15. The query log has one row per turn with `tool_calls` populated and `applied` reflecting approval.
-16. A user with an org membership sees the scope switch: Personal lists only `visibility = private` rows, Shared only `visible`, All every row. A user with no org sees no switch and every row. "only my personal contacts" in the query bar produces the same Personal filter.
+### Deterministic fixtures
+
+Create disposable fixtures through the repository's test database/factories; no production seed or destructive reset. Use a fixed clock `2026-09-16T12:00:00Z`, time zone `America/New_York`, stable UUIDs, and two users with both owned and foreign definitions/views/collections. User A has ten live contacts A1–A10; A11 is merged and B1 belongs to user B. Seed A1–A4 at Acme; A1–A2 in London, A3–A4 in New York; A1/A3 private, A2/A4 visible; A1/A2 activity before June, A3 null activity, A4 September activity. Seed a Tier select, Tags multi-select, checkbox false, number zero, date at leap day, Unicode names and null rollups. State explicit expectations: Acme = 4, Acme+London = 2, Acme+Personal = 2, Acme with activity before June **including empty** = 3. Two collapsed company groups must still target those same four Acme contact ids.
+
+Define the small fixture completely so expected sets do not depend on random generation. A1–A4 use Org attribution Orbiter, A5–A10 use null; all addresses below are synthetic `example.test` values. Generate stable UUIDs from the test namespace and each row/definition label.
+
+| Contact | Name | Company / city | Visibility | Last activity (UTC) | Email / total_emails |
+| --- | --- | --- | --- | --- | --- |
+| A1 | Ada Lovelace | Acme / London | private | 2026-05-20T12:00:00Z | ada@example.test / 14 |
+| A2 | Grace Hopper | Acme / London | visible | 2026-05-21T12:00:00Z | grace@example.test / 11 |
+| A3 | Test Casey | Acme / New York | private | null | null / null |
+| A4 | Test Drew | Acme / New York | visible | 2026-09-10T12:00:00Z | drew@example.test / 2 |
+| A5 | Test Ellis | Globex / London | private | 2026-07-01T12:00:00Z | ellis@example.test / 0 |
+| A6 | Test Frankie | Globex / Boston | visible | 2026-08-01T12:00:00Z | null / 0 |
+| A7 | Test Gray | Initech / Boston | private | 2026-09-01T12:00:00Z | gray@example.test / 20 |
+| A8 | Test Harper | Initech / Paris | visible | 2026-09-02T12:00:00Z | harper@example.test / 5 |
+| A9 | Test Indigo | null / null | private | 2026-09-03T12:00:00Z | indigo@example.test / 0 |
+| A10 | Test Jules | null / Paris | visible | 2026-09-04T12:00:00Z | jules@example.test / 1 |
+
+With no initial filters: missing email = A3/A6; more than ten emails = A1/A2/A7; no contact since June (including missing activity) = A1/A2/A3; “lovelace” = A1. Q4 outreach initially contains A1/A2. A11 and B1 deliberately share Acme/name patterns but must never enter user A's live row set.
+
+Add separate generators for 0, 1, 999, 1,000, 1,001, 3,001, 20,000, 25,000 and 25,001 live contacts, including identical creation timestamps. Generate distinct names/ids, realistic nullable fields and 50 custom definitions; record fixture seed and payload size. Include a collection with two existing fixture members and a second user's inaccessible collection. Record before/after database values by contact id for every write scenario.
+
+### Required test matrix
+
+| ID | Layer / scenario | Required assertion |
+| --- | --- | --- |
+| UI-01 | Discover → Contacts → Discover | Shared chrome remains mounted once; panel bounds and centered dock meet Screen; no placeholder side panels. |
+| UI-02 | Flag on/off, palette and direct route | Command/route agree; disabled BFF rejects independently of client bundle. |
+| UI-03 | Scroll, resize, zoom, composer expand/collapse | Sticky header/pinned Name align; last row reachable; body does not horizontal-scroll; dock stays centered. |
+| UI-04 | PersonSheet, notifications, expanded widgets, field dialog | Correct stacking/focus; closing preserves table state and scroll. |
+| UI-05 | Keyboard/IME/edit error | One commit on Tab; Escape cancels; errors keep draft; focus reaches offscreen virtual cells; no unintended query submit. |
+| DATA-01 | Page boundaries and timestamp ties | No duplicate/missing owned live ids in an unchanged fixture; empty terminal cursor; malformed cursor rejected. |
+| DATA-02 | Concurrent add/delete/merge during hydration | Generation/upper-bound behavior documented; deduped rows; stale preview invalidated; no false exact-total claim. |
+| DATA-03 | Failure on page 2, retry, cap, refresh, account switch | Loaded rows retained with clear partial state; no broad AI write; no foreign cache/localStorage/history visible. |
+| STATE-01 | Filters, date/DST/null/zero/false/multi-select | Shared evaluator produces the fixture ids; unknown ids/op-type mismatches fail without state mutation. |
+| STATE-02 | Group collapse, sort, selection hidden by filters | Leaf counts/targets stable; selection mode isolated; collection/outreach uses unique person ids. |
+| STATE-03 | Save/reload/URL/Back/Forward, deleted field, future version | State round-trips; required columns survive; invalid state notices; dirty state never silently overwritten. |
+| STATE-04 | Two concurrent default/save/create requests | One default, unique normalized name/key, 409 stale save and no lost update. |
+| FIELD-01 | Seven field types, clearing, archive and option reassignment | Valid persisted values; false/zero retained; invalid/foreign ids rejected; array replacement deduplicated. |
+| FIELD-02 | Concurrent cell edits and field deletion | Conflict/serialization behavior; no orphan JSON key reappears; stale rollback cannot erase a later success. |
+| FIELD-03 | A bulk chunk contains one foreign/merged id | Entire chunk writes zero; generic 404; other user's data unchanged. |
+| FIELD-04 | 4,201 targets, failure/timeout after chunk 1 | Accurate committed/remaining counts; same-key replay does not rewrite; no fabricated overall success. |
+| AI-01 | Golden prompts, multi-turn continuation and state delta | Deterministic replay passes all semantic assertions; independent evaluator checks actual resulting state. |
+| AI-02 | Preview → change filter/selection/data/schema → Apply | Old approval disabled/rejected; fresh preview required; exact frozen ids are the only possible writes. |
+| AI-03 | Cancel, double Apply, parallel write calls, repeated tool-call id | Zero effects on Cancel; one execution per approved call; serialized dependencies and accurate receipts. |
+| AI-04 | Create field → set value in same turn | Returned field/option ids available before next tool; field remains after Cancel of the value write. |
+| AI-05 | Open outreach / add existing or new collection | Previewed unique people, existing permissions and limits honored; opening does not send email; repeat add creates no duplicate memberships or collection. |
+| AI-06 | Forged/expired auth, oversized chunked body, invalid roles/schema, 429 | Reject before provider invocation with proper 4xx; no secrets or contact payload in logs. |
+| AI-07 | Abort/unmount/stream failure/tool exception/prompt injection in label | No late write or approval replay; accurate partial result; label never grants authority or alters tool allowlist. |
+| AI-08 | Several SSE continuations in one turn | Five-tool budget shared across continuations; one terminal query-log row with actual outcomes, not unconditional `applied=true`. |
+
+### Performance and verification procedure
+
+- Measure a production frontend build, Chromium desktop at 1440×900, fixed fixture and documented hardware, three warm-up runs then 20 measured runs. Report p50/p95 and absolute maximum; do not call a subjective scroll impression a pass.
+- At 20,000 contacts: filter/sort p95 at most 100 ms after input debounce; at most 200 mounted data/group rows; no main-thread task over 100 ms during a ten-second steady scroll. Repeat at the maximum 50 custom fields. Keep column definitions/cell callbacks stable and avoid rebuilding snapshots/facets per keystroke before reaching for workers or more virtualization.
+- Rows endpoint p95 at most 300 ms per 1,000-row page over a seeded 10k-contact local database, excluding network transfer; log query count, plan and payload bytes. No per-row HTTP request or unbounded lateral scan. Hydration performance includes JSON decoding and cache allocation, not only DOM rendering.
+- Browser suite covers the full matrix with a mock provider and real local Go/database path for writes. Provider-live tests are separately opt-in on synthetic data. Add a small Playwright setup only if the repo has no browser-test runner; do not label manual screenshots as automated tests.
+- Backend: `make sqlc-generate`, targeted `go test ./internal/features/persons/...`, race tests for new concurrent service logic, migration Up/Down/Up on a disposable database, the repository lint target and `npx @redocly/cli lint api/openapi.yaml`. Verify actual endpoints against the OpenAPI envelope and root path references.
+- Frontend: scoped `pnpm exec biome check` without `--write`, `pnpm exec tsc --noEmit`, `pnpm test`, `CI=true pnpm build`, then browser tests. Record existing baseline failures with unchanged evidence; they cannot mask a new failure.
+- Documentation: `mintlify validate`, then `mintlify broken-links --check-anchors`; the installed CLI has no `--files` option, so separate findings in these two pages from existing site-wide link debt. Stop the preview for these checks because this CLI shares generated files, then restart it on its original port. Do not call disabled-OpenAPI validation a full-site pass.
+
+### Agent handoff and rollout evidence
+
+For each phase append to `contacts-view-build-evidence.md`: requirement IDs completed, repository/commit, changed files, exact commands/exit codes, fixture seed/environment, endpoint request ids (no tokens), screenshots and performance measurements, plus blocked/skipped checks. A gate passes only with observable outcomes. Report dependencies that remain unverified (particularly momentum values, collections retry/limit behavior and external auth availability); do not fill them with guesses.
+
+Ship backend additive migrations/endpoints before enabling the frontend. Enable staging flags only after contracts and manual UI pass, then the AI flag after harness gates. Record the dogfood owner, observation window and failure metrics. Frontend rollback disables both route and BFF flags while preserving fields/views; do not roll back populated additive schema during an incident. Production enablement follows the user's deployment authorization and requires no unresolved P1 correctness/access-control findings.
+
 
 ## Later (not in v1)
 
@@ -918,7 +995,7 @@ The current TanStack Table major is **v9**; most tutorials and model-generated s
 | [TanStack Virtual `Virtualizer` API](https://tanstack.com/virtual/latest/docs/api/virtualizer) | Exact options. | `count`, `getScrollElement`, `estimateSize`, `overscan` (default 1), `getItemKey`, `scrollToIndex`; `getVirtualItems()` and `getTotalSize()`. |
 | [Editable data example (v8)](https://tanstack.com/table/v8/docs/framework/react/examples/editable-data) | Inline cell editing pattern. | `defaultColumn.cell` with local input state committed on blur, `meta.updateData` on the table; port to v9 with `metaHelper<TableMeta>()` instead of module augmentation. |
 | [shadcn/ui Data Table](https://ui.shadcn.com/docs/components/radix/data-table) | House UI primitives; already on v9. | `pnpm dlx shadcn@latest add table`; `table.FlexRender`; column-visibility dropdown over `table.getAllColumns()`; the guide targets v9 `useTable` + `tableFeatures`. |
-| [TanStack AI client tools](https://tanstack.com/ai/latest/docs/tools/client-tools) and [tools overview](https://tanstack.com/ai/latest/docs/tools/tools) | The whole query bar. | Define once with `toolDefinition()`, implement with `.client()`, pass definitions (no implementation) to `chat()` on the server, `createChatClientOptions({ tools, context })` on the client; `needsApproval` yields a `tool-approval` interrupt resolved with `resolveInterrupt(bool)`. |
+| [TanStack AI client tools](https://tanstack.com/ai/latest/docs/tools/client-tools) and [tools overview](https://tanstack.com/ai/latest/docs/tools/tools) | The whole query bar. | Define once with `toolDefinition()`, implement with `.client()`, pass definitions (no implementation) to `chat()` on the server, `createChatClientOptions({ tools, context })` on the client; `needsApproval` gates client execution; for the installed versions use message-part approvals and `addToolApprovalResponse`, as verified in the harness. |
 | [Inside TanStack Table v9 reactivity](https://tanstack.com/blog/tanstack-table-v9-reactivity) | Why selectors matter at 20k rows. | Atoms per state slice; only subscribed components re-render. |
 
 **v9 gotchas checklist for generated code:** `useTable` not `useReactTable`; `features` option is required; no `getCoreRowModel()`; `sortFn` not `sortingFn`; pin with `'start'`/`'end'`; `enableColumnPinning` not `enablePinning`; call methods on the instance (`row.getValue('x')`, never destructured); `table.state` or the selector, not `table.getState()`; `getIsSomeRowsSelected()` now means "at least one"; types take `TFeatures` first.
@@ -929,7 +1006,7 @@ The current TanStack Table major is **v9**; most tutorials and model-generated s
 | --- | --- | --- |
 | frontend | `src/features/command-palette/constants/commands.tsx` | Navigation commands; add `contacts-view` here. |
 | frontend | `src/features/command-palette/components/command-palette.tsx`, `hooks/use-command-hotkeys.ts` | Consumers of the command list; no change needed. |
-| frontend | `src/routes/_authed.tsx` | Mounts `PersonSheet` and the palette for every protected route. |
+| frontend | `src/routes/_authed.tsx`, `src/components/global/workspace-shell.tsx` | Shared shell owns Header and its widgets; extend header visibility to Contacts. PersonSheet and palette stay mounted once. |
 | frontend | `src/routes/_authed/email-inbox.tsx` | Reference full-screen route with `validateSearch` and a warming `loader`. |
 | frontend | `src/components/global/query-input.tsx` | The composer to reuse (`hideFilters`, `floatOverlay`, `onSubmit`). |
 | frontend | `src/features/discover/components/discover-canvas.tsx` | `sticky bottom-0` placement of the composer. |
