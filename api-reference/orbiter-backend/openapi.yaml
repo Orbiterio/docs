@@ -86,6 +86,8 @@ tags:
       Contact imports from external sources (LinkedIn CSV, Apple Contacts
       vCard, Nylas address books). Signed-URL upload, async processing,
       per-row report. Requires a verified WorkOS access token.
+  - name: Suggestions
+    description: The v2 suggestion feed and batch inspection for Leverage Loops and Outcomes, scoped to an organisation the caller is a member of. Requires a verified WorkOS access token.
   - name: Leverage Loops
     description: Copilot suggestion requests in loop mode with their suggestions, actions, trajectories and follow-up questions. Requires a verified WorkOS access token.
   - name: Links
@@ -5963,6 +5965,44 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      tags:
+        - Collections
+      summary: Ask a collection question
+      description: |
+        Saves a question about a collection and queues its answer. The question is
+        answered over the collection's members (people and companies, newest first,
+        capped) by a background worker; the response is the question with
+        `processing: true` and no answer yet. Poll `GET /collection-questions` until
+        `processing` is false, then read the answer nodes from
+        `GET /collection-question-nodes`. The caller must own or be a member of the
+        collection, and the collection must have members to answer over.
+      operationId: askCollectionQuestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskCollectionQuestionRequest'
+      responses:
+        '201':
+          description: The saved question, still processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionQuestionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
   /collection-questions/{collection_question_id}:
@@ -6028,6 +6068,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /collection-question-nodes:
+    get:
+      tags:
+        - Collections
+      summary: Get a question's answer nodes
+      description: |
+        Returns the members the model named as the answer to a question, in the
+        order it named them, each hydrated into the shared node shape (person or
+        company card, targeting, the asker's relationship paths). Only the asker may
+        read them; a question that is not theirs returns 404. `paths_processing` is
+        true on a node until the asker's paths to it are stored.
+      operationId: listCollectionQuestionNodes
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: collection_question_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The question's answer nodes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCollectionQuestionNodesEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -8298,7 +8374,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - name: status
           in: query
-          description: Filter to one status (draft, submitted, processing, suggestion, archived). Empty excludes archived.
+          description: Filter to one status (draft, submitted, processing, suggestion, failed, archived). Empty excludes archived.
           schema:
             type: string
         - name: query
@@ -8370,7 +8446,7 @@ paths:
       tags:
         - Leverage Loops
       summary: Update a leverage loop
-      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`.'
+      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`. A client may only move a loop to `archived`, or between `draft` and `submitted` while it is still a draft; the pull''s own states (`processing`, `suggestion`, `failed`) are written by dispatch and the worker, and a PATCH to one of them returns 400. A status change that loses a race with a dispatch returns 409.'
       security:
         - bearerAuth: []
       requestBody:
@@ -8394,11 +8470,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
     delete:
       operationId: deleteLeverageLoop
       tags:
         - Leverage Loops
       summary: Delete a leverage loop and everything under it
+      description: A loop whose suggestions were stored (status `suggestion`, `batch_id` set) cannot be deleted, since the batch keeps it; archive it instead.
       security:
         - bearerAuth: []
       responses:
@@ -8414,6 +8493,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /leverage-loops/{loop_id}/dispatch:
     parameters:
       - $ref: '#/components/parameters/LoopID'
@@ -8422,7 +8503,7 @@ paths:
       tags:
         - Leverage Loops
       summary: Submit a draft loop for suggestion generation
-      description: Moves the loop to `processing`, records usage and queues generation on the worker. A loop already past draft/submitted returns 409.
+      description: 'Moves the loop to `processing`, records usage and queues it for the worker, which files a Universe leverage loop over the caller''s contacts, polls it, stores the delivered package as a batch and walks the caller''s paths to each suggestion. The loop then reads `suggestion` with `batch_id` set (read it via `GET /suggestion-batches/{batch_id}`), or `failed` with a `failure_reason`. A failed loop may be dispatched again without a second usage charge. Universe keeps one job per loop, so this re-checks that job: it recovers a loop that timed out here but finished later in Universe, while one Universe itself failed stays failed (create a new loop instead). Any other loop past draft/submitted returns 409. A loop with no `person_id`, or a caller with no contacts, returns 400.'
       security:
         - bearerAuth: []
       responses:
@@ -8432,6 +8513,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -8690,6 +8773,75 @@ paths:
                 $ref: '#/components/schemas/ListSuggestionNodesEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /suggestion-batches:
+    get:
+      operationId: listSuggestionFeed
+      tags:
+        - Suggestions
+      summary: List an organisation's live suggestions in one scope
+      description: 'The v2 suggestion feed: every suggestion from batches with status `complete` in the organisation, of one `suggestion_type` and optionally one beneficiary, newest batch first (`batch_seq` desc) and rank order inside a batch. Dismissed suggestions are hidden; ready and placeholder suggestions are returned alike, placeholders with a null `why` and empty arrays. The caller must be a current member of the organisation. Nodes on the page are hydrated for the caller. Keyset-paginated: pass `limit` and the previous page''s `meta.nextCursor`.'
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: organization_id
+          in: query
+          required: true
+          description: The local organisation whose suggestions to list.
+          schema:
+            type: string
+            format: uuid
+        - name: suggestion_type
+          in: query
+          required: true
+          description: One of `outcome`, `leverage_loop`, `leverage_outcome`, `serendipity`.
+          schema:
+            type: string
+        - name: beneficiary_contact_id
+          in: query
+          required: false
+          description: Narrow to one beneficiary's scope (a person entity id). Omit for every scope of the type.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSuggestionFeedEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /suggestion-batches/{batch_id}:
+    parameters:
+      - $ref: '#/components/parameters/BatchID'
+    get:
+      operationId: getSuggestionBatch
+      tags:
+        - Suggestions
+      summary: Inspect one stored batch of any status
+      description: One batch with every suggestion, dismissed ones included, for a member of its organisation. Partial and failed batches are served as stored and never presented as complete.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The batch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionBatchEnvelope'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -9591,7 +9743,10 @@ paths:
         contact in one request.
 
         With `person_id` (the form was prefilled by `POST /persons/url-lookup`)
-        that person is reused. Without it `full_name` is required and the
+        that person is reused. A supplied `full_name` fills an unnamed person
+        without replacing an existing name. Saving a person that still has
+        no name fails validation on `full_name` before adding a contact.
+        Without `person_id`, `full_name` is required and the
         typed identity (name, emails, phones, title, company name, profile
         URL) is sent to the enrichment provider's person get-add, which
         resolves or creates the canonical person; the row is then persisted
@@ -9645,7 +9800,7 @@ paths:
         - Persons
       summary: Look up a person by profile URL
       description: |
-        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). A LinkedIn URL is always sent to the enrichment provider's get-add, local hit or miss; a held person is overwritten with the provider's latest package. On a miss the person is resolved-or-created there, persisted, and returned with status created while enrichment completes in the background. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
+        Resolve a person from a social-profile URL (LinkedIn, IMDB, X, Instagram, ...). A LinkedIn URL is always sent to the enrichment provider's get-add, local hit or miss; a held person is overwritten with the provider's latest package. On a miss the person is resolved-or-created there. Once a name is available it is persisted locally and returned with status created while enrichment completes in the background. An unresolved name returns pending_enrichment with found false and person null; no unnamed local person is created. A held unnamed person also stays pending until its name resolves. When the provider's package names a current employer, that company is ensured locally first and returned as company. Other profile domains return pending_enrichment on a miss.
       security:
         - bearerAuth: []
       requestBody:
@@ -9831,7 +9986,7 @@ paths:
       tags:
         - Contacts
       summary: Add a contact
-      description: Add a person as a contact (copy-to-my)
+      description: Add a person as a contact (copy-to-my). A person without a stored name fails validation on full_name before any contact or copied details are written.
       security:
         - bearerAuth: []
       requestBody:
@@ -9883,6 +10038,8 @@ paths:
                     properties:
                       request_id:
                         type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -10177,7 +10334,7 @@ paths:
         - Companies
       summary: Look up a company by website domain
       description: |
-        Resolve a company from its website domain. The domain is always sent to the enrichment provider's get-add, local hit or miss; a held company is overwritten with the provider's latest package. On a miss the company is resolved-or-created there, persisted, and returned with status created. A seed the provider declines returns pending_enrichment.
+        Normalize a website URL or domain and call Logo.dev Describe first. A matching result returns immediately without database or Universe calls. Otherwise try the existing Universe lookup with an eight-second deadline. Reject mismatched domains before persisting or prefilling them. When Universe cannot supply a matching name, make one Firecrawl scrape of the original website with a five-second deadline. Website previews use its own branding and declared logo or favicon; the name and logo can be returned independently. A homepage logo or wordmark label corroborated by the copyright owner or visible site copy takes precedence over the copyright name; explicit organization and site names remain preferred. A different final or canonical domain is rejected. Preview ids are null until Add Company resolves the canonical entity. Website-published company profile URLs accompany the preview for Add Company. Exhausted lookups return manual_entry so the caller preserves the original domain and asks for a name instead of polling indefinitely.
       security:
         - bearerAuth: []
       requestBody:
@@ -15487,7 +15644,7 @@ components:
         contacts_touched:
           type: integer
           format: int32
-          description: Contacts whose feed pointers were recomputed.
+          description: Contacts that gained a new activity in this run, summed across its attempts.
         contacts_created:
           type: integer
           format: int32
@@ -15495,9 +15652,11 @@ components:
         email_activities_written:
           type: integer
           format: int32
+          description: Email activities this run created, summed across its attempts and recorded when it parks or completes; ones already on record are not counted.
         calendar_activities_written:
           type: integer
           format: int32
+          description: Calendar activities this run created, summed across its attempts and recorded when it parks or completes; ones already on record are not counted.
         nylas_requests:
           type: integer
           format: int32
@@ -15892,9 +16051,15 @@ components:
           type: string
     Person:
       type: object
+      description: |
+        current_title, company and primary_location use the same names and
+        shapes as the person on GET /v1/contacts, and are null when unknown.
       required:
         - id
         - name
+        - current_title
+        - company
+        - primary_location
       properties:
         id:
           type: string
@@ -15905,6 +16070,18 @@ components:
           type:
             - string
             - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/CompanyRef'
+            - type: 'null'
+        primary_location:
+          oneOf:
+            - $ref: '#/components/schemas/LocationRef'
+            - type: 'null'
         email_address:
           oneOf:
             - $ref: '#/components/schemas/EmailAddress'
@@ -15973,6 +16150,10 @@ components:
           type: array
           items:
             type: string
+          description: |
+            Message bodies, oldest-first. Each is the stored clean_message, else
+            the stored Nylas snippet; a message with neither is left out. Group
+            threads carry one entry per message_id.
     EmailFeedItem:
       allOf:
         - $ref: '#/components/schemas/FeedItemBase'
@@ -15991,6 +16172,8 @@ components:
       required:
         - event_id
         - status
+        - start_at
+        - end_at
       properties:
         event_id:
           type: string
@@ -16001,6 +16184,22 @@ components:
             - 'null'
         status:
           type: string
+        start_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: |
+            activities.event.start_at in UTC; null when the event record or the
+            value is missing. All-day events are stored at 00:00:00Z.
+        end_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: |
+            activities.event.end_at in UTC; null when the event record or the
+            value is missing. A single-day all-day event has end_at == start_at.
         event:
           description: Raw event record payload.
     EventFeedItem:
@@ -16918,8 +17117,12 @@ components:
         - collection_id
         - question
         - llm_response
+        - sourcing
         - processing
-      description: One of the authenticated user's questions on a collection.
+      description: |
+        One of the authenticated user's questions on a collection. `llm_response`
+        is null until the answer has been written; `processing` is true while the
+        answer or its nodes' paths are still being produced.
       properties:
         id:
           type: string
@@ -16930,7 +17133,17 @@ components:
         question:
           type: string
         llm_response:
-          type: string
+          type:
+            - string
+            - 'null'
+        sourcing:
+          type:
+            - string
+            - 'null'
+          description: |
+            Where the model said the answer's facts came from: `context` (all from
+            the collection's graph), `blended` (graph plus public knowledge) or
+            `world_knowledge` (mostly public knowledge). Null until answered.
         processing:
           type: boolean
     ListCollectionQuestionsResponse:
@@ -16955,12 +17168,19 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
-    UpdateCollectionQuestionRequest:
+    AskCollectionQuestionRequest:
       type: object
       required:
-        - question
+        - collection_id
+        - query
+      description: |
+        A question to answer over a collection's members. The asker comes from the
+        session.
       properties:
-        question:
+        collection_id:
+          type: string
+          format: uuid
+        query:
           type: string
           maxLength: 5000
     CollectionQuestionEnvelope:
@@ -16972,6 +17192,160 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/CollectionQuestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateCollectionQuestionRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          maxLength: 5000
+    CollectionQuestionNode:
+      type: object
+      required:
+        - id
+        - collection_question_id
+        - kind
+        - paths_processing
+        - entity_type
+        - node_uuid
+        - node_targeted
+        - person
+        - company
+        - live_event
+        - film_tv
+        - film_tv_award
+        - funding_round
+        - music_group
+        - music_recording
+        - video_game
+        - game_series
+        - game_award
+        - stage_production
+        - stage_award
+        - paths_to_person
+        - paths_to_company
+        - created_at
+      description: |
+        One answer node: a member the model named, in the shared node shape every
+        feature serves (the same objects a discover node carries). `node_uuid` is
+        the entity's row id in the table `entity_type` names, so exactly one entity
+        object is non-null and the rest are null. Paths are the asker's stored
+        relationship paths to the node.
+      properties:
+        id:
+          type: string
+          format: uuid
+        collection_question_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          description: '`response` for a member the model named as the answer.'
+        paths_processing:
+          type: boolean
+          description: True until the asker's paths to this node are stored.
+        entity_type:
+          type: string
+          description: '`persons` or `companies` today.'
+        node_uuid:
+          type: string
+          format: uuid
+        node_targeted:
+          type: boolean
+        person:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        company:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        live_event:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        funding_round:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_group:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_recording:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        video_game:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_series:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_production:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        paths_to_person:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        paths_to_company:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    ListCollectionQuestionNodesEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionQuestionNode'
         error:
           type: 'null'
         meta:
@@ -20214,6 +20588,402 @@ components:
             - string
             - 'null'
           description: The MusicBrainz id.
+    VideoGame:
+      type: object
+      required:
+        - id
+        - name
+        - tags
+        - genres
+        - steam_app_ids
+      description: |
+        The video game a node points at, resolved via the node's permanent
+        games.video_game id UUID (the Universe Video_Game node). The card shows
+        image_url, name, first_release_year, description, the tags chips and
+        the developer. first_release_date is text with date_precision (day |
+        month | year) beside it, as the graph carries it.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        tags:
+          type: array
+          items:
+            type: string
+        genres:
+          type: array
+          items:
+            type: string
+        game_kind:
+          type:
+            - string
+            - 'null'
+          description: base_game, expansion, edition ... as the graph sends it.
+        first_release_date:
+          type:
+            - string
+            - 'null'
+        date_precision:
+          type:
+            - string
+            - 'null'
+        first_release_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        developer:
+          type:
+            - string
+            - 'null'
+        image_url:
+          type:
+            - string
+            - 'null'
+          description: The game's artwork on the Universe media host; null when the deployment has no media host configured.
+        wikidata_qid:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        mobygames_id:
+          type:
+            - string
+            - 'null'
+        igdb_slug:
+          type:
+            - string
+            - 'null'
+        steam_app_ids:
+          type: array
+          items:
+            type: string
+        source:
+          type:
+            - string
+            - 'null'
+    GameSeries:
+      type: object
+      required:
+        - id
+        - name
+        - developers
+      description: |
+        The game series a node points at, resolved via the node's permanent
+        games.game_series id UUID (the Universe Game_Series node). developers
+        is the graph's sorted developer-name projection, so the card needs no
+        join.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        series_kind:
+          type:
+            - string
+            - 'null'
+        wikidata_qid:
+          type:
+            - string
+            - 'null'
+        description:
+          type:
+            - string
+            - 'null'
+        developers:
+          type: array
+          items:
+            type: string
+        official_website:
+          type:
+            - string
+            - 'null'
+        image_url:
+          type:
+            - string
+            - 'null'
+        source:
+          type:
+            - string
+            - 'null'
+    GameAward:
+      type: object
+      required:
+        - id
+        - name
+      description: |
+        The game award entry a node points at (one nominee-entry result),
+        resolved via the node's permanent games.game_award id UUID. The card
+        shows game_image_url, category_label, award_body_label · award_year,
+        description, game_name and the result badge. game_name and
+        game_image_url are the awarded game's, read live from video_game.
+        award_body_label and category_label are the keys rendered as titles.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        award_body_key:
+          type:
+            - string
+            - 'null'
+        award_body_label:
+          type:
+            - string
+            - 'null'
+        ceremony_key:
+          type:
+            - string
+            - 'null'
+        category_key:
+          type:
+            - string
+            - 'null'
+        category_label:
+          type:
+            - string
+            - 'null'
+        award_entry_key:
+          type:
+            - string
+            - 'null'
+        award_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        subject_kind:
+          type:
+            - string
+            - 'null'
+        result:
+          type:
+            - string
+            - 'null'
+          description: winner or nominee; null while unresolved.
+        video_game_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        game_name:
+          type:
+            - string
+            - 'null'
+        game_image_url:
+          type:
+            - string
+            - 'null'
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source:
+          type:
+            - string
+            - 'null'
+    StageProduction:
+      type: object
+      required:
+        - id
+        - title
+        - source_names
+        - source_urls
+      description: |
+        The stage production a node points at, resolved via the node's
+        permanent stage.stage_production id UUID (the Universe
+        Stage_Production node). The card shows poster_url, title, market,
+        description, the form and production_kind chips and opening_date.
+        Dates are ISO days (YYYY-MM-DD).
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        form:
+          type:
+            - string
+            - 'null'
+          description: play, musical ...
+        production_kind:
+          type:
+            - string
+            - 'null'
+          description: original, revival ...
+        market:
+          type:
+            - string
+            - 'null'
+          description: broadway, west_end ...
+        season_label:
+          type:
+            - string
+            - 'null'
+        run_status:
+          type:
+            - string
+            - 'null'
+        official_website_url:
+          type:
+            - string
+            - 'null'
+        poster_url:
+          type:
+            - string
+            - 'null'
+        first_preview_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        opening_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        accepted_credit_count:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        credit_coverage:
+          type:
+            - string
+            - 'null'
+        source_names:
+          type: array
+          items:
+            type: string
+        source_urls:
+          type: array
+          items:
+            type: string
+        source:
+          type:
+            - string
+            - 'null'
+    StageAward:
+      type: object
+      required:
+        - id
+        - name
+        - recipient_display_names
+        - production_titles
+      description: |
+        The stage award entry a node points at (one scoped award result on a
+        production), resolved via the node's permanent stage.stage_award id
+        UUID. The card shows poster_url, category_name, awarding_body ·
+        award_year, description, the recipient names and the outcome badge.
+        poster_url is the award's own copy, else the production's.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        awarding_body:
+          type:
+            - string
+            - 'null'
+        awarding_body_key:
+          type:
+            - string
+            - 'null'
+        award_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        category_name:
+          type:
+            - string
+            - 'null'
+        category_key:
+          type:
+            - string
+            - 'null'
+        outcome:
+          type:
+            - string
+            - 'null'
+          description: winner, nominee or honoree.
+        result_scope:
+          type:
+            - string
+            - 'null'
+        poster_url:
+          type:
+            - string
+            - 'null'
+        production_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        recipient_display_names:
+          type: array
+          items:
+            type: string
+        production_titles:
+          type: array
+          items:
+            type: string
+        source_url:
+          type:
+            - string
+            - 'null'
+        source:
+          type:
+            - string
+            - 'null'
     PathPerson:
       type: object
       required:
@@ -20353,8 +21123,9 @@ components:
       description: |
         One discover_node enriched with the entity it points at. entity_type
         names the joined table (persons | companies | film_tv | film_tv_award |
-        funding_rounds | music_group | music_recording |
-        live_events — plain string, no enum) and node_uuid is that table's row
+        funding_rounds | music_group | music_recording | live_events |
+        video_game | game_series | game_award | stage_production |
+        stage_award — plain string, no enum) and node_uuid is that table's row
         id; exactly one nested entity is present.
 
         node_uuid is also the node's id in the master graph — one value, so a
@@ -20391,6 +21162,16 @@ components:
           $ref: '#/components/schemas/MusicGroup'
         music_recording:
           $ref: '#/components/schemas/MusicRecording'
+        video_game:
+          $ref: '#/components/schemas/VideoGame'
+        game_series:
+          $ref: '#/components/schemas/GameSeries'
+        game_award:
+          $ref: '#/components/schemas/GameAward'
+        stage_production:
+          $ref: '#/components/schemas/StageProduction'
+        stage_award:
+          $ref: '#/components/schemas/StageAward'
         paths_to_person:
           type: array
           items:
@@ -20501,6 +21282,8 @@ components:
         - request_panel_title
         - request_header_title
         - modified
+        - batch_id
+        - failure_reason
         - leverage_loop_suggestions
         - leverage_loop_suggestion_count
         - created_at
@@ -20519,6 +21302,7 @@ components:
           description: Always `loop` on this surface.
         status:
           type: string
+          description: 'One of draft, submitted, processing, suggestion, failed, archived. `processing` means the worker is filing or polling the Universe loop; `suggestion` means the batch is stored; `failed` means the pull ended without suggestions: Universe failed it, it timed out here, or it could not be stored (see `failure_reason`). A failed loop can be dispatched again.'
         request_panel_title:
           type: string
         request_header_title:
@@ -20548,6 +21332,17 @@ components:
           description: Raw JSON (array of strings) or null.
         modified:
           type: boolean
+        batch_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The id Universe's package is stored under, reserved just before the store. Read the batch via `GET /suggestion-batches/{batch_id}` once `status` is `suggestion`; a `processing` or `failed` loop may carry an id whose batch was never stored. Null before delivery.
+        failure_reason:
+          type:
+            - string
+            - 'null'
+          description: Why the loop is `failed`, or what a `processing` loop is waiting on while it retries. Plain language, safe to show; technical causes stay in the server logs. Null otherwise.
         person:
           oneOf:
             - $ref: '#/components/schemas/ContextPerson'
@@ -20655,7 +21450,7 @@ components:
             - 'null'
         status:
           type: string
-          description: One of draft, submitted, processing, suggestion, archived.
+          description: '`archived` from any status, or `draft` / `submitted` while the loop is still a draft. Other values are rejected.'
         number_of_results:
           type: integer
           minimum: 1
@@ -20799,6 +21594,26 @@ components:
         music_recording:
           oneOf:
             - $ref: '#/components/schemas/MusicRecording'
+            - type: 'null'
+        video_game:
+          oneOf:
+            - $ref: '#/components/schemas/VideoGame'
+            - type: 'null'
+        game_series:
+          oneOf:
+            - $ref: '#/components/schemas/GameSeries'
+            - type: 'null'
+        game_award:
+          oneOf:
+            - $ref: '#/components/schemas/GameAward'
+            - type: 'null'
+        stage_production:
+          oneOf:
+            - $ref: '#/components/schemas/StageProduction'
+            - type: 'null'
+        stage_award:
+          oneOf:
+            - $ref: '#/components/schemas/StageAward'
             - type: 'null'
         paths_to_person:
           type: array
@@ -20960,6 +21775,345 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/PageMeta'
+    SuggestionWhy:
+      type: object
+      required:
+        - headline
+        - body
+      properties:
+        headline:
+          type: string
+        body:
+          type: array
+          items:
+            type: string
+    SuggestionHook:
+      type: object
+      required:
+        - entity_type
+        - node_uuid
+        - angle
+        - text
+      properties:
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+          format: uuid
+        angle:
+          type: string
+        text:
+          type: string
+    SuggestionTrajectory:
+      type: object
+      required:
+        - ref
+        - rank
+        - connector_node_uuids
+        - body
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        connector_node_uuids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        body:
+          type: array
+          items:
+            type: string
+    SuggestionSequenceStep:
+      type: object
+      required:
+        - rank
+        - headline
+        - body
+        - trajectory_refs
+      properties:
+        rank:
+          type: integer
+        headline:
+          type: string
+        body:
+          type: array
+          items:
+            type: string
+        trajectory_refs:
+          type: array
+          items:
+            type: string
+    SuggestionEntity:
+      allOf:
+        - $ref: '#/components/schemas/Node'
+        - type: object
+          required:
+            - role
+          properties:
+            role:
+              type: string
+              description: The entity's role on this suggestion, e.g. `suggested`, `beneficiary`, `connector`, `target_org`.
+    SuggestionActionGroup:
+      type: object
+      required:
+        - ref
+        - rank
+        - trajectory_ref
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        trajectory_ref:
+          type:
+            - string
+            - 'null'
+    SuggestionAction:
+      type: object
+      required:
+        - ref
+        - group_ref
+        - action_type
+        - rank
+        - label
+        - target_node_uuid
+        - params
+      properties:
+        ref:
+          type: string
+        group_ref:
+          type: string
+        action_type:
+          type: string
+          description: One of `make_intro`, `draft_email`, `draft_sms`, `create_task`, `leverage_loop`.
+        rank:
+          type: integer
+        label:
+          type: string
+        target_node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        params:
+          type: object
+          additionalProperties: true
+          description: 'Typed by `action_type`, as delivered: `draft_email` has ordered `emails[]` and `draft.subject`/`draft.message`; `draft_sms` has ordered `mobile_phones[]` and `draft.message`; `make_intro` has `workflow`, `recipients[]` (each with `emails[]`) and `steps[]`; `create_task` has `due_in_days`; `leverage_loop` is `{}`.'
+    FeedSuggestion:
+      type: object
+      description: One stored suggestion with its batch context and hydrated nodes. `node` is the suggested entity's card in the shared node shape; `entities` are the registry entries in the same shape plus `role`. Nullable fields are present as null.
+      required:
+        - id
+        - batch_id
+        - batch_seq
+        - batch_status
+        - generated_at
+        - source_ref
+        - rank
+        - entity_type
+        - node_uuid
+        - content_status
+        - suggestion_mode
+        - badge
+        - why
+        - score
+        - key_people
+        - hooks
+        - trajectories
+        - suggested_sequencing
+        - entities
+        - action_groups
+        - actions
+        - paths_processing
+        - dismissed_at
+        - created_at
+        - node
+      properties:
+        id:
+          type: string
+          format: uuid
+        batch_id:
+          type: string
+          format: uuid
+        batch_seq:
+          type: integer
+        batch_status:
+          type: string
+          description: 'The owning batch''s status: `complete`, `partial` or `failed`. The feed only lists `complete`.'
+        generated_at:
+          type: string
+          format: date-time
+        source_ref:
+          type: string
+        rank:
+          type: integer
+        entity_type:
+          type: string
+          description: 'Table the suggested entity lives in: `persons`, `companies`, ...'
+        node_uuid:
+          type: string
+          format: uuid
+        content_status:
+          type: string
+          description: '`ready` or `placeholder`.'
+        suggestion_mode:
+          type:
+            - string
+            - 'null'
+        badge:
+          type:
+            - string
+            - 'null'
+        why:
+          oneOf:
+            - $ref: '#/components/schemas/SuggestionWhy'
+            - type: 'null'
+        score:
+          type: object
+          additionalProperties: true
+        key_people:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+            format: uuid
+        hooks:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: '#/components/schemas/SuggestionHook'
+        trajectories:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionTrajectory'
+        suggested_sequencing:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionSequenceStep'
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionEntity'
+        action_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionActionGroup'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionAction'
+        paths_processing:
+          type: boolean
+          description: True while the caller's connection paths to the suggested entity are being built.
+        dismissed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        node:
+          $ref: '#/components/schemas/Node'
+    ListSuggestionFeedEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SuggestionBatch:
+      type: object
+      required:
+        - id
+        - request_suggestion_id
+        - organization_id
+        - requested_by
+        - suggestion_type
+        - beneficiary_contact_id
+        - origin
+        - trigger_source
+        - batch_seq
+        - status
+        - schema_version
+        - suggestion_count
+        - generated_at
+        - ingested_at
+        - suggestions
+      properties:
+        id:
+          type: string
+          format: uuid
+        request_suggestion_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        requested_by:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        suggestion_type:
+          type: string
+        beneficiary_contact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        origin:
+          type: string
+        trigger_source:
+          type:
+            - string
+            - 'null'
+        batch_seq:
+          type: integer
+        status:
+          type: string
+          description: '`complete`, `partial` or `failed`, as stored.'
+        schema_version:
+          type: integer
+        suggestion_count:
+          type: integer
+        generated_at:
+          type: string
+          format: date-time
+        ingested_at:
+          type: string
+          format: date-time
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedSuggestion'
+    SuggestionBatchEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/SuggestionBatch'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     Rebuild:
       type: object
       required:
@@ -21786,7 +22940,7 @@ components:
         full_name:
           type: string
           maxLength: 200
-          description: Required unless person_id is set. Seeds the provider and, split on the last whitespace, names the local row.
+          description: Required unless person_id identifies a person with a stored name. Seeds the provider and fills a blank local name, split on the last whitespace. Existing names are preserved.
         title:
           type: string
         company_id:
@@ -21947,7 +23101,7 @@ components:
         status:
           type: string
           description: |
-            found (matched an existing person) | created (person was created via the enrichment provider on this call; enrichment continues in the background) | pending_enrichment (no match and the signal cannot seed a create yet).
+            found (matched an existing person) | created (person was created via the enrichment provider on this call; enrichment continues in the background) | pending_enrichment (no match and the signal cannot seed a create yet, or the person's name has not resolved).
         person:
           oneOf:
             - $ref: '#/components/schemas/PersonLookupResult'
@@ -22116,7 +23270,7 @@ components:
     PersonDetail:
       type: object
       description: |
-        Full person detail (GET /persons/{id}). Fields backed by tables we don't have yet are present but empty/null: work_history, education_experiences, skills, roles, scheduling_links, mutual_connections (→ []), birthday, financial_data (→ null). See docs/master-detail-missing-tables.md.
+        Full person detail (GET /persons/{id}). Expertise, skills, and roles are the arrays stored from the Universe projection; each is empty when no values are available. Unimplemented sections remain empty/null: work_history, education_experiences, scheduling_links, mutual_connections (→ []), birthday, financial_data (→ null).
       properties:
         id:
           type: string
@@ -22165,12 +23319,18 @@ components:
         education_experiences:
           type: array
           items: {}
+        expertise:
+          type: array
+          items:
+            type: string
         skills:
           type: array
-          items: {}
+          items:
+            type: string
         roles:
           type: array
-          items: {}
+          items:
+            type: string
         person_contact:
           oneOf:
             - $ref: '#/components/schemas/ContactNested'
@@ -22495,6 +23655,14 @@ components:
       properties:
         company_name:
           type: string
+        profile_urls:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+          description: |
+            Company profile URLs discovered on the original website. LinkedIn is preferred, then Crunchbase, as Universe's primary profile signal. Accepted profiles are also merged into the saved company's links.
         domain:
           type: string
           description: |
@@ -22555,14 +23723,22 @@ components:
       properties:
         domain:
           type: string
-          description: The company's website host, e.g. acme.com.
+          description: A website URL or host, e.g. https://www.acme.com/about or acme.com.
     CompanyLookupResult:
       type: object
-      description: Lean company returned when a lookup matches.
+      description: Company metadata; logo.dev and website previews have no canonical id until saved.
       properties:
         id:
-          type: string
+          type:
+            - string
+            - 'null'
           format: uuid
+        profile_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Company profiles published on the matching website.
         name:
           type: string
         logo:
@@ -22582,7 +23758,7 @@ components:
         status:
           type: string
           description: |
-            found (matched an existing company) | created (company was created via the enrichment provider on this call) | pending_enrichment (no match and the signal cannot seed a create yet).
+            found (preview or existing company) | created (company resolved and persisted through Universe) | manual_entry (automatic lookup exhausted; preserve the requested domain and enter a name).
         company:
           oneOf:
             - $ref: '#/components/schemas/CompanyLookupResult'
@@ -22765,10 +23941,38 @@ components:
             - 'null'
         collection_nodes_count:
           type: integer
+    CompanyEmployee:
+      type: object
+      description: One live contact belonging to the caller with a role at this company.
+      required:
+        - id
+        - person_id
+        - name
+        - avatar
+        - current_title
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The caller's person-contact ID.
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+          description: The role at this company, including the former role for past employees.
     CompanyDetail:
       type: object
       description: |
-        Full company detail (GET /companies/{id}). Sections backed by tables we don't have yet are present but empty/null: current_employees / past_employees (→ []), total_contacts_linked (→ 0), financial_data (→ null), funding (→ []). See docs/master-detail-missing-tables.md.
+        Full company detail (GET /companies/{id}). Employee lists contain the caller's live contacts, even when the company is not saved. A person's current company or a current work-history role places them in current_employees; other matching work history places them in past_employees. Each person appears once, with current membership taking precedence. Financials use a separate endpoint.
       properties:
         id:
           type: string
@@ -22839,12 +24043,15 @@ components:
           type: boolean
         current_employees:
           type: array
-          items: {}
+          items:
+            $ref: '#/components/schemas/CompanyEmployee'
         past_employees:
           type: array
-          items: {}
+          items:
+            $ref: '#/components/schemas/CompanyEmployee'
         total_contacts_linked:
           type: integer
+          description: Distinct contacts across both employee lists.
         show_add_button:
           type: boolean
         visible_button:
@@ -23679,6 +24886,13 @@ components:
         format: uuid
     SuggestionID:
       name: suggestion_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BatchID:
+      name: batch_id
       in: path
       required: true
       schema:
