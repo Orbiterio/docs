@@ -71,7 +71,7 @@ paths:
         - Projections
       summary: Get the versioned projection for a company, person, stage production or video game
       description: |
-        Returns `company_projection.v1`, `person_projection.v1`, `stage_production_projection.v1` or `video_game_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. A video game (including a legacy `film_tv` row the game waterfall owns) answers 404 until its publication is promoted; the body served is the one frozen at promotion, so a refresh in flight never leaks. Requires scope `projections:pull`.
+        Returns `company_projection.v1`, `person_projection.v1`, `stage_production_projection.v1` or `video_game_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. Once a run HAS satisfied, a later run in flight no longer hides the package: the last satisfied one is served with `meta.projection_status: stale` until the new run settles. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. A video game (including a legacy `film_tv` row the game waterfall owns) answers 404 until its publication is promoted; the body served is the one frozen at promotion, so a refresh in flight never leaks. Requires scope `projections:pull`.
       security:
         - bearerAuth: []
       parameters:
@@ -111,7 +111,7 @@ paths:
       description: |
         Returns the entity plus everything one hop away, as nodes and edges copied verbatim from the graph, for a consumer to write into its own graph unchanged.
         This projection is derived from the graph, not from Postgres rows. The row-derived projections carry only what has rows; several edge types have none, FOUNDED among them, so a consumer that rebuilds relationships from those loses them with no error.
-        Geography, expertise and tombstoned nodes are excluded, and a node reached by several edges is returned once. Exclusions are policy, not a caller option: they depend on the ontology, and two consumers copying one entity must get the same graph.
+        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
         Only edges incident to the anchor are returned. An edge between two neighbours belongs to their own neighbourhoods.
         Node and edge properties are returned verbatim and are deliberately untyped: the same key carries different types across labels, so updated_at is a string on Person and an integer on Company.
         Embeddings are returned as arrays of numbers. A consumer must re-wrap them as vectors on write, or its vector index will not see them and search will silently return nothing.
@@ -145,6 +145,24 @@ paths:
           schema:
             type: boolean
             default: true
+        - name: include_reference_nodes
+          in: query
+          description: Include direct geography and expertise neighbors for answer context. Defaults to false for graph-copy consumers.
+          schema:
+            type: boolean
+            default: false
+        - name: paginate
+          in: query
+          description: Use bounded pages ordered by neighbor UUID. Follow next_cursor until absent.
+          schema:
+            type: boolean
+            default: false
+        - name: after
+          in: query
+          description: Previous next_cursor. Requires paginate=true; omit for the first page.
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
           description: The entity and its one-hop neighbourhood.
@@ -172,7 +190,7 @@ paths:
         Returns the nodes nearest the query, each with its one-hop edges, in the same node/edge shape as the subgraph projection.
         The counterpart to the subgraph read: that one needs an id you already hold, this one is how you find an id you do not. The query is embedded server-side with the same model that wrote the node vectors — vectors from two models are not comparable, so a consumer cannot supply its own vector.
         score is a DISTANCE: lower is closer, and 0 would be identical. Matched nodes carry it and sort first; a node pulled in by expansion has score null and is_match false. Relevance is cut both absolutely and relative to the best hit, so a query with one good answer returns one node no matter what limit says — limit is an upper bound, not a page size, and there is no pagination.
-        Geography, expertise and tombstoned nodes are excluded, as in the subgraph read: both are hubs that connect everyone to everyone.
+        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Tombstoned nodes are always excluded.
         A client with entity-type entitlements is narrowed to those types automatically; asking only for types it may not read is a 403, not an empty result. Neighbours are not filtered by entity type — a match's surroundings describe it, and cutting them would misdescribe it.
         Requires scope `graph:search`.
       security:
@@ -2135,7 +2153,7 @@ paths:
         - Enrichment
       summary: Replay people envelopes the person handoff never ran for (management plane)
       description: |
-        Closes the gap left by fetch-once: a company whose `exa_c_suite` or `yc_data` envelope landed before the person handoff existed keeps the envelope and never calls the handoff again, so its executives and founders were never created. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants this, because the call creates entities and spends provider credit (up to three paid LinkedIn lookups per company). One bounded batch per call, so an operator watches the counts rather than starting an unbounded sweep. Idempotent: a company that succeeds gets a marker attempt row and drops out of the next batch, and the person entry gate dedupes anyone already created. `remaining` is true when the batch filled — call again until it is false, since a full batch is not a cleared backlog.
+        Closes the gap left by fetch-once: a company whose `exa_c_suite` or `yc_data` envelope landed before the person handoff existed keeps the envelope and never calls the handoff again, so its executives and founders were never created. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants this, because the call creates entities and spends provider credit (up to three paid LinkedIn lookups per company). Only seed companies (cascade depth zero) are eligible. Set `company_id` for recovery of one company. One bounded batch per call, so an operator watches the counts rather than starting an unbounded sweep. Idempotent: a company that succeeds gets a marker attempt row and drops out of the next batch, and the person entry gate dedupes anyone already created. `remaining` is true when the batch filled — call again until it is false, since a full batch is not a cleared backlog.
       security:
         - bearerAuth: []
       parameters:
@@ -2147,6 +2165,14 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - name: company_id
+          in: query
+          required: false
+          description: |
+            Limit recovery to this seed company. Leaf companies and completed handoffs are excluded. Invalid or empty IDs never start a batch.
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
           description: The batch result, with every count beside its denominator.
@@ -2341,7 +2367,7 @@ paths:
         - Enrichment
       summary: Read one person's enrichment receipts (management plane)
       description: |
-        Answers "why is this person not done" from the stage ledger. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key: attempt counts, error codes and lease deadlines are operations data. There is no scope that grants this. Strictly read-only: it never claims, releases or heartbeats a receipt, so diagnosing a stalled run cannot alter it. Per run it reports the seven completion counts (each with its denominator), the terminal predicate with its pending and failed clauses, the visibility verdict alongside `has_strong_identity` so a false verdict says which half of the gate failed, and the company dependency. Per stage it reports status, attempts, the failure code, `will_retry` (whether the sweeper is coming back), `parked`, `duration_ms`, and — for a running stage — `running_for_seconds` beside `heartbeat_age_seconds`, whose combination is the only way to see a step that is wedged but still alive. The identity (Exa Fiber) lane appears as its own run: it carries a separate run id by design, so it is never scored by the predicate.
+        Answers "why is this person not done" from the stage ledger. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key: attempt counts, error codes and lease deadlines are operations data. There is no scope that grants this. Strictly read-only: it never claims, releases or heartbeats a receipt, so diagnosing a stalled run cannot alter it. Per run it reports the seven completion counts (each with its denominator), the terminal predicate with its pending and failed clauses, the visibility verdict based on a nonblank basic `bio_500`, independent identity diagnostics, and the company dependency. Per stage it reports status, attempts, the failure code, `will_retry` (whether the sweeper is coming back), `parked`, `duration_ms`, and — for a running stage — `running_for_seconds` beside `heartbeat_age_seconds`, whose combination is the only way to see a step that is wedged but still alive. The identity (Exa Fiber) lane appears as its own run: it carries a separate run id by design, so it is never scored by the predicate.
       security:
         - bearerAuth: []
       parameters:
@@ -3555,6 +3581,16 @@ components:
           type:
             - string
             - 'null'
+        acquired_ticker:
+          type:
+            - string
+            - 'null'
+          description: The acquirer stock symbol, including exchange when known (e.g. NASDAQ:ADBE).
+        acquired_date:
+          type:
+            - string
+            - 'null'
+          description: Acquisition date at source precision (YYYY, YYYY-MM, or YYYY-MM-DD).
         stock_label:
           type:
             - string
@@ -3575,7 +3611,7 @@ components:
             - string
             - 'null'
           format: uuid
-          description: No source yet — always null. Would be a universe entity id.
+          description: Canonical company id resolved during enrichment; null until the acquirer is identified.
         acquisition_price:
           oneOf:
             - $ref: '#/components/schemas/ProjectionMoney'
@@ -3605,6 +3641,8 @@ components:
         - revenue
         - acquired
         - acquired_by
+        - acquired_ticker
+        - acquired_date
         - stock_label
         - acquired_by_permalink
         - crunchbase_acquirer_id
@@ -3636,7 +3674,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -4486,6 +4524,7 @@ components:
               - evidence
         visibility:
           type: boolean
+          description: True when the basic bio_500 is nonblank, independently of enrichment completion and Deep Bio.
         is_angel:
           type: boolean
         is_c_suite:
@@ -4583,7 +4622,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -5961,6 +6000,10 @@ components:
           type: boolean
           description: |
             True when limit dropped neighbours. Edges to a dropped node are omitted, so a partial neighbourhood never reads as complete.
+        next_cursor:
+          type: string
+          format: uuid
+          description: Present when a paginated read has more neighbors. Pages keep the same anchor and never expand neighbors.
     SubgraphEnvelope:
       type: object
       required:
@@ -5994,6 +6037,10 @@ components:
           default: true
           description: |
             Vectors dominate the payload at roughly 107KB per node. Turn them off for structure only; keep them if the consumer intends to search its own copy, since they are never regenerated downstream.
+        include_reference_nodes:
+          type: boolean
+          default: false
+          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards.
         entity_types:
           type: array
           items:
@@ -6345,7 +6392,7 @@ components:
         Whether the consumer package rode along on this get-add and, when it did not, which gate stopped it. Always present, including when `projection` is null.
         The response status is always 200 — a resolved entity is not an error. `class` is an HTTP-SHAPED CLASS for the projection field alone, so a client can branch without knowing every slug: 200 you have it, 202 it is coming, 4xx this call will not give it to you.
         `poll` is DERIVED from `code`; a client that reads only `poll` is never wrong about whether to come back.
-        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `202:enriching`; `409:unsatisfied` is reserved for a run that settled with a failed clause.
+        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `200:stale` with the package from the last satisfied run, or `202:enriching` when no run has ever satisfied; `409:unsatisfied` is reserved for a run that settled with a failed clause.
         The two `disputed` codes are the pair to handle deliberately. They mean a provider resolved an IDENTITY that contradicts the name we hold, so we no longer know for certain who the record describes. `200:disputed` still carries the package — most of it is likely correct, only the identity is in doubt, so hold the record rather than discard it and do not act on its identity; `409:disputed` means there is no package to send. Both are `poll: false`: the record is frozen on our side and no further run will revisit it until a human reconciles it, so re-reading never changes the answer. Tell us instead.
       properties:
         code:
@@ -9824,10 +9871,14 @@ components:
             type: string
         visibility:
           type: boolean
+          description: True when the distilled basic bio_500 is nonblank; independent of stage completion and Deep Bio.
+        has_bio_500:
+          type: boolean
+          description: Whether a nonblank basic bio_500 is available.
         has_strong_identity:
           type: boolean
           description: |
-            The other half of the visibility gate, reported separately so a false verdict says which half failed.
+            Whether a strong identity was resolved. Diagnostic only; this does not gate visibility.
       required:
         - settled
         - satisfied
@@ -9835,6 +9886,7 @@ components:
         - pending_clauses
         - failed_clauses
         - visibility
+        - has_bio_500
         - has_strong_identity
     PersonCompanyDependency:
       type: object
