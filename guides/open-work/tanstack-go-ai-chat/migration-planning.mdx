@@ -1,0 +1,149 @@
+---
+title: "Migration Planning"
+description: "Completed Phase I schema, remaining application work, historical Xano observations, and deferred chat surfaces."
+icon: "route"
+---
+
+<Info>
+**Current implementation authority:** [Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat). The decisions below supersede the earlier keyword-classifier, model-submit, history-owned state and automatic two-turn submission proposals. Historical observations are retained for context, not as build instructions.
+</Info>
+
+## Current Phase I decisions
+
+| Topic | Decision |
+| --- | --- |
+| Runtime | Go only in `orbiter-backend`; React and TypeScript TanStack Start in `orbiter-frontend` |
+| AI loop | TypeScript `chat()` and `.server()` tools, including the bounded classifier; no Go LLM endpoints |
+| Model routing | Gemma for the configured opening user turns, then a second OpenRouter model; policy pinned per conversation and execution metadata per turn |
+| State authority | Go `suggestions.suggestion_request` and versioned intake; transcript/tool results are evidence and projections |
+| Database schema | Complete: PRs #232 and #233 merged, deployed and verified; no table creation, column additions or new migrations in the remaining Phase I build |
+| Persistence | Implement atomic Go checkpoints and effect receipts using the existing conversations, runs, messages and mutations tables |
+| Draft | Created once on first accepted input, before classification, with null class and null beneficiary |
+| Classifier | LLM call in TypeScript or deterministic accepted routing choice; Go validates registry membership and commits route |
+| Routing cap | At most two unresolved routing turns; fallback to `plan_outcome` still needs real goal, slots, result count and user SUBMIT |
+| Answers | Structured option/multi-select/free-text/skip metadata; Go-derived discrete values, source evidence for extraction |
+| Retry | Go reloads original accepted input; logical-turn effects are not repeated under fresh run/tool IDs |
+| Handoff | Durable exit message and completed run committed with state; no external agent contact |
+| Submit | Dedicated authenticated user-action handler, never a model tool; reviewed version frozen in receipt/snapshot; status submitted |
+| Phase I endpoint | Same approved request ID and receipt restored after refresh; no Universe/queue/results work |
+| Registry/library versions | Separate pinned contracts; explicit lookup and historical rendering; no silent reinterpretation |
+| Auth | Existing frontend GCP auth/refresh cookie path; Go verifies WorkOS bearer and current local account/org membership |
+| OpenUI | Restricted intake library; headless parser on the TypeScript server; strict final syntax/tree policy |
+| Unsent edits | Bounded session-local presentation cache; never authoritative intake or a new server table |
+| Verification | Agent operates the real browser flow and independently checks the final database record; every acceptance row has evidence |
+
+See [current API inventory](/guides/open-work/tanstack-go-ai-chat/apis#current-phase-i-authority) and [verified table inventory](/guides/open-work/tanstack-go-ai-chat#phase-i-build-authority). Backend [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) delivered the intake fields and four copilot tables; [PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) completed the message/run deletion guard. The live dev AlloyDB check on 2026-09-15 at 10:37:57 UTC confirmed 188 applied migrations through `20260915131618`, all required fields and `ON DELETE NO ACTION` on `copilot_messages_run_fk`. Backend baseline: `edc3b71adef8effc431de964b7d757b31740dcd3`. The earlier 185-migration Docker snapshot is stale; the plan records the current environment checks. Schema readiness does not establish API or browser-flow readiness.
+
+### Chat harness — TanStack AI + OpenUI
+
+Keep the existing `/api/tanstack-ai-chat` TypeScript server route, `useChat`, and OpenUI Renderer. The route loads Go-authoritative history, performs model/tool orchestration, commits changes through signed Go APIs, and streams output. A TypeScript backend client calls Go over HTTP; no Go runs inside the frontend.
+
+Use the installed APIs documented in the build plan: `systemPrompts`, UIMessage text `parts[].content`, and `lang-core@0.2.4` `generatePrompt` / `PromptSpec`. `defineAIPersistence` is not an installed core export. Do not attach a competing transcript saver. Checkpoint recovery is the Phase I promise; exact stream replay requires a separately specified chunk log. A completed stream alone cannot enable an unsaved question or SUBMIT.
+
+Generate prompt spec and parser schema from the same small versioned component library. Keep OpenUI runtime queries/actions disabled and validate the final source/tree explicitly. `onStateUpdate` is unsent presentation state; explicit accepted answers and the user-controlled SUBMIT action have separate contracts.
+
+### Model selection and later work
+
+Start intake on an exact configured Gemma model, then switch to a continuation candidate via OpenRouter after the configured number of accepted user turns. The TypeScript server owns routing; Go stores `copilot.runs.execution_metadata` and returns the accepted turn index. Retries preserve the selected model, conversation policy and original turn. See the [model bake-off contract](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#gemma-to-second-model-bake-off).
+
+Exact model IDs, the opening-turn threshold and the winning continuation candidate remain to be selected. Compare candidates with repeated OpenUI multiple-choice/multi-select/free-text/skip flows through explicit Submit and independent SQL verification. Both models perform Phase I intake; working-phase agents, `draft_intro`, code mode, Gateway, memory and agent orchestration remain deferred.
+
+Phase II can add Universe dispatch and generation; Phase III may add alternate delivery formats and result actions. `deliver_format` remains in the existing table and is untouched. Phase I consumes the existing schema without a mode rename or legacy-row reinterpretation.
+
+## Historical Xano outcomes — 2026-09-14 snapshot
+
+The original Xano lifecycle was draft → processing → suggestion → archived. The new Go intake lifecycle adds an explicit submitted boundary; old processing rows are not automatically converted into new chat drafts.
+
+### How Xano works now
+
+| Step | Endpoint | What it does | Writes |
+| --- | --- | --- | --- |
+| Classify | `POST /outcomes/classify` | Pure JS keyword rules → `class_slug` + confidence. No LLM, no persistence | — |
+| Clarify | `POST /outcomes/clarifications` | Clarification options for ambiguous prompts *(shell)* | — |
+| Draft | `POST /outcomes/drafts` *(shell)* | Create/update request row: `class_slug`, `request_context` = prompt, `status=draft`, `llm_summary_context` = `{source, thread_id, run_id, draft}` | `suggestion_request` add/edit |
+| Interview | `POST /outcomes/interview`, `/find-talent/interview` | Stateless LLM turn: rebuild transcript from client messages → per-class system prompt → OpenRouter → parsed JSON contract back | — |
+| Context patch | `PATCH /outcomes/drafts/{id}/context` *(shell)* | Persist title / running summary / `request_context` (`context_version` guard) | `suggestion_request` edit |
+| Submit metadata | `PATCH /outcomes/drafts/{id}/submit-metadata` | Persist `number_of_results` + `deliver_format` (enum-gated: `suggestions`/`csv`/`pdf`/`create collection`) | `suggestion_request` edit |
+| Dispatch | `POST /outcomes/dispatch` | Guard owner + mode + not-archived. `draft` → `processing`, overwrites `llm_summary_context` with the dispatch blob (`approval_id`, `dispatch_mode`, `selected_result_ids`, `query`, `class_override`, `requested_n`, `constraints`, `tool_calls`, `previous_context`). Already `processing`/`suggestion` → no-op | `suggestion_request` edit |
+| Files | `POST /outcomes/files` *(shell)* | Attach file/deck content to a draft | `suggestion_request_file` |
+| Pitch profiles | `GET/PATCH/POST /outcomes/pitch-profiles/*` *(shells)* | Read/update profile fields, summarize after edits, latest | `files.pitch_profiles` |
+| Transcript | `POST /threads/{id}/messages` | Appends each turn to the surface transcript table with (request, role, content) dedupe | `outcome_conversations` |
+| Results | `GET /outcomes/requests`, `results`, `results/{id}/nodes|actions|trajectories` *(shells)* | Read request list + result cards | — |
+
+### Historical interview response
+
+Xano returned strict JSON (`ready`, `summary`, `next_question`, options and related flags). Phase I preserves the user-facing intake questions and result-count gate, but replaces model-owned readiness with Go validation and streams restricted OpenUI Lang. Do not preserve the old JSON response or client-supplied history contract verbatim.
+
+### Historical class-source inventory
+
+These 26 rows explain the source-system coverage: 25 real classes and the `ask_back` sentinel. The current suggestions-owned Go registry exported by `/outcomes/classes` is authoritative; the frontend accent union is presentation metadata.
+
+| `class_slug` | Label | Xano classify | Xano prompt | FE accent/starter | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `find_investors` | Find investors | ✅ | ✅ | ✅ | Deck-path branch; silent default on no-match |
+| `find_talent` | Hire key talent | ✅ | ✅ | ✅ | Dedicated `find-talent/interview` skill (8 dimensions) |
+| `find_customers` | Find customers | ✅ | ✅ | ✅ | |
+| `find_advisors` | Find advisors | — | ✅ | ✅ | Reachable via `mode`/context only in Xano |
+| `find_cofounder` | Find a co-founder | ✅ | — | ✅ | Generic fallback prompt in Xano |
+| `find_partners` | Find partners | ✅ | ✅ | ✅ | |
+| `find_collaborators` | Find collaborators | ✅ | — | ✅ | Fallback |
+| `find_journalists` | Find journalists | ✅ | ✅ | ✅ | |
+| `find_deal_flow` | Deal flow | — | — | ✅ | Frontend-only class |
+| `make_purchase` | Make a purchase | ✅ | — | ✅ | Fallback; keyword trap for real-estate asks |
+| `find_acquisition` | Find acquisition | ✅ | — | ✅ | Fallback |
+| `find_speakers` | Find speakers | ✅ | ✅ | ✅ | |
+| `find_job` | Find a job | ✅ | — | ✅ | Fallback |
+| `get_advice` | Get advice | ✅ | — | ✅ | Also the "What can the engine do?" meta starter |
+| `travel` | Travel | — | — | ✅ | Frontend-only |
+| `find_co_investors` | Find co-investors | — | ✅ | ✅ | Prompt exists; unreachable via classify |
+| `find_event_attendees` | Find event attendees | — | ✅ | ✅ | Prompt exists; unreachable via classify |
+| `find_warm_intros` | Find warm intros | — | ✅ | ✅ | Prompt exists; unreachable via classify |
+| `plan_outcome` | Plan outcome | — | — | ✅ | Frontend-only |
+| `research_company` | Research company | — | — | ✅ | Frontend-only |
+| `research_person` | Research person | — | ✅ | ✅ | Prompt exists; unreachable via classify |
+| `research_topic` | Research topic | — | — | ✅ | Frontend-only |
+| `summarize_meeting` | Summarize meeting | — | ✅ | ✅ | 2-turn max prompt |
+| `talent_agent_requests` | Talent agent requests | — | — | starter only | Film/TV agency workflow starter; no accent yet |
+| `purchase_real_estate` | Real estate transaction | — | — | label only | Classifier-only slug — "buy a house in Costa Rica" lands here; context-floor case exists |
+| `ask_back` | Ask back | — | — | sentinel | Classifier needs more context before routing — not a real class, a clarification state |
+
+
+## Deferred surfaces
+
+`leverage_outcomes`, `how_i_know` and `meeting_prep` need later build plans. Existing `loop` is the button-only mode and must not be bulk-renamed. Future beneficiary outcomes may share outcome APIs only through an explicit contract extension; Phase I rejects non-null `person_id`. Serendipity remains agent-created and has no chat in this build. Relationship/meeting AI orchestration will also stay in TypeScript; Go supplies context/domain APIs.
+
+### Historical `leverage_outcomes` source flow
+
+The only difference between an `outcome` and a `leverage_outcome` is that a `leverage_outcome` is **for a specific person**:
+
+- `outcome` — "I want to hire a chief of staff"
+- `leverage_outcome` — "I want to help Katelyn hire a chief of staff"
+
+A `leverage_outcome` carries a contact ID for the person the outcome is for. In Xano that's `suggestion_request.master_person_id` (`draft.for_master_person_id`); in Go it's `suggestions.suggestion_request.person_id` / `contact_id`.
+
+<Note>
+Xano's `POST /leverage-loops/interview` is the `leverage_outcome` flow — the endpoint name predates the rename. In the Go model, `leverage_outcome` is an outcome request with a beneficiary person, not a separate pipeline.
+</Note>
+
+#### Historical Xano endpoints
+
+Same `suggestion_request` row, `copilot_mode = "loop"`. Fewer steps than outcomes — no clarify, files, or pitch-profile endpoints.
+
+| Step | Endpoint | What it does | Writes |
+| --- | --- | --- | --- |
+| Classify | `POST /leverage-loops/classify` *(shell)* | Loop intent classification with `target_master_person_id` context | — |
+| Draft | `POST /leverage-loops/drafts` | Create/update request row: `class_slug` (default `get_advice`), `request_context` = prompt, `master_person_id` = `draft.for_master_person_id` **(the beneficiary — the person being helped)**, `status=draft` | `suggestion_request` add/edit |
+| Interview | `POST /leverage-loops/interview` | Stateless LLM turn — richer context inputs than outcomes: `for_master_person_id`, `target_name`, `target_yaml_context`, `target_company_yaml_context`, `target_relationship_summary`, `self_yaml_context`, `self_company_yaml_context`, `current_summary` | — |
+| Context patch | `PATCH /leverage-loops/drafts/{id}/context` | Same as outcomes: title / summary / context | `suggestion_request` edit |
+| Dispatch | `POST /leverage-loops/dispatch` | Same guards (owner, `copilot_mode="loop"`, not archived); `draft` → `processing`, dispatch blob into `llm_summary_context` | `suggestion_request` edit |
+| Transcript | `POST /threads/{id}/messages` | Per-turn append with dedupe | `leverage_loop_conversations` |
+| Results | `GET /leverage-loops/requests`, `results/{id}/actions`, `results/{id}/trajectories` *(shells)* | Read request list + loop result cards | — |
+
+#### Historical interview contract
+
+Same strict JSON turn shape as outcomes, plus `structured_fields` — extracted snake_case values populated when `ready=true`. The system prompt injects the beneficiary context blocks — `[YOU]` (the helper), `[YOUR COMPANY]`, `[HELPING TARGET]` (name + `master_person_id` + YAML), `[TARGET COMPANY]`, `[YOUR RELATIONSHIP WITH TARGET]` — and writes every summary as "Helping {target}…". This is where `how_i_know` relationship data shows up inside the outcome flow.
+
+Result-count gate options here are 20 / 100 / 500. Class list adds `get_advice` (the default) to the shared set.
+
+
+Future result views may combine beneficiary outcome and button-only loop results, but their mode names and filters require a separate compatibility decision. Phase I lists only its bound `outcome` drafts/submitted requests; it does not hydrate result children, pitch profiles, files or beneficiary context.
