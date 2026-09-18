@@ -1,18 +1,58 @@
 ---
 title: "Migration Planning"
-description: "Scoping notes for the Tanstack AI Chat Xano-to-Go migration."
+description: "Completed Phase I schema, remaining application work, historical Xano observations, and deferred chat surfaces."
 icon: "route"
 ---
 
-<Check>
-There are the following AI chat modes: `outcomes`, `leverage_outcomes` (helping a specific person with something specific), `how_i_know`, `meeting_prep`.
+<Info>
+**Current implementation authority:** [Build Plan — Outcome Chat](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat). The decisions below supersede the earlier keyword-classifier, model-submit, history-owned state and automatic two-turn submission proposals. Historical observations are retained for context, not as build instructions.
+</Info>
 
-`meeting_prep` and `how_i_know` are not part of the suggestion engine — and `leverage_loop` has no AI chat, only a button to click.
-</Check>
+## Current Phase I decisions
 
-## `outcomes`
+| Topic | Decision |
+| --- | --- |
+| Runtime | Go only in `orbiter-backend`; React and TypeScript TanStack Start in `orbiter-frontend` |
+| AI loop | TypeScript `chat()` and `.server()` tools, including the bounded classifier; no Go LLM endpoints |
+| Model routing | Gemma for the configured opening user turns, then a second OpenRouter model; policy pinned per conversation and execution metadata per turn |
+| State authority | Go `suggestions.suggestion_request` and versioned intake; transcript/tool results are evidence and projections |
+| Database schema | Complete: PRs #232 and #233 merged, deployed and verified; no table creation, column additions or new migrations in the remaining Phase I build |
+| Persistence | Implement atomic Go checkpoints and effect receipts using the existing conversations, runs, messages and mutations tables |
+| Draft | Created once on first accepted input, before classification, with null class and null beneficiary |
+| Classifier | LLM call in TypeScript or deterministic accepted routing choice; Go validates registry membership and commits route |
+| Routing cap | At most two unresolved routing turns; fallback to `plan_outcome` still needs real goal, slots, result count and user SUBMIT |
+| Answers | Structured option/multi-select/free-text/skip metadata; Go-derived discrete values, source evidence for extraction |
+| Retry | Go reloads original accepted input; logical-turn effects are not repeated under fresh run/tool IDs |
+| Handoff | Durable exit message and completed run committed with state; no external agent contact |
+| Submit | Dedicated authenticated user-action handler, never a model tool; reviewed version frozen in receipt/snapshot; status submitted |
+| Phase I endpoint | Same approved request ID and receipt restored after refresh; no Universe/queue/results work |
+| Registry/library versions | Separate pinned contracts; explicit lookup and historical rendering; no silent reinterpretation |
+| Auth | Existing frontend GCP auth/refresh cookie path; Go verifies WorkOS bearer and current local account/org membership |
+| OpenUI | Restricted intake library; headless parser on the TypeScript server; strict final syntax/tree policy |
+| Unsent edits | Bounded session-local presentation cache; never authoritative intake or a new server table |
+| Verification | Agent operates the real browser flow and independently checks the final database record; every acceptance row has evidence |
 
-One `suggestion_request` row carries the whole lifecycle (`copilot_mode = "outcome"`); `status` walks `draft` → `processing` → `suggestion` → `archived`.
+See [current API inventory](/guides/open-work/tanstack-go-ai-chat/apis#current-phase-i-authority) and [verified table inventory](/guides/open-work/tanstack-go-ai-chat#phase-i-build-authority). Backend [PR #232](https://github.com/Orbiterio/orbiter-backend/pull/232) delivered the intake fields and four copilot tables; [PR #233](https://github.com/Orbiterio/orbiter-backend/pull/233) completed the message/run deletion guard. The live dev AlloyDB check on 2026-09-15 at 10:37:57 UTC confirmed 188 applied migrations through `20260915131618`, all required fields and `ON DELETE NO ACTION` on `copilot_messages_run_fk`. Backend baseline: `edc3b71adef8effc431de964b7d757b31740dcd3`. The earlier 185-migration Docker snapshot is stale; the plan records the current environment checks. Schema readiness does not establish API or browser-flow readiness.
+
+### Chat harness — TanStack AI + OpenUI
+
+Keep the existing `/api/tanstack-ai-chat` TypeScript server route, `useChat`, and OpenUI Renderer. The route loads Go-authoritative history, performs model/tool orchestration, commits changes through signed Go APIs, and streams output. A TypeScript backend client calls Go over HTTP; no Go runs inside the frontend.
+
+Use the installed APIs documented in the build plan: `systemPrompts`, UIMessage text `parts[].content`, and `lang-core@0.2.4` `generatePrompt` / `PromptSpec`. `defineAIPersistence` is not an installed core export. Do not attach a competing transcript saver. Checkpoint recovery is the Phase I promise; exact stream replay requires a separately specified chunk log. A completed stream alone cannot enable an unsaved question or SUBMIT.
+
+Generate prompt spec and parser schema from the same small versioned component library. Keep OpenUI runtime queries/actions disabled and validate the final source/tree explicitly. `onStateUpdate` is unsent presentation state; explicit accepted answers and the user-controlled SUBMIT action have separate contracts.
+
+### Model selection and later work
+
+Start intake on an exact configured Gemma model, then switch to a continuation candidate via OpenRouter after the configured number of accepted user turns. The TypeScript server owns routing; Go stores `copilot.runs.execution_metadata` and returns the accepted turn index. Retries preserve the selected model, conversation policy and original turn. See the [model bake-off contract](/guides/open-work/tanstack-go-ai-chat/build-plan-outcome-chat#gemma-to-second-model-bake-off).
+
+Exact model IDs, the opening-turn threshold and the winning continuation candidate remain to be selected. Compare candidates with repeated OpenUI multiple-choice/multi-select/free-text/skip flows through explicit Submit and independent SQL verification. Both models perform Phase I intake; working-phase agents, `draft_intro`, code mode, Gateway, memory and agent orchestration remain deferred.
+
+Phase II can add Universe dispatch and generation; Phase III may add alternate delivery formats and result actions. `deliver_format` remains in the existing table and is untouched. Phase I consumes the existing schema without a mode rename or legacy-row reinterpretation.
+
+## Historical Xano outcomes — 2026-09-14 snapshot
+
+The original Xano lifecycle was draft → processing → suggestion → archived. The new Go intake lifecycle adds an explicit submitted boundary; old processing rows are not automatically converted into new chat drafts.
 
 ### How Xano works now
 
@@ -30,52 +70,13 @@ One `suggestion_request` row carries the whole lifecycle (`copilot_mode = "outco
 | Transcript | `POST /threads/{id}/messages` | Appends each turn to the surface transcript table with (request, role, content) dedupe | `outcome_conversations` |
 | Results | `GET /outcomes/requests`, `results`, `results/{id}/nodes|actions|trajectories` *(shells)* | Read request list + result cards | — |
 
-### The interview contract (worth preserving verbatim)
+### Historical interview response
 
-Each turn returns one strict JSON object — `ready`, `summary`, `next_question`, `options[] {label,value}`, `allow_freetext`, `multi_select`, `missing_fields`, `awaiting_result_count`, `section`, `field`, `context`. Class-specific prompts key off `class_slug` (`find_investors`, `find_talent`, `find_customers`, `find_partners`, `find_advisors`, `find_journalists`, `find_cofounder`, `find_collaborators`, `find_speakers`, `find_warm_intros`, `find_co_investors`, `find_event_attendees`, `research_person`, `summarize_meeting`).
+Xano returned strict JSON (`ready`, `summary`, `next_question`, options and related flags). Phase I preserves the user-facing intake questions and result-count gate, but replaces model-owned readiness with Go validation and streams restricted OpenUI Lang. Do not preserve the old JSON response or client-supplied history contract verbatim.
 
-**Result-count gate** — when info is sufficient but count is unasked, the model must ask "How many matches do you want?" (options 20 / 100 / as-many) and set `awaiting_result_count`; once answered, `ready=true`.
+### Historical class-source inventory
 
-Model today: `anthropic/claude-sonnet-4.6`, temp 0.2, max_tokens ~750, `data_collection: deny`.
-
-### How we should implement it
-
-| Area | Xano now | Go proposal |
-| --- | --- | --- |
-| Request row | `suggestion_request` | `suggestions.suggestion_request` — `copilot_mode = "outcome"` |
-| Draft endpoints | `POST /outcomes/drafts` | `POST /v1/copilot/outcomes/drafts` — same upsert-by-`request_id` semantics |
-| Interview | Stateless turn, client re-sends messages each call | Keep stateless turn contract, but read transcript from `copilot.messages` server-side when `conversation_id` given — client doesn't have to replay history |
-| Prompts | Inline JS string-building per class in the endpoint | `assets/prompts/outcome-interview-*.md` per class + shared contract block; env-overridable paths per repo LLM-prompt policy |
-| LLM call | `api.request` → OpenRouter inline | Platform LLM client (`internal/clients`); model pinned via config, not literal |
-| Classifier | JS keyword rules in endpoint | `classify.go` in the feature — pure Go table of rules, unit-testable, no LLM |
-| Idempotency | `thread_id`/`run_id`/`turn_id` stored inside `llm_summary_context` — not enforced | Real dedupe: `(conversation_id, run_id, turn_id)` unique on `copilot.messages`; `context_version`/`transcript_version` optimistic checks already in contract |
-| Dispatch | Overwrites `llm_summary_context` with dispatch blob; status `draft`→`processing`; nothing consumes it yet | **Phase I:** update the `suggestion_request` row (persist the dispatch context) and flip status to `submitted` — no consumer yet. **Phase II:** add the API that sends the JSON payload to Universe; generated results return via `POST /v1/ingest/suggestions` |
-| Transcripts | `outcome_conversations` keyed by `suggestion_request_id` | `copilot.messages` via `conversation_id` — conversation row carries `surface` + `request_id` link |
-| Guards | Xano `precondition` errors (`notfound`, `accessdenied`, `badrequest`, `inputerror`) | Direct map to `apperror.NotFound`/`Forbidden`/`Validation` |
-
-### Listing outcomes — drafts & archived
-
-**Xano now:** `GET /outcomes/requests` is a contract shell. Inputs: `status`, `request_id`, `contact_id`, `limit`, `cursor`. The contract's own description says it returns "active/archived Outcome requests **and contact-card dedupe records**" — so the list doubles as the "does this contact already have a request?" check for contact cards.
-
-**Go proposal — mirror the merged `GET /v1/leverage-loops` shape** (`listLeverageLoops`, already on `main`):
-
-| Param | Behavior |
-| --- | --- |
-| `status` | One of `draft`, `submitted`, `processing`, `suggestion`, `archived`. **Empty excludes archived** — the default list is drafts + live outcomes |
-| `query` | Case-insensitive substring on `request_panel_title` |
-| `limit`, `cursor` | Keyset pagination — activity cursor `(updated_at, id)` via the feature's existing `cursor.go`; `pmw.Paged` meta |
-| `contact_id` / `person_id` | Filter by beneficiary (leverage_outcome only) |
-| `request_id` | Single-request lookup shortcut — or just `GET /v1/copilot/outcomes/requests/{id}` |
-
-Response items embed the resolved person + non-archived suggestion children (same shape as the leverage-loops list item). The dedupe concern is served by `status != archived` filtering rather than a separate record type.
-
-<Note>
-Go added a `submitted` status Xano didn't have (`draft | submitted | processing | suggestion | archived` vs Xano's `draft | processing | suggestion | archived`) — it sits between draft and processing. Map Xano `processing` → `submitted`+`processing` when reading old rows.
-</Note>
-
-### Outcome classes (canonical registry)
-
-`class_slug` is free text in Xano — the class list only exists implicitly across three sources that drifted apart: the `outcomes/classify` keyword ruleset (12 slugs), the interview `prompts` map (12 slugs), and the frontend `ClassName` union in `orbiter-frontend/src/features/outcomes/constants/class-accents.ts` (23 classes, **the current canonical list**). Union of all sources — 26 slugs:
+These 26 rows explain the source-system coverage: 25 real classes and the `ask_back` sentinel. The current suggestions-owned Go registry exported by `/outcomes/classes` is authoritative; the frontend accent union is presentation metadata.
 
 | `class_slug` | Label | Xano classify | Xano prompt | FE accent/starter | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -106,50 +107,12 @@ Go added a `submitted` status Xano didn't have (`draft | submitted | processing 
 | `purchase_real_estate` | Real estate transaction | — | — | label only | Classifier-only slug — "buy a house in Costa Rica" lands here; context-floor case exists |
 | `ask_back` | Ask back | — | — | sentinel | Classifier needs more context before routing — not a real class, a clarification state |
 
-In Go this becomes **one registry** — `class_slug → {label, interview prompt asset, required fields, stop conditions, dedicated skill?}` — in the feature's `types.go` (plain strings + `ValidX()` per repo policy, no DB enum). Adding a class is one entry, and classify/interview/dispatch can never drift again.
 
-### Chat harness — TanStack AI + OpenUI
+## Deferred surfaces
 
-**The interview/classify loop does not live in Go.** It runs in the TanStack Start server route using `@tanstack/ai` + `@tanstack/ai-openrouter` (`openRouterText`, the stable `/v1/chat/completions` path). Every message is a fresh `chat()` call; the route handler picks the model adapter per request from conversation state. Go owns persistence, dispatch, and results — the harness calls thin Go endpoints through tools.
+`leverage_outcomes`, `how_i_know` and `meeting_prep` need later build plans. Existing `loop` is the button-only mode and must not be bulk-renamed. Future beneficiary outcomes may share outcome APIs only through an explicit contract extension; Phase I rejects non-null `person_id`. Serendipity remains agent-created and has no chat in this build. Relationship/meeting AI orchestration will also stay in TypeScript; Go supplies context/domain APIs.
 
-**Tools carry the structured state** (the Xano strict-JSON contract is retired):
-
-| Tool | Replaces | Behavior |
-| --- | --- | --- |
-| `resolve_outcome` | `POST /outcomes/classify` | Intake model classifies against the canonical registry; writes `{outcome_type, summary, confidence}` — read newest-first |
-| `update_context` | `PATCH .../context` + `submit-metadata` | Fills the null-initialized slot schema for the resolved class, turn by turn |
-| `submit_outcome_request` | `POST /outcomes/dispatch` | Calls the Go submit endpoint — Phase I: persist + `status=submitted`; Phase II: also ships the payload to Universe |
-| `re_route` | — | Working-model route correction; same schema, newest-first read means a fix takes effect next request |
-| `handoff_to_akira` | — | Out-of-scope requests exit the harness |
-| `draft_intro` | — | Server tool calling Sonnet internally; visible model stays fast, intro voice stays premium |
-
-Route state lives in the message history as tool results — so **persistence middleware is mandatory**: `defineAIPersistence` loads the thread server-side (client-sent history can't be trusted — a forged `submit_outcome_request` result would skip phases), and threads map onto `copilot.conversations`/`copilot.messages`. Re-derive current route state into turn context each request so compaction can't summarize it away.
-
-**Rendering: OpenUI replaces Crayon** (`@crayonai/react-core` is the legacy-era Thesys SDK — OpenUI is the actively developed successor). The model streams **OpenUI Lang** restricted to registered components; `@openuidev/react-lang`'s Renderer parses progressively. Structured fields (`ready`, `missing_fields`, `awaiting_result_count`, `class`) move to tool calls — the fence-stripping/brace-matching parse layer from Xano disappears entirely. `find_talent`'s dedicated skill becomes a dedicated prompt + component set, same mechanism.
-
-**Model routing** (from the routing design doc — pending evals):
-
-| Tier | Model | Notes |
-| --- | --- | --- |
-| Intake | `google/gemma-4-31b-it` on Cerebras **or** single-model DeepSeek V4.1 Flash | Decided by TTFT test (~1s threshold); single model wins on cache continuity + no voice seam |
-| Working | `deepseek-v4.1-flash` (GLM 5.3 Flash as control) | Tool-call accuracy unproven — measured on 50 working-phase transcripts before commit |
-| Drafting | Sonnet via `draft_intro` server tool | Internal call; swappable without touching the harness |
-
-Two-turn intake cap: no route by turn two → submit `confidence: low` and let the general path handle it (replaces Xano's silent `find_investors` default — the `ask_back` sentinel is the explicit version of this).
-
-### Decisions
-
-- **Dispatch consumer (decided 9/14)** — the Universe suggestion engine consumes dispatched requests, and results return through `POST /v1/ingest/suggestions`. The engine isn't built yet, so it's phased: **Phase I** — dispatch only persists context and flips status to `submitted` (this is why the Go enum has `submitted` where Xano had `processing`); **Phase II** — add the endpoint that ships the JSON payload to Universe.
-- **Classify (decided 9/14)** — **LLM classify**, not the Xano keyword ruleset. `POST /v1/copilot/outcomes/classify` makes one call against the canonical class enum above: `model: "google/gemma-4-31b-it"`, `provider: {"only": ["Cerebras"]}` via OpenRouter. Returns `{class_slug, confidence, ambiguous, reasoning}`; `ambiguous` lets the UI show a class picker before the interview starts. Stays stateless like Xano, but `request_id` is real — when supplied, `class_slug` persists on `suggestions.suggestion_request` and is correctable later.
-- **`serendipity` mode (decided 9/14)** — stays in `suggestion_request.copilot_mode` alongside `outcome` and `leverage_outcome`, but has **no chat**: serendipity requests are initiated by agents autonomously, not through the interview/dispatch flow. No chat endpoints or prompts for it in this pass — the mode exists so agent-created requests have somewhere to land.
-- **Delivery formats (decided 9/14)** — **removed entirely.** Suggestions always come back to the UI; alternate formats (CSV, collection, PDF) are chosen from the suggestion's context menu and become **Phase III APIs** — out of this spec's scope. `deliver_format` is not needed in backend tables (the column exists on `main` from `suggestions_001_init` — treat as unused, drop or ignore). Submit-metadata persists only `number_of_results` + constraints.
-- **Pitch profiles (decided 9/14)** — owned by the `files` feature, not `copilot`. The `outcomes/pitch-profiles/*` contracts become `files` routes (e.g. `GET /v1/pitch-profiles/latest`, `PATCH /v1/pitch-profiles/{id}`, `POST /v1/pitch-profiles/{id}/summarize`); the chat UI calls them directly and the interview flow references `pitch_profile_request_id` in context only. No `/v1/copilot/outcomes/pitch-profiles/*` proxy — the domain logic already lives in `files/pitchprofile`.
-- **Chat loop location (decided 9/14)** — the interview/classify loop runs in the **TanStack AI server route** (`chat()` + tools), not in Go. `outcomes/classify`, `outcomes/interview`, `outcomes/find-talent/interview`, `outcomes/clarifications` have no Go endpoint equivalent — they become harness tools (`resolve_outcome`, `update_context`, `re_route`, `handoff_to_akira`). Go owns `suggestion_request` persistence, `submitted` transitions, the class registry, and result reads.
-- **OpenUI replaces Crayon (decided 9/14)** — chat rendering migrates from `@crayonai/react-core` to OpenUI (`@openuidev/react-lang` + registered components). The model emits OpenUI Lang; structured contract fields move to tool calls. The Xano JSON-contract parse layer is retired.
-
-- **Harness wiring (decided 9/14)** — **keep `useChat` + OpenUI Renderer** over the AG-UI bridge. The generated system prompt goes into `chat()`; text parts pass through `@openuidev/react-lang`'s Renderer. The harness's state model is tool results in message history, so it needs what only `useChat` keeps: persistence middleware, resumable streams, tool-call lifecycle states, per-request adapter switching. The glue is ours to write — including a strict-mode check, since the OpenUI parser silently drops invalid lines.
-
-## `leverage_outcomes`
+### Historical `leverage_outcomes` source flow
 
 The only difference between an `outcome` and a `leverage_outcome` is that a `leverage_outcome` is **for a specific person**:
 
@@ -162,7 +125,7 @@ A `leverage_outcome` carries a contact ID for the person the outcome is for. In 
 Xano's `POST /leverage-loops/interview` is the `leverage_outcome` flow — the endpoint name predates the rename. In the Go model, `leverage_outcome` is an outcome request with a beneficiary person, not a separate pipeline.
 </Note>
 
-### How Xano works now
+#### Historical Xano endpoints
 
 Same `suggestion_request` row, `copilot_mode = "loop"`. Fewer steps than outcomes — no clarify, files, or pitch-profile endpoints.
 
@@ -176,28 +139,11 @@ Same `suggestion_request` row, `copilot_mode = "loop"`. Fewer steps than outcome
 | Transcript | `POST /threads/{id}/messages` | Per-turn append with dedupe | `leverage_loop_conversations` |
 | Results | `GET /leverage-loops/requests`, `results/{id}/actions`, `results/{id}/trajectories` *(shells)* | Read request list + loop result cards | — |
 
-### The leverage interview contract
+#### Historical interview contract
 
 Same strict JSON turn shape as outcomes, plus `structured_fields` — extracted snake_case values populated when `ready=true`. The system prompt injects the beneficiary context blocks — `[YOU]` (the helper), `[YOUR COMPANY]`, `[HELPING TARGET]` (name + `master_person_id` + YAML), `[TARGET COMPANY]`, `[YOUR RELATIONSHIP WITH TARGET]` — and writes every summary as "Helping {target}…". This is where `how_i_know` relationship data shows up inside the outcome flow.
 
 Result-count gate options here are 20 / 100 / 500. Class list adds `get_advice` (the default) to the shared set.
 
-### How we should implement it
 
-| Area | Xano now | Go proposal |
-| --- | --- | --- |
-| Request row | `suggestion_request.master_person_id` = beneficiary | `suggestions.suggestion_request.person_id`/`contact_id` = beneficiary; `copilot_mode = "leverage_outcome"` (rename `loop`) |
-| Draft endpoint | `POST /leverage-loops/drafts` — beneficiary via `draft.for_master_person_id` | Same `POST /v1/copilot/outcomes/drafts` as outcomes — beneficiary in the body decides mode |
-| Interview context | Client passes self/target/company YAML + relationship summary per call | Server assembles it: `persons`/`companies` YAML builders + `relationships.relationships.relationship_summary` by (`user_id`, `person_id`) — no client-supplied context |
-| Prompts | Inline JS per class | `assets/prompts/leverage-outcome-interview-*.md` |
-| Results | `leverage_loop_conversations` transcript + result shells | `copilot.messages`; `suggestions.leverage_loop_*` tables already exist on `main` |
-
-### Decisions
-
-- **Result tables (decided 9/14)** — `leverage_outcome` shares the **unified `suggestion*` set** (`suggestion`, `suggestion_node`, `suggestion_trajectory`, `suggestion_action_group`, `suggestion_action`). Its results are outcome cards arriving via the same ingest path; `person_id` on the request row distinguishes them. The `leverage_loop_*` family stays scoped to the button-only leverage loop surface it was built for.
-- **Suggestion views (decided 9/14)** — the UI has three suggestion views: **Leverage Loops**, **Outcomes**, **Serendipity**. Filter semantics: Leverage Loops view shows `leverage_loop` **and** `leverage_outcome` results (anything for-a-specific-person); Outcomes shows `outcome` only; Serendipity shows `serendipity` only. List endpoints need a mode filter that accepts multi-value buckets — `copilot_mode IN (leverage_loop, leverage_outcome)` for the leverage view, not just single-mode equality.
-- **Endpoint paths (decided 9/14)** — the `leverage_outcome` chat flow folds into **`/v1/copilot/outcomes/*`**: a leverage_outcome is an outcome request + beneficiary `person_id` in the draft body, so the URL says the same. `/v1/leverage-loops/*` stays exclusively the button-only leverage loop surface already live on `main`. "Leverage Loops" as a *view* is a list filter (`copilot_mode IN (leverage_loop, leverage_outcome)`), not a routing concern.
-
-## `how_i_know`
-
-## `meeting_prep`
+Future result views may combine beneficiary outcome and button-only loop results, but their mode names and filters require a separate compatibility decision. Phase I lists only its bound `outcome` drafts/submitted requests; it does not hydrate result children, pitch profiles, files or beneficiary context.
