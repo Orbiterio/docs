@@ -1,650 +1,381 @@
 ---
 title: "Node Types"
-description: "FalkorDB node inventory, properties and examples, including proposed Go theatre and video-game nodes"
+description: "FalkorDB node inventory for the Orbiter Universe graph: labels, MERGE keys and properties as written by the Go writers, plus the game and theatre contracts"
 ---
 
-Core graph node types plus enrichment-specific graph nodes, organized by logical group.
-
-**Video game contract synchronized September 8, 2026:** [six game node families, reused endpoints, properties and image examples](#video-game-nodes). These are Go/GCP build contracts, not deployed game writers.
-
-Most product graph nodes carry the base label **`Entity`** plus one or more type-specific labels. Legacy non-`Entity` labels are called out in the [Master Label List](#master-label-list). Nodes are created during the person and company get-add pipelines, funding ingestion, IMDB credit processing, expertise identification, and MusicBrainz waterfall enrichment.
+Node types of the Orbiter Universe graph, organized by logical group. Each section states what the **Universe Go writers** in `orbiter-universe/internal/platform/graph` write today: the MERGE pattern and key, the labels as they appear in the pattern or are added with `SET`, and the properties set explicitly or fanned out from the node's property envelope.
 
 <Note>
-  **Existing-writer audit: 2026-07-09** — the original inventory describes the legacy graph writers. **Theatre contract synchronized: 2026-09-07** — [the four theatre node shapes](#theatre-nodes) and their properties are a Go development specification, checked against primary source pages and current `orbiter-universe` ownership patterns. The eleven direct-credit SQL tables now exist in development AlloyDB; theatre graph writers remain unbuilt. This pass does not re-audit the rest of the legacy inventory.
+  **Synchronized with the orbiter-universe checkout on 2026-09-13** (branch `ORBIT-1879/video-game-waterfall`). Every label, key and property below is what the Go writers produce. Game and theatre contract tables are kept as locked design references with their implementation status marked.
 </Note>
 
 <Info>
-  Existing legacy node sections list the functions that **create** (<Icon icon="circle-plus" />) and **update** (<Icon icon="pen-to-square" />) them, in copy-paste call-out blocks (`function path — ID`). The proposed theatre section instead identifies future Go ownership; it has no live writers. See [Timestamp coverage](#timestamp-coverage-audit) for the historical audit and the proposed timestamp contract below.
+  Each section opens with a <Icon icon="play" /> writer card naming the Go file and the MERGE pattern. Envelope properties pass through `propertyFanOut` (`graph.go:148-202`), which drops empty values and any key in the reserved set `uuid`, `name`, `name_embedding`, `embeddings`, `description`, `created_at`, `updated_at`, `flag`, `entity_type`, `entity_id`; those are only ever set explicitly by the builder. Every vector-bearing node also carries `embedding_model` and `embedding_dimensions`. All timestamps are Cypher `timestamp()` epoch milliseconds: `created_at` ON CREATE, `updated_at` on every write.
 </Info>
 
 ---
 
 ## Master Label List
 
-This is the canonical label inventory for node label combinations used by the documented writers, plus explicitly marked proposals. It includes both full create-label shapes and subset / match-only label combinations such as `Person`, `Company`, `Film_TV`, or `Work`. Dynamic families are shown with the controlling source field. **A proposed row reserves vocabulary; it does not assert that a writer or node exists.**
+Label combinations as the Go writers produce them. "Pattern" is what appears in the MERGE/CREATE pattern; "added" labels are applied with `SET n:Label` and never removed unless stated.
 
-<Note>
-  `Entity` is the intended base label for graph entities. A few older writers still create legacy non-`Entity` nodes (`Funding_Round`, `Project`, `Honor`, `Film_TV_Award:*`); they are listed here because they still appear in live or documented Cypher.
-</Note>
-
-| Label combination | Source / controlling field | Notes |
+| Label combination | Writer | Notes |
 | --- | --- | --- |
-| `Entity` | Shared graph writers | Base label used for broad matching / vector queries; not a standalone node type. |
-| `Entity:Person` | Person pipeline | Base person node. |
-| `Person` | Person, IMDB, funding, known, and music Cypher | Subset / match label for any person-shaped node. |
-| `Entity:Person:Angel` | `resolve-investors-edges` #12702 (`SET p:Angel` on angel investor branches) | Modifier label on a Person node. The old #2758 dynamic-label lambda (from `is_angel`) was lost in its 2026-07-05 rebuild — #12702 is the only live writer. |
-| `Person:C_Suite` | Legacy — **no live writer** | Modifier label on legacy Person nodes (was stamped from `is_c_suite` by the pre-rebuild #2758). Kept queryable via the `C_Suite(uuid)` index; restoring the writer is an open item. |
-| `Entity:Person:Music_Artist` | MusicBrainz artist `type = Person` | Music artist who is also a Person-shaped node. |
-| `Person:Music_Artist` | MusicBrainz artist docs / edges | Subset / match label for a person artist. |
-| `Music_Artist` | MusicBrainz artist docs / seed Cypher | Legacy / subset artist label used in music examples. |
-| `Entity:Company` | Company pipeline | Base company node. |
-| `Company` | Company, funding, known, music, and vector Cypher | Subset / match label for any company-shaped node. |
-| `Entity:School` | `is_school` | School-shaped company node; card/display contract is Company. |
-| `Entity:Company:VC_Firm` | Funding investor resolution | Additive VC firm label on a Company node. |
-| `Entity:Organization:Company` | Volunteering / certification / honor writers | Organization-shaped company node. |
-| `Organization` | Volunteering / certification / honor writers | Legacy subset label used by older organization-shaped company Cypher. |
-| `Organization:Company` | Volunteering / certification / honor writers | Legacy two-label organization/company shape used by older Cypher. |
-| `Entity:Company:Music_Label` | MusicBrainz label | Label, distributor, publisher, or label-like organization; card/display contract is Company. |
-| `Company:Music_Label` | MusicBrainz label reconciliation / examples | Legacy / subset label combination still used in music docs and reconciliation Cypher. |
-| `Music_Label` | MusicBrainz GoDigital examples | Legacy subset label used in seed/demo Cypher. |
-| `Entity:Country` | Location writers | Country node. |
-| `Entity:Region` | Location writers | Region/state-level node. |
-| `Entity:State` | Company location writer `stateOrRegion` | State-level node when the source classifies it as a state. |
-| `Entity:City` | Location writers | City node. |
-| `Entity:Film_TV:Movie` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:TV_Series` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:TV_Movie` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:TV_Mini_Series` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:Short_Film` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:Documentary` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:TV_Special` | IMDB title `type` | Film/TV title subtype. |
-| `Entity:Film_TV:Video_Game` | IMDB title `type` | Existing title-writer shape; the proposed game intake reuses its UUID during transition to `Entity:Video_Game`, never creates a duplicate game. |
-| `Entity:Video_Game` | **Proposed Go** game waterfall | Canonical game; [properties and thumbnail examples](#video-game-nodes). |
-| `Entity:Game_Series` | **Proposed Go** bounded game support identity | Series context, separate from an individual game; no catalog traversal. |
-| `Entity:Game_Platform` | **Proposed Go** bounded game support identity | Platform context, e.g. Windows or PlayStation 4. |
-| `Entity:Game_Engine` | **Proposed Go** bounded game support identity | Optional evidenced engine/version context. |
-| `Entity:Game_Release` | **Proposed Go** scoped game release identity | Optional platform/territory/edition release; not a music `Release`. |
-| `Entity:Game_Award` | **Proposed Go** scoped game recognition identity | One scoped nominee-entry result for a game, category and ceremony; named recipient scope distinguishes multiple same-game nominees. |
-| `Entity:Game_Award:Winner` | **Proposed Go** elected winner result | Result modifier; no automatic individual recipients. |
-| `Entity:Game_Award:Nominee` | **Proposed Go** elected nominee result | Result modifier on the same scoped identity if the outcome later changes. |
-| `Entity:Film_TV:Music_Video` | IMDB title `type` | Film/TV title subtype supported by the title writer. |
-| `Film_TV` | IMDB title and credit Cypher | Subset / match label for any film or TV title subtype. |
-| `Film_TV_Award:Winner` | IMDB award `nominee_or_winner` | Legacy non-`Entity` award node. |
-| `Film_TV_Award:Nominee` | IMDB award `nominee_or_winner` | Legacy non-`Entity` award node. |
-| `Film_TV_Award` | IMDB award Cypher | Subset / match label for any film/TV award node. |
-| `Entity:Stage_Production` | **Proposed Go** `stage_production`; source-defined credited production | Canonical theatre production/engagement; [property contract](#stage-production). No `Film_TV` label. |
-| `Entity:Stage_Production:Play` | **Proposed Go** elected `form = play` | Closed production subtype; optional when form is unknown. |
-| `Entity:Stage_Production:Musical` | **Proposed Go** elected `form = musical` | Closed production subtype; distinct from the underlying musical work. |
-| `Entity:Work:Theatrical_Work` | **Proposed Go** `theatrical_work`; independently resolved dramatic work | Canonical underlying work; [property contract](#theatrical-work). Not a music-work alias. |
-| `Entity:Work:Theatrical_Work:Play` | **Proposed Go** elected work `form = play` | Closed work subtype; never matched by `Play` alone. |
-| `Entity:Work:Theatrical_Work:Musical` | **Proposed Go** elected work `form = musical` | Closed work subtype; never matched by `Musical` alone. |
-| `Place:Venue:Theatre` | **Proposed Go** shared support-place ownership | Physical venue; durable support UUID, no canonical entity admission; [property contract](#theatre-venue). |
-| `Stage_Award` | **Proposed Go** stage award support record | One scoped award result; [property contract](#stage-award). |
-| `Stage_Award:Nominee` | **Proposed Go** elected `outcome = nominee` | Current result modifier; not an extra nomination node. |
-| `Stage_Award:Winner` | **Proposed Go** elected `outcome = winner` | Replaces `Nominee` on the same result when a win is established. |
-| `Entity:DomainExpertise` | Expertise sync | Top-level expertise domain. |
-| `DomainExpertise` | Expertise Cypher | Subset / match label for domain expertise nodes. |
-| `Entity:SubDomainExpertise` | Expertise sync / LLM-created expertise | Sub-domain expertise node. |
-| `SubDomainExpertise` | Expertise / vector-index Cypher | Subset / match label for sub-domain expertise nodes. |
-| `Entity:Funding_Round` | Fundable deal writer #12701 (v1.10\+, 2026-07-06) | Financing event node — new writes add the `Entity` base label. |
-| `Funding_Round` | Pre-v1.10 deal writer | Legacy non-`Entity` financing event nodes; linger until re-touched (the MERGE adds `:Entity` on match). |
-| `Entity:Event:Live_Summit` | `live_events.event_type = Summit` | Live/business event subtype. |
-| `Entity:Event:Live_Conference` | `live_events.event_type = Conference` | Live/business event subtype. |
-| `Entity:Event:Live_Festival` | `live_events.event_type = Festival` | Live/business event subtype. |
-| `Entity:Event:Live_Trade_Show` | `live_events.event_type = Trade_Show` | Live/business event subtype. |
-| `Entity:Event:Live_Workshop` | `live_events.event_type = Workshop` | Live/business event subtype. |
-| `Entity:Event:Live_Webinar` | `live_events.event_type = Webinar` | Live/business event subtype. |
-| `Entity:Event:Live_Hackathon` | `live_events.event_type = Hackathon` | Live/business event subtype. |
-| `Entity:Event:Live_Meetup` | `live_events.event_type = Meetup` | Live/business event subtype. |
-| `Entity:Event:Live_Networking_Event` | `live_events.event_type = Networking_Event` | Live/business event subtype. |
-| `Entity:Event:Music_Festival` | MusicBrainz event type | Music event subtype. |
-| `Entity:Event:Music_Concert` | MusicBrainz event type | Music event subtype. |
-| `Entity:Event:Music_Convention` | MusicBrainz event type | Music event subtype. |
-| `Entity:Event:Music_Award_Ceremony` | MusicBrainz event type | Music event subtype. |
-| `Entity:Certification` | Certification writers | Professional certification node. |
-| `Honor` | Honor writer | Legacy non-`Entity` honor node. |
-| `Entity:Work:Project` | Projects/publications writer #12579 (v6\+, 2026-07-04) | Project node under the unified `Work` parent. |
-| `Project` | Pre-v6 projects writers | Legacy non-`Entity` project nodes; linger in the graph. |
-| `Entity:Work` | MusicBrainz work writer | Base creative/intellectual work node. |
-| `Work` | MusicBrainz work docs / examples | Subset / match label for creative/intellectual works. |
-| `Entity:Work:Publication` | Projects/publications writers | Publication unified under Work. |
-| `Entity:Work:Song` | MusicBrainz work `type = Song` | Work subtype. |
-| `Entity:Work:Symphony` | MusicBrainz work `type = Symphony` | Work subtype. |
-| `Entity:Work:<MusicBrainz work_type>` | MusicBrainz work `type` | Dynamic sanitized work subtype when present. |
-| `Entity:Music_Group` | MusicBrainz artist `type != Person` | Band, orchestra, choir, or other non-person act. |
-| `Music_Group` | MusicBrainz group docs / examples | Subset / match label for a non-person music act. |
-| `Entity:Recording` | MusicBrainz recording | Recording/track node. |
-| `Recording` | MusicBrainz recording docs / examples | Subset / match label for recording nodes. |
-| `Entity:Release_Group` | MusicBrainz release group | Base release-group node. |
-| `Release_Group` | MusicBrainz release-group docs / examples | Subset / match label for release-group nodes. |
-| `Entity:Release_Group:Album` | MusicBrainz release-group primary type | Release-group subtype. |
-| `Entity:Release_Group:Single` | MusicBrainz release-group primary type | Release-group subtype. |
-| `Entity:Release_Group:EP` | MusicBrainz release-group primary type | Release-group subtype. |
-| `Entity:Release_Group:Broadcast` | MusicBrainz release-group primary type | Release-group subtype. |
-| `Entity:Release_Group:Other` | MusicBrainz release-group primary type | Release-group subtype. |
-| `Entity:Release` | MusicBrainz release | Canonical release node. |
-| `Release` | MusicBrainz release docs / examples | Subset / match label for release nodes. |
-| `Entity:Place` | MusicBrainz place | Base place node. |
-| `Entity:Place:Studio` | MusicBrainz place `type` | Place subtype. |
-| `Entity:Place:Venue` | MusicBrainz place `type` | Place subtype. |
-| `Entity:Place:Stadium` | MusicBrainz place `type` | Place subtype. |
-| `Entity:Place:Amphitheater` | MusicBrainz place `type` | Place subtype. |
-| `Entity:Place:<MusicBrainz place_type>` | MusicBrainz place `type` | Dynamic sanitized place subtype when present. |
-| `Entity:contextFounded` | `process-yc-people` #12700 | Founding-event hub node (accepted by design 2026-07-02): LLM founding narrative \+ `name_embedding`, written for multi-founder YC companies — see [Company Nodes](/guides/enrichment/waterfall/company-nodes#contextfounded). |
-| `contextFounded` | `process-yc-people` #12700 | Subset / match label for the founding-event hub nodes. |
-| `Entity:MergeEvent` | Known/provenance Cypher docs | Merge/audit artifact label. |
-| `MergeEvent` | Known/provenance Cypher docs | Legacy subset / match label for merge/audit artifact nodes. |
-| `Entity:Introduction` | Known/provenance Cypher docs | Introduction artifact label. |
-| `Introduction` | Known/provenance Cypher docs | Legacy subset / match label for introduction artifact nodes. |
-| `Entity:Household` | Known/provenance Cypher docs | Household artifact label. |
-| `Household` | Known/provenance Cypher docs | Legacy subset / match label for household artifact nodes. |
+| `Entity` | every entity writer | Base label; the range and vector indexes hang off it. Not a node type. |
+| `Person:Entity` | `person.go` | Pattern labels. MERGE key `entity_id`. |
+| `Person:Entity` + `Angel` / `C_Suite` / `Music_Artist` | `person.go:91-93,146`; `person_edges.go:273` (`SET p:Angel` on the angel edge) | Add-only modifier labels applied by the person sync from distilled winners. |
+| `Company:Entity` | `company.go` | Pattern labels. MERGE key `entity_id`. |
+| `Company:<School \| VC_Firm \| Organization \| Music_Label>:Entity` | `company.go:14-19,77` (gate) · `company.go:167` (sync, added) | The gate bakes the extra label into the MERGE pattern; the sync adds it with `SET`. `entity_type` reports the top-ranked label (`School` > `Music_Label` > `VC_Firm` > `Organization`). There is no standalone `School` or `Organization` node. |
+| `Company` + `Organization` (added to an existing node) | `person_credentials.go:191-194` | `SET t:Organization` on the target of a credential edge (`GRANTED_BY`, `ISSUED_BY`, …). |
+| `Company` + `VC_Firm` (added) | `funding.go:187` | `SET vc:VC_Firm` when an investor edge is drawn. |
+| `Country:Entity` | `country.go` | MERGE key `name`. |
+| `Region:Entity` | `location.go:115` | MERGE key `region_key`. `entity_type` is `State` for United States regions, `Region` otherwise; there is **no `State` label**. |
+| `City:Entity` | `location.go:155` | MERGE key `city_key`. |
+| `DomainExpertise:Entity`, `SubDomainExpertise:Entity` | `expertise.go:161,189` | CREATE after a get-or-create lookup on `domain_key` / `sub_domain_key`. |
+| `Certification:Entity`, `Honor:Entity`, `Work:Project:Entity`, `Work:Publication:Entity` | `person_credentials.go:17-22` | MERGE key `merge_key`. |
+| `Film_TV:Entity` + one of `Movie`, `TV_Series`, `TV_Movie`, `TV_Mini_Series`, `Short_Film`, `Documentary`, `TV_Special`, `Video_Game`, `Music_Video` | `film_tv.go:22-26,127` | Subtype added by the sync with `SET`; MERGE key `entity_id`. |
+| `Film_TV_Award:Entity` + `Winner` / `Nominee` | `film_tv_award.go:81-97` | Pattern labels; MERGE key `canonical_identity_key` (or `uuid` once ledgered). Outcome label is added, never removed. |
+| `Entity` + `Video_Game` (added) | `game.go:76,128` | MERGE on `(g:Entity {entity_id})`; `Video_Game` added every write so an existing `Film_TV:Video_Game` node written by the film pipeline is reused. |
+| `Game_Series:Entity`, `Game_Platform:Entity`, `Game_Engine:Entity`, `Game_Release:Entity`, `Game_Award:Entity` | `game_support.go:31,74` | Pattern labels; MERGE key `entity_id`; written hidden until published. |
+| `Game_Award:Entity` + `Winner` / `Nominee` | `game_award.go:90-97` | Mutually exclusive; the stale one is `REMOVE`d. |
+| `Stage_Production:Entity` | `stage.go:83` | MERGE key `entity_id`. `Play` / `Musical` subtypes are in the contract but not yet written. |
+| `Work:Theatrical_Work`, `Place:Venue:Theatre`, `Stage_Award` (+ `Winner` / `Nominee`) | none | Theatre contract only; no writer in the checkout. |
+| `Funding_Round` + `Entity` (added) | `funding.go:145-147` | MERGE on `(fr:Funding_Round {uuid})`; `SET fr:Entity` every write. |
+| `InvestmentThesis:Entity` | `investment_thesis.go:125` | MERGE key `thesis_id`. |
+| `Event` + `Entity:Live_<Type>` (added ON CREATE) | `appearances.go:107-108` | Live events MERGE on the base label only, key `event_key`; the sub-label is whatever the source reports (`Live_Event` default), validated as an identifier. |
+| `Event:Entity` + `Music_<Concert \| Festival \| Launch_event \| Convention/Expo \| Masterclass/Clinic \| Stage_performance \| Award_ceremony>` | `music.go:61-65,161,194` | Music events MERGE on `Event:Entity {entity_id}`; the `Music_` sub-label is added with spaces replaced by `_`. |
+| `MediaAppearance` | `appearances.go:147` | **No `Entity` label.** MERGE key `media_key`. |
+| `Music_Group:Entity` + `Group` / `Orchestra` / `Choir` | `music.go:77-79,161` | MERGE key `entity_id`; subtype added with `SET`. |
+| `Recording:Entity` | `music.go:161` | No subtype labels. |
+| `Release_Group:Entity` + `Album` / `Single` / `EP` / `Broadcast` / `Other` | `music.go:48-50` | Subtype added with `SET`. |
+| `Music_Work:Entity` + one of 22 work types (`Song`, `Symphony`, `Opera`, …, `Audio_drama`) | `music.go:33-35,51-58` | Named `Music_Work`, not `Work`, so the person `Work:*` nodes and the music nodes never share a wipe scope. |
+| `Release`, `Place` | `music_support.go:138` | **No `Entity` label**; MERGE key `row_id` (= `uuid`). No `Studio` / `Venue` / `Stadium` sub-labels are written. |
 
 ---
 
 ## People
 
-Nodes representing individual humans. A Person node may carry additional labels based on their role.
-
 ### Person
 
-The core node for any individual in the graph.
+<Card icon="play">
 
-<Card icon="circle-plus">
-  ```text
-  mvp/node/add-person-node — 2601
-  ```
+```
+internal/platform/graph/person.go — buildPersonMerge (gate) · buildPersonSync (full sync)
+```
 
-  **Creates** the Person node (`MERGE` on `master_person_id`, adds the `:Entity` label). Stamps `created_at` and `updated_at`. ✅
+`MERGE (p:Person:Entity {entity_id: $entity_id})`. The gate write (`person.go:78-81`) creates the node with `uuid = entity_id`, `name`, `entity_type = 'Person'` and `visibility = false` ON CREATE, and on a re-run only touches `updated_at` (plus `name` when repairing a `temp_` placeholder). The sync (`person.go:157-160`) applies the pruned envelope from distilled winners on both branches and adds the modifier labels from `personModifierLabels`. Envelope builder: `internal/features/graph/person_sync.go:260-312`.
+
 </Card>
 
-<Card icon="pen-to-square">
-  ```text
-  mvp/node/update-person-node — 2758
-  ```
-
-  **Updates** the Person node (v1.11, 2026-07-09) — refreshes properties including bios, investor fields, and a scalar `linkedin_url` (v1.10); dual-writes `name_embedding` \+ Gemini `embeddings`. Stamps `updated_at`. ✅ _Note: the dynamic `:Angel` / `:C_Suite` label writing was lost in the v1.8 rebuild and is not restored — `:Angel` is stamped by #12702 only._
-</Card>
-
-<Card icon="circle-check">
-  ```text
-  mvp/imdb/run-base-imdb-person-enrich — 12880
-  ```
-
-  Flips `visibility` to `true` during IMDB enrichment — `SET p.visibility = true, p.updated_at = timestamp()`. ✅ Bumps `updated_at` (fixed 2026-06-01).
-</Card>
-
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier (UUID v4) |
-| `master_person_id` | integer | The MERGE key — FK to Xano `master_person.id` |
-| `name` | string | Full display name |
-| `display_label` | string | Always `"Person"` |
-| `visibility` | boolean | Whether the node is visible in the UI (starts `false`; flipped by the phase-11 finalizer) |
-| `linkedin_url` | string | Canonical LinkedIn URL (stamped by #2758 v1.10) |
-| `short_biography` / `long_biography` | string | One-line Cypher-safe projections of the Xano bios (control characters stripped) |
-| `image_url` / `avatar` | string | Avatar URL where synced |
-| `name_embedding` | vecf32 | OpenAI 1536 semantic embedding |
-| `embeddings` | vecf32 | Gemini 1536 embedding (dual-write since 2026-06-15) |
-| `created_at` / `updated_at` | timestamp | Epoch-millis `timestamp()` (nodes created before mid-2026 may carry ISO strings) |
+| `uuid` | ON CREATE | Equal to `entity_id`; edge writers seek by it |
+| `entity_id` | MERGE key | The canonical `entities.id`; the identity key |
+| `entity_type` | ON CREATE | `"Person"`; stays `Person` whatever modifier labels are added |
+| `name` | every write | Display name; the gate skips embedding for provisional `temp_` names |
+| `visibility` | gate ON CREATE `false`; sync every write | Sync writes the entity's `visibility` as-is, including `false` |
+| `description` | sync, when non-empty | Explicit set (reserved key); empty never clears |
+| `linkedin_url` | envelope | From the chosen LinkedIn identifier, else a link row |
+| `profiles` | envelope | Deduplicated social-profile URLs (list) |
+| `avatar` | envelope | Re-hosted avatar URL |
+| `current_title`, `current_company_name`, `current_company_logo` | envelope | Company fields only when the current company entity resolves |
+| `short_biography`, `long_biography` | envelope | `bio` and `bio_500` |
+| `roles`, `skills`, `languages`, `interests` | envelope | Lists |
+| `social_media_influence` | envelope | From the social-insights read |
+| `investor_type`, `board_advisory_experience`, `investor_exits`, `investments`, `investment_range`, `investment_sweet_spot` | envelope | Only when an investor profile exists |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when an embedding is supplied | Gemini 1536 over `bio_500` → `bio` → name (music-artist fallback when the person is a MusicBrainz artist without a bio) |
+| `created_at`, `updated_at` | ON CREATE / every write | Epoch milliseconds |
 
-<Accordion title="Real example">
+<Accordion title="Shape example">
   ```json
   {
-    "uuid": "cf64fc2a-4b3e-4ff9-99dc-21d7cffebf01",
+    "uuid": "0191d3f0-6b7e-7c2a-9f11-2b8a4e5c9d01",
+    "entity_id": "0191d3f0-6b7e-7c2a-9f11-2b8a4e5c9d01",
+    "entity_type": "Person",
     "name": "Josh Diamond",
-    "display_label": "Person",
     "visibility": true,
-    "created_at": "2025-01-15T10:32:45.000Z"
+    "linkedin_url": "https://www.linkedin.com/in/joshdiamond",
+    "current_title": "Founder",
+    "embedding_model": "google/gemini-embedding-2",
+    "embedding_dimensions": 1536,
+    "created_at": 1726220000000,
+    "updated_at": 1726220000000
   }
   ```
+
+  _Node labels: `Person`, `Entity`_
 </Accordion>
 
-### Angel
-
-An additional label applied to Person nodes identified as angel investors.
+### Person modifier labels: Angel, C_Suite, Music_Artist
 
 <Card icon="tag">
-  ```text
-  mvp/fundable/resolve-investors-edges — 12702
-  ```
 
-  **Adds** the `Angel` label — `SET p:Angel` on the angel lead/non-lead investor branches during the company-side deal cascade. Stamps `updated_at`. ✅ _(The former #2758 `is_angel`-driven label write was lost in its 2026-07-05 rebuild; #12702 is the only live `:Angel` writer today.)_
+```
+internal/platform/graph/person.go:91-93,142-147 · person_edges.go:272-273
+```
+
+The sync adds `Angel`, `C_Suite` and `Music_Artist` from the closed `personModifierLabels` set with `SET p:<Label>`; the angel investment edge writer also stamps `SET p:Angel` when it draws `(Person)-[:INVESTED_IN]->(Company)`. Labels are add-only and never removed; `entity_type` stays `Person`.
+
 </Card>
 
-**Labels:** `Entity:Person:Angel`
-
-No additional properties beyond Person — `Angel` is a label-only modifier used for filtering and traversal.
-
-<Accordion title="Real example">
-  ```json
-  {
-    "uuid": "a1b2c3d4-5678-9abc-def0-123456789abc",
-    "name": "Jared Leto",
-    "display_label": "Person",
-    "visibility": true
-  }
-  ```
-
-  _Node labels: `Entity`, `Person`, `Angel`_
-</Accordion>
+No additional properties. `Music_Artist` marks a person who is also a MusicBrainz artist (D-2): the person node keeps its identity and gains the label, and music credit edges accept a bare `Entity` subject so either a person or a `Music_Group` can carry them. See [Person:Music_Artist](#music-person-artist) for the music-side properties that ride the same node.
 
 ---
 
 ## Organizations
 
-Nodes representing companies, schools, VC firms, and other organizations. All share the same creation function (`mvp/node/add-company-node` #2602) with a dynamic label based on type.
-
 ### Company
 
-The default organization node type. Represents businesses, startups, and corporations.
+<Card icon="play">
 
-<Card icon="circle-plus">
-  ```text
-  mvp/node/add-company-node — 2602
-  ```
+```
+internal/platform/graph/company.go — buildCompanyMerge (gate) · buildCompanySync (full sync)
+```
 
-  **Creates** the Company node — `CREATE (p:{nodeLabel} {...})` with a dynamic label (`Company`, `School`, etc.). Stamps `created_at` (active v4 template). ✅
+Gate: `MERGE (p:Company[:<ExtraLabel>]:Entity {entity_id: $entity_id})` with the extra label baked into the pattern when the seed flags `School`, `VC_Firm`, `Organization` or `Music_Label` (`company.go:71-79`). Sync: `MERGE (p:Company:Entity {entity_id: $entity_id})`, extra labels added with `SET p:<Label>` (`company.go:167`), envelope applied on both branches. Envelope builder: `internal/features/graph/worker.go:241-298` (`companySyncProps`) with the chosen-fact allow-list at `worker.go:304-309`.
+
 </Card>
 
-<Card icon="pen-to-square">
-  ```text
-  mvp/node/update-company-node — 4659
-  ```
+<Warning>
+  Because the gate puts the extra label inside the MERGE pattern, an entity first gated as a plain `Company:Entity` and later gated with a label flag does not match its own node and a second node with the same `entity_id` is created. The sync's shape (fixed pattern, labels via `SET`) is the safe one; see the [Notes on Indexing](/guides/ontology/all-indexes/notes-on-indexing).
+</Warning>
 
-  **Updates** the Company node — refreshes enrich properties. Stamps `updated_at`. ✅
-</Card>
-
-<Card icon="pen-to-square">
-  ```text
-  tool/resync-company-node-domains — 13062   ·   tool/backfill-strip-domain-errors-nodes — 13060
-  ```
-
-  Maintenance tools that rewrite `company_domain` / `logo` on the Company node. Both stamp `updated_at`. ✅
-</Card>
-
-<Card icon="circle-check">
-  ```text
-  mvp/dupe/merge-company-nodes — 10505
-  ```
-
-  Folds duplicate Company nodes during dedup (`SET` survivor properties). ✅ Bumps `updated_at` on the survivor (fixed 2026-06-01).
-</Card>
-
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Company display name |
-| `company_domain` | string | Primary web domain |
-| `alternative_domains` | string | Comma-separated list of alternate domains |
-| `display_label` | string | `"Company"` |
-| `visibility` | boolean | UI visibility flag |
-| `logo` | string | URL to company logo |
-| `name_embedding` | vecf32 | Semantic embedding |
-| `created_at` | string | ISO 8601 timestamp |
+| `uuid` | ON CREATE | Equal to `entity_id` |
+| `entity_id` | MERGE key | Canonical `entities.id` |
+| `entity_type` | ON CREATE, and sync when labels change | `"Company"`, or the top-ranked extra label: `School` > `Music_Label` > `VC_Firm` > `Organization` |
+| `name` | every write | Display name; `company_name` is also written on the gate's name-repair path |
+| `visibility` | sync, every write | Forced `true` on every sync |
+| `description` | sync, when non-empty | `about_500` |
+| `summary` | envelope | `about` |
+| `company_domain`, `website`, `alternative_domains` | envelope | `website` is derived as `https://` + domain |
+| `linkedin_url`, `profiles` | envelope | Identifier lookup, then link rows |
+| `logo`, `tagline` | envelope | |
+| `company_founded`, `number_of_employees`, `industry`, `specialties`, `ownership` | envelope | `number_of_employees` is the employee range; `ownership` is the company type |
+| `funding_total_raised_usd`, `funding_summary`, `went_public_on`, `stock_ticker`, `stock_link`, `y_combinator_batch` | envelope | |
+| `business_model`, `target_customers`, `funding_last_round`, `funding_last_round_date`, `funding_investors`, `is_acquired`, `acquired_by`, `acquired_date`, `acquired_ticker`, `stock_exchange`, `annual_revenue_usd`, `primary_product_name`, `primary_product_category`, `other_product_names`, `other_product_categories` | envelope, from chosen facts | Only these chosen-fact slots pass through; `is_acquired` defaults to `false` |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when supplied | Gate embeds the name only; sync embeds `about_500` → domain → name |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
-<Accordion title="Real example — Frame.io">
+<Accordion title="Shape example">
   ```json
   {
-    "uuid": "4845ea5b-5c8a-4ccd-aba8-f7ef0259c496",
+    "uuid": "0191d3f0-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "entity_id": "0191d3f0-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "entity_type": "Company",
     "name": "Frame.io",
     "company_domain": "frame.io",
-    "display_label": "Company",
+    "website": "https://frame.io",
     "visibility": true,
-    "logo": "https://img.logo.dev/frame.io?token=pk_Twvl42WzTX2-ySNbnZKlSA"
+    "logo": "https://img.logo.dev/frame.io",
+    "created_at": 1726220000000,
+    "updated_at": 1726220000000
   }
   ```
+
+  _Node labels: `Company`, `Entity`_
 </Accordion>
 
-### School
-
-A Company node with the `School` label. Applied when `is_school = true` in the master company record.
-
-<Card icon="circle-plus">
-  ```text
-  mvp/node/add-company-node — 2602
-  ```
-
-  **Creates** the node with the `School` label baked into the dynamic `nodeLabel` at `CREATE` time. Stamps `created_at`. ✅
-</Card>
-
-**Labels:** `Entity:School`
-
-Same properties as Company. Identified by `display_label: "School"`.
-
-<Accordion title="Real example — CUNY / Hunter College">
-  ```json
-  {
-    "uuid": "9f3a2b1c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
-    "name": "The City University of New York",
-    "company_domain": "cuny.edu",
-    "display_label": "School",
-    "visibility": true
-  }
-  ```
-</Accordion>
-
-### VC\_Firm
-
-A Company node with the `VC_Firm` label. Applied during funding ingestion when an institutional investor is identified.
+### Company extra labels: School, VC_Firm, Organization, Music_Label
 
 <Card icon="tag">
-  ```text
-  mvp/fundable/resolve-investors-edges — 12702
-  ```
 
-  **Updates** an existing Company node — `MATCH (vc:Company) SET vc:VC_Firm, vc.updated_at = timestamp()`. ✅ Bumps `updated_at` (fixed 2026-06-01; both investor branches).
+```
+internal/platform/graph/company.go:14-27 · funding.go:187 · person_credentials.go:191-194
+```
+
+All four are labels on a Company node, never standalone nodes. The gate sets one from the seed flags (`IsSchool` > `IsMusicLabel` > `IsVC` > `IsOrg`, `internal/features/graph/company_node.go:53-68`); the sync repairs `School`, `Music_Label` and `VC_Firm` from distilled winners (`worker.go:201-219`) but never `Organization`. Two edge writers also add labels in passing: `funding.go:187` stamps `VC_Firm` on an investor, and the credential edge writer stamps `Organization` on a cert issuer or honor grantor.
+
 </Card>
 
-**Labels:** `Entity:Company:VC_Firm`
-
-Same properties as Company. The `VC_Firm` label is additive — the node retains its `Company` label.
-
-<Accordion title="Real example — Accel">
-  ```json
-  {
-    "uuid": "b2c3d4e5-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
-    "name": "Accel",
-    "company_domain": "accel.com",
-    "display_label": "Company",
-    "visibility": true
-  }
-  ```
-
-  _Node labels: `Entity`, `Company`, `VC_Firm`_
-</Accordion>
-
-### Organization
-
-A generic organization node. Used for non-company entities like certification bodies, volunteer organizations, and honor issuers. Can be created standalone or applied as an additional label to an existing Company node.
-
-<Card icon="circle-plus">
-  ```text
-  mvp/resolve/resolve-edges-volunteering — 4575
-  ```
-
-  **Creates** a standalone Organization node — `MERGE (org:Organization:Company {name})`. ✅ Stamps `created_at` \+ `updated_at` (renamed from camelCase `createdAt`, `ON MATCH SET` added; fixed 2026-06-01).
-</Card>
-
-<Card icon="tag">
-  ```text
-  mvp/resolve/resolve-edges-certifications — 12578
-  ```
-
-  **Updates** an existing Company node — `MATCH (organization:Company) SET organization:Organization, organization.updated_at = timestamp()`. ✅ Bumps `updated_at` (fixed 2026-06-01).
-</Card>
-
-**Labels:** `Entity:Organization:Company` (when added to existing Company) or `Entity:Organization:Company` (when created new by volunteering)
-
-| Property | Type | Description |
+| Label | `entity_type` reported | How it is set |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Organization name (the MERGE key on the volunteering path) |
-| `created_at` / `updated_at` | integer | Epoch-millis `timestamp()` (renamed from camelCase `createdAt` on 2026-06-01; a few legacy nodes still carry the old key) |
-
-<Accordion title="Real example — San Francisco Business Times">
-  ```json
-  {
-    "uuid": "d4e5f6a7-8b9c-0d1e-2f3a-4b5c6d7e8f9a",
-    "name": "San Francisco Business Times",
-    "created_at": 1704067200000
-  }
-  ```
-</Accordion>
+| `School` | `School` | Seed flag at gate; repaired by sync |
+| `Music_Label` | `Music_Label` | D-2 satellite: a MusicBrainz label is a company with this label; music `RELEASED_ON`, `IMPRINT_OF`, `SUBSIDIARY_OF`, `DISTRIBUTED_BY`, `OWNED_BY`, `ACQUIRED_BY` endpoints are `Company:Entity`. Music-side properties: see [Music_Label](#music-label) |
+| `VC_Firm` | `VC_Firm` | Seed flag at gate; sync repair; `SET vc:VC_Firm` when an investor edge is drawn |
+| `Organization` | `Organization` | Gate only (a `.org` host); `SET t:Organization` on credential edge targets. Not repaired by the sync |
 
 ---
 
 ## Location
 
-Geographic hierarchy nodes forming a `City -> Region -> Country` chain.
-
-<Card icon="circle-plus">
-  ```text
-  mvp/node/primary-location-nodes-edges_v2 — 4690    (person pipeline)
-  mvp/node/location-nodes-edges-company — 4528       (company pipeline)
-  ```
-
-  **Create** the full `City → Region → Country` chain via `MERGE` \+ `ON CREATE SET`. ✅ All three branches now stamp `created_at` \+ `updated_at`, with `ON MATCH SET updated_at` (Country branch fixed 2026-06-01).
-</Card>
-
-<Card icon="circle-plus">
-  ```text
-  mvp/node/add-all-country-nodes — 12583
-  ```
-
-  **Creates / refreshes** every Country node from the reference table. Stamps `created_at` \+ `updated_at` (the canonical, complete Country creator). ✅
-</Card>
+Geography is seeded from the `universe.countries`, regions and cities tables (admin route `POST /v1/backfill/graph/seed/locations`) and kept current by `graph.locations_sync_requested`, which the company and person gates publish. Backbone edges `IN_COUNTRY` (weight 50) and `IN_REGION` (weight 25) are written by the same files.
 
 ### Country
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Country name (MERGE key) |
-| `display_label` | string | `"Country"` |
-| `flag` | string | Emoji flag |
-| `alpha_2_code` | string | ISO 3166-1 alpha-2 code |
-| `population` | integer | Population count |
-| `capital_city` | string | Capital city name |
-| `currency_code` | string | ISO 4217 currency code |
-| `currency_name` | string | Currency display name |
-| `description` / `summary` | string | Brief description — the person-side writer #4690 v1.5 (2026-07-04) writes `description` (and mirrors `summary`) from `country.description` on create **and** match |
-| `name_embedding` | vecf32 | Semantic embedding |
+<Card icon="play">
 
-<Accordion title="Real example — United States">
-  ```json
-  {
-    "uuid": "f1a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c",
-    "name": "United States",
-    "display_label": "Country",
-    "alpha_2_code": "US",
-    "capital_city": "Washington, D.C.",
-    "currency_code": "USD",
-    "currency_name": "United States Dollar"
-  }
-  ```
-</Accordion>
+```
+internal/platform/graph/country.go — buildCountryMerge
+```
+
+`MERGE (p:Country:Entity {name: $name})`. Full property set ON CREATE, `updated_at` only ON MATCH. The envelope is the `properties` JSON column of `universe.countries` (`internal/features/graph/queries/graph.sql:5`), so its keys are data-driven.
+
+</Card>
+
+| Property | Written | Description |
+| --- | --- | --- |
+| `uuid` | ON CREATE | `randomUUID()`; reference nodes have no entity row |
+| `name` | MERGE key | Country name |
+| `entity_type` | ON CREATE | `"Country"` |
+| `flag` | ON CREATE, when present | Emoji flag |
+| `description` | ON CREATE, when present | From the table |
+| data-driven keys such as `alpha_2_code`, `population`, `capital_city`, `currency_code`, `currency_name` | ON CREATE, envelope | Whatever the row's `properties` JSON holds |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | ON CREATE, when the row has a description | |
+| `created_at`, `updated_at` | ON CREATE / ON MATCH | |
 
 ### Region
 
-Represents a state, province, or administrative region. Uses a composite `region_key` for deduplication.
+<Card icon="play">
 
-**Labels:** `Entity:Region` (person pipeline) or `Entity:State` / `Entity:Region` (company pipeline — dynamic via `{{$var.stateOrRegion|capitalize}}`)
+```
+internal/platform/graph/location.go — buildRegionMerge
+```
 
-| Property | Type | Description |
+`MERGE (p:Region:Entity {region_key: $region_key})` with `region_key = lower(name)::lower(country)`. No property envelope. `entity_type` is re-asserted ON MATCH so older nodes self-heal.
+
+</Card>
+
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Region display name |
-| `region_key` | string | Dedup key: `"region_name::country_name"` (lowercased) |
-| `display_label` | string | `"State"` or `"Region"` |
-| `country` | string | Parent country name |
-| `description` | string | Brief description — written on every pass since #4690 v1.4 (2026-07-04; replaced the old `summary` write on this type) |
-| `name_embedding` | vecf32 | Semantic embedding |
-
-<Accordion title="Real example — New York">
-  ```json
-  {
-    "uuid": "a2b3c4d5-e6f7-8a9b-0c1d-2e3f4a5b6c7d",
-    "name": "New York",
-    "region_key": "new york::united states",
-    "display_label": "State",
-    "country": "United States"
-  }
-  ```
-</Accordion>
+| `uuid` | ON CREATE | `randomUUID()` |
+| `region_key` | MERGE key | `"new york::united states"` |
+| `name`, `country` | ON CREATE | |
+| `entity_type` | ON CREATE and ON MATCH | `"State"` when the country is United States, else `"Region"`. The label is always `Region`; there is no `State` label |
+| `description` | both branches, when present | |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | ON CREATE, when supplied | Over the description |
+| `created_at`, `updated_at` | ON CREATE / ON MATCH | |
 
 ### City
 
-Uses a composite `city_key` for deduplication across regions and countries.
+<Card icon="play">
 
-| Property | Type | Description |
+```
+internal/platform/graph/location.go — buildCityMerge
+```
+
+`MERGE (p:City:Entity {city_key: $city_key})` with `city_key = lower(name)::lower(region)::lower(country)` and `unknown` substituted for a blank region. No property envelope.
+
+</Card>
+
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | City display name |
-| `city_key` | string | Dedup key: `"city_name::region_name::country_name"` (lowercased) |
-| `display_label` | string | `"City"` |
-| `region` | string | Parent region name |
-| `country` | string | Parent country name |
-| `description` / `summary` | string | Brief description — #4690 v1.3\+ writes `description` alongside `summary` on create and match |
-| `name_embedding` | vecf32 | Semantic embedding |
-
-<Accordion title="Real example — New York City">
-  ```json
-  {
-    "uuid": "b3c4d5e6-f7a8-9b0c-1d2e-3f4a5b6c7d8e",
-    "name": "New York",
-    "city_key": "new york::new york::united states",
-    "display_label": "City",
-    "region": "New York",
-    "country": "United States"
-  }
-  ```
-</Accordion>
+| `uuid` | ON CREATE | `randomUUID()` |
+| `city_key` | MERGE key | `"new york::new york::united states"` |
+| `name`, `country` | ON CREATE | |
+| `region` | ON CREATE, when present | |
+| `entity_type` | ON CREATE and ON MATCH | `"City"` |
+| `description` | both branches, when present | |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | ON CREATE, when supplied | |
+| `created_at`, `updated_at` | ON CREATE / ON MATCH | |
 
 ---
 
 ## Film & TV
 
-Nodes representing film/TV titles and their awards.
+### Film_TV
 
-<Card icon="circle-plus">
-  ```text
-  mvp/node/add-film-tv-node — 2320
-  ```
+<Card icon="play">
 
-  **Creates / updates** the `Film_TV` node — `MERGE` on `imdb_url`, `ON CREATE SET` stamps `created_at`, `ON MATCH SET` stamps `updated_at`, then adds the subtype label (`Movie`, `TV_Series`, …). ✅
+```
+internal/platform/graph/film_tv.go — buildFilmTVMerge (gate stub) · buildFilmTVSync (full sync)
+```
+
+Both `MERGE (f:Film_TV:Entity {entity_id: $entity_id})`. The gate writes a titled stub that is visible from creation so an award node always has something to point at; the sync applies the envelope on both branches and adds the subtype label from the closed nine-entry list. The identity key is `entity_id`, not IMDb's URL, so a corrected IMDb URL cannot mint a second node. Envelope builder: `internal/features/graph/film_tv_sync.go:100-147`.
+
 </Card>
 
-<Card icon="circle-plus">
-  ```text
-  mvp/edge/add-node-edge-imdb-award — 2334
-  ```
+**Label combinations:** `Film_TV:Entity` plus one of `Movie`, `TV_Series`, `TV_Movie`, `TV_Mini_Series`, `Short_Film`, `Documentary`, `TV_Special`, `Video_Game`, `Music_Video` (added by the sync; `entity_type` stays `Film_TV`). A `Film_TV:Video_Game` node is reused in place by the [game writer](#video-game-nodes).
 
-  **Creates / updates** both `Film_TV` and `Film_TV_Award` nodes — both `MERGE` with `created_at` / `updated_at` stamped. ✅
-</Card>
-
-### Film\_TV
-
-The base node for any IMDB title. Carries an additional dynamic type label based on the title type.
-
-**Go game routing:** the legacy `Film_TV:Video_Game` shape below remains documented for compatibility. The [game contract](#video-game-nodes) uses `Entity:Video_Game`; IMDb aliases must resolve to the same UUID before any game node is admitted. Movie adaptations retain their own Film/TV UUID and poster.
-
-**Possible label combinations:**
-
-- `Entity:Film_TV:Movie`
-- `Entity:Film_TV:TV_Series`
-- `Entity:Film_TV:TV_Movie`
-- `Entity:Film_TV:TV_Mini_Series`
-- `Entity:Film_TV:Short_Film`
-- `Entity:Film_TV:Documentary`
-- `Entity:Film_TV:TV_Special`
-- `Entity:Film_TV:Video_Game` / `Entity:Film_TV:Music_Video` (title-writer #2320 subtypes; the award writer #2334 maps the seven types above)
-
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `title` | string | Film/TV title |
-| `imdb_url` | string | IMDB title URL (MERGE key for award flow) |
-| `type` | string | Title type (`movie`, `tvSeries`, etc.) |
-| `description` | string | Plot synopsis |
-| `tagline` | string | Marketing tagline |
-| `genres` | string | Comma-separated genre list |
-| `year` | string | Release year |
-| `imdb_rating` | string | IMDB user rating |
-| `running_time` | string | Runtime in minutes |
-| `mpaa_rating` | string | Content rating (PG-13, R, etc.) |
-| `countries` | string | Comma-separated production countries |
-| `languages` | string | Comma-separated languages |
-| `image_url` | string | Poster image URL |
-| `source` | string | Data source identifier |
-| `name_embedding` | vecf32 | Semantic embedding |
+| `uuid` | ON CREATE | Equal to `entity_id` |
+| `entity_id` | MERGE key | |
+| `entity_type` | ON CREATE | `"Film_TV"` |
+| `title` | every write | |
+| `imdb_id` | gate ON CREATE, when present | The `tt` id |
+| `source` | ON CREATE | `"imdb.com"` |
+| `visibility` | ON CREATE | `true` |
+| `description` | sync, when non-empty | Plot synopsis |
+| `original_title`, `type`, `tagline`, `mpaa_rating`, `color` | envelope | Text |
+| `genres`, `countries`, `languages` | envelope | Native lists |
+| `image_url` | envelope | Re-hosted poster, else the source poster URL |
+| `year`, `end_year`, `imdb_rating`, `running_time`, `award_wins`, `award_nominations` | envelope | Numeric; written even when 0 if the source carries the field |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | sync, when supplied | Over `title. description` |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
-<Accordion title="Real example — Edge of Tomorrow">
+<Accordion title="Shape example">
   ```json
   {
-    "uuid": "b7700ba7-7fb1-4fb7-a5d7-08fe61c96d57",
+    "uuid": "0191d3f0-4c5d-7e6f-8a7b-9c0d1e2f3a4b",
+    "entity_id": "0191d3f0-4c5d-7e6f-8a7b-9c0d1e2f3a4b",
+    "entity_type": "Film_TV",
     "title": "Edge of Tomorrow",
-    "imdb_url": "https://www.imdb.com/title/tt1631867",
+    "imdb_id": "tt1631867",
     "type": "Movie",
-    "description": "A man fighting in a war against aliens must relive the same day every time he dies, learning from each experience to become a better soldier.",
-    "tagline": "Die. Repeat. Save humanity.",
-    "genres": "Action,Adventure,Sci-Fi",
-    "year": "2014",
-    "imdb_rating": "7.9",
-    "running_time": "113",
-    "mpaa_rating": "PG-13",
-    "countries": "United States,Canada,India,Australia",
-    "languages": "English"
+    "year": 2014,
+    "genres": ["Action", "Adventure", "Sci-Fi"],
+    "source": "imdb.com",
+    "visibility": true
   }
   ```
 
-  _Node labels: `Entity`, `Film_TV`, `Movie`_
+  _Node labels: `Film_TV`, `Entity`, `Movie`_
 </Accordion>
 
-### Film\_TV\_Award
+### Film_TV_Award
 
-Represents a specific award nomination or win for a film/TV title. Carries an additional `Winner` or `Nominee` label.
+<Card icon="play">
 
-**Label combinations:**
+```
+internal/platform/graph/film_tv_award.go — buildAwardMerge
+```
 
-- `Film_TV_Award:Winner`
-- `Film_TV_Award:Nominee`
+Two-tier identity: `MERGE (a:Film_TV_Award:Entity {uuid: $node_uuid})` when the ledger already holds a node uuid, else `MERGE (a:Film_TV_Award:Entity {canonical_identity_key: $identity_key})`. The outcome label is added with `SET a:Winner` or `SET a:Nominee` and is part of the identity key, so it never flips on one node. The same statement optionally draws `HAS_AWARD` from the title and `WON_AWARD` / `NOMINATED_FOR` from the person, each behind an `OPTIONAL MATCH` so a missing endpoint still leaves the award written. No property envelope; all fields are explicit.
 
-| Property | Type | Description |
+</Card>
+
+**Label combinations:** `Film_TV_Award:Entity:Winner`, `Film_TV_Award:Entity:Nominee`.
+
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `year` | integer | Award year |
-| `award_type` | string | Awarding body name |
-| `award_description` | string | Specific category |
-| `nominee_or_winner` | string | `"Winner"` or `"Nominee"` |
-| `film_tv_imdb_url` | string | IMDB URL of the associated title |
-| `project_title` | string | Title of the film/TV project |
-| `description` | string | Full award citation text |
-| `shared_with` | string | Names of co-recipients |
-| `display_label` | string | `"Film_TV_Award"` |
-| `name_embedding` | vecf32 | Semantic embedding |
-
-<Accordion title="Real example — Edge of Tomorrow, Saturn Award nomination">
-  ```json
-  {
-    "uuid": "836c4bee-435d-41f5-8155-c3f538883fdf",
-    "year": 2015,
-    "award_type": "Academy of Science Fiction, Fantasy & Horror Films, USA",
-    "award_description": "Best Director",
-    "nominee_or_winner": "Nominee",
-    "project_title": "Edge of Tomorrow"
-  }
-  ```
-
-  _Node labels: `Film_TV_Award`, `Nominee`_
-</Accordion>
-
-<Accordion title="Real example — Cannes Film Festival">
-  ```json
-  {
-    "uuid": "c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f",
-    "year": 2010,
-    "award_type": "Cannes Film Festival",
-    "award_description": "Palme d'Or",
-    "nominee_or_winner": "Nominee",
-    "project_title": "Fair Game"
-  }
-  ```
-
-  _Node labels: `Film_TV_Award`, `Nominee`_
-</Accordion>
+| `uuid` | ON CREATE | `coalesce(existing, randomUUID())` |
+| `canonical_identity_key` | MERGE key (tier 2) and every write | Award-instance key; co-nominees share one node |
+| `canonical_event_key` | every write when a key is supplied | |
+| `entity_type` | every write | `"Film_TV_Award"` |
+| `award_name` | every write | Awarding body |
+| `year` | every write | Integer |
+| `nominee_or_winner` | every write | `"Winner"` or `"Nominee"` |
+| `category` | when non-empty | |
+| `description` | when non-empty | Deterministic prose, no LLM |
+| `shared_with` | when non-empty | List of co-recipient names |
+| `source` | every write | `"imdb.com"` |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when supplied | Over the description; skippable per award |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
 ---
 
-
 <a id="video-game-nodes" />
 
-## Video game nodes — proposed Go contract
+## Video game nodes — Go contract
 
 <Info>
 **Synchronized September 9, 2026.** This is the node reference for the [Go/GCP video-game build plan](/guides/open-work/video-game-waterfall), including the [locked Game_Platform properties](#game-platform-properties). Game runtime registration and writers remain proposed. The [real-data simulation](/guides/open-work/video-game-waterfall-examples) contains **29 nodes and 30 edges**, with real names/source IDs and simulated internal UUIDs and processing state. It is not a production graph snapshot.
 </Info>
 
-**Existing movie-created games feed this waterfall:** retain the current identity/node writer, then use a Go adapter to hand its `Entity:Film_TV:Video_Game` UUID and IMDb/credit evidence to the [queued game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). The game worker updates that same node; its existing compatibility labels can remain. The stub stays hidden until [successful game publication](/guides/open-work/video-game-waterfall#game-publication-gate) supplies game-owned properties and processed game-source artwork. Legacy movie enrichment does not mean game enrichment is complete. Node sync and identity-only leaves cannot trigger discovery.
+<Card icon="play">
+
+```
+internal/platform/graph/game.go · game_support.go · game_series.go · game_platform.go · game_engine.go · game_release.go · game_award.go
+```
+
+**Universe writers, as implemented (audited 2026-09-13).** `Video_Game` MERGEs on `(g:Entity {entity_id})` and adds `:Video_Game` with `SET` on every write, so an existing `Film_TV:Video_Game` node with the same `entity_id` is updated in place (`game.go:128-131`). The five support kinds MERGE on `(n:<Label>:Entity {entity_id})` through one shared builder (`game_support.go:74-78`). All six write hidden: `game_publication_status = 'staged'`, `game_publication_revision`, and `visibility`/`game_published` flip only through `PublishVideoGame` / `PublishGameSupport` for the matching revision; `Withdraw*` hides again with `withdrawn_reason`. `Game_Award` toggles `Winner`/`Nominee` with `REMOVE` + `SET` so the labels stay mutually exclusive (`game_award.go:90-97`). Only `Video_Game` carries `embeddings`; the support kinds have no embedding field yet. Properties written: `Video_Game` — `name`, `tags` (always, `[]` when empty), and when present `description`, `tagline`, `game_kind`, `first_release_date`, `date_precision`, `first_release_year`, `developer`, `image_url`, `source`, `source_revision`, `wikidata_qid`, `imdb_id`, `mobygames_id`, `igdb_numeric_id`, `igdb_slug`, `steam_app_ids`, `genres`. `Game_Series` — `series_kind`, `developers`, `wikidata_qid`, `description`, `official_website`, `image_url`, `source`, `source_revision`. `Game_Platform` — `platform_code`, `platform_kind`, `wikidata_qid`, `description`, `official_website`, `source`, `source_revision`. `Game_Engine` — `engine_kind`, `wikidata_qid`, `description`, `source`, `source_revision`, `source_urls`. `Game_Release` — `release_scope_key`, `game_entity_id`, `platform_entity_id`, `territory_key`, `release_date`, `date_precision`, `release_status`, `description`, `source`, `source_revision`. `Game_Award` — `award_body_key`, `ceremony_key`, `ceremony_qid`, `category_key`, `category_qid`, `award_entry_key`, `award_year`, `subject_kind`, `game_entity_id`, `result`, `description`, `source`, `source_revision`, `game_recognition_revision`.
+
+</Card>
+
+
+**Existing movie-created games feed this waterfall:** retain the current identity/node writer, then use a Go adapter to hand its `Entity:Film_TV:Video_Game` UUID and IMDb/credit evidence to the [queued game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). The game worker updates that same node; its existing compatibility labels can remain. The stub stays hidden until [successful game publication](/guides/open-work/video-game-waterfall#game-publication-gate) supplies game-owned properties and processed game-source artwork. Film enrichment does not mean game enrichment is complete. Node sync and identity-only leaves cannot trigger discovery.
 
 **Person entry:** [matching current or past job titles](/guides/open-work/video-game-waterfall#person-role-entry) can queue a bounded search for that existing person’s game credits. Reuse the Person UUID; the intake role registry creates no new node family and does not itself establish a game relationship.
 
@@ -658,10 +389,10 @@ There are **six game-specific node families** in the proposed output manifest. `
 | `Entity:Game_Series` | A series containing separately identified games | Stable UUID/QID or provider series ID; `name`; never keyed only on a title string | 1 |
 | `Entity:Game_Platform` | An evidenced gaming platform | Stable UUID/QID or provider platform ID; `name`, `platform_code`, `platform_kind`, short `description`; verified `official_website` when available | 2 |
 | `Entity:Game_Engine` | An evidenced engine family used by a game | Stable UUID/typed alias; `engine_kind`, short `description`; versions qualify `USES_ENGINE` | 0 in core; 1 in companion |
-| `Entity:Game_Release` | A separately addressable platform release | Immutable scoped registry key, exact game/platform and territory scope; short description; dates mutable | 0 in core; 1 in companion |
+| `Entity:Game_Release` | A separately addressable platform release | Immutable scoped registry key, exact game/platform and territory scope; short description; dates mutable; `embeddings` over `name + ". " + description` (platform/engine/series carry no vector — Mark 2026-09-13) | 0 in core; 1 in companion |
 | `Entity:Game_Award`, optionally `:Winner` / `:Nominee` | One scoped recognition result | Award body + ceremony/year + category + nominee entry; include named recipient/game scope where applicable. `award_entry_key`, `subject_kind`, `award_year`, `result`; QIDs are optional crosswalks. Outcome changes preserve identity. | 1 |
 
-**Award identity:** [The Game Awards source contract](/guides/open-work/video-game-waterfall#award-identity-one-record-per-nominee-entry) distinguishes separate people nominated for the same game/category/year and joint recipient entries. A game-only key would collapse those results. These remain `Game_Award` nodes, with source aliases reconciled and winner/nominee excluded from identity.
+**Award identity:** [The Game Awards source contract](/guides/archive/video-game-build-plan#award-identity-one-record-per-nominee-entry) distinguishes separate people nominated for the same game/category/year and joint recipient entries. A game-only key would collapse those results. These remain `Game_Award` nodes, with source aliases reconciled and winner/nominee excluded from identity.
 
 All six families inherit UUID, name, timestamps and source provenance. Missing source fields remain absent except explicitly specified empty collections such as game tags. Support identities only gain cards through an explicit card contract: `Game_Series` has its reviewed card parameters, and `Game_Award` now has an approved card with [reused game artwork](#game-award-card-artwork). Platform, engine and release remain without standalone cards. `Game_Release` and `Game_Award` must not be substituted for music releases or Film/TV awards.
 
@@ -683,7 +414,7 @@ Later slices may also reference existing `Stage_Production`, `Music_Group`, `Mus
 
 ### Locked game type contract — games-v1
 
-**Design baseline locked September 8, 2026; Go registration/writers still to implement.** The [source review](/guides/open-work/video-game-waterfall-sources) supports all six families below. The five support types may be created/reused by bounded game jobs when their evidence is present. They are not outputs of the current movie writer, independent waterfalls or automatic cards. Source availability controls which facts are produced, not which identities are silently substituted.
+**Design baseline locked September 8, 2026; writers implemented in the orbiter-universe checkout (branch `ORBIT-1879/video-game-waterfall`, audited 2026-09-13) — see the writer card below.** The [source review](/guides/open-work/video-game-waterfall-sources) supports all six families below. The five support types may be created/reused by bounded game jobs when their evidence is present. They are not outputs of the current movie writer, independent waterfalls or automatic cards. Source availability controls which facts are produced, not which identities are silently substituted.
 
 | Type | Canonical identity / minimum type-specific fields | Creation boundary |
 | --- | --- | --- |
@@ -712,7 +443,7 @@ Use `series_kind=video_game_series`. Optional properties: typed `wikidata_qid`, 
 
 | Field | Series contract |
 | --- | --- |
-| `description` | One neutral sentence ≤127 Unicode characters. Reject blank, name-only and generic type-only copy such as `video game series`. Reuse useful exact-series facts/official text; if needed, fetch at most one additional verified series/about page and queue a shared description job with at most two model attempts inside the original root limits. Require supported distinguishing detail; retain source/model receipts outside the node. If still insufficient, keep a prior supported useful value or omit the field with recorded coverage/pending state. No fabricated details, recursive browsing or separate tagline. [Fallback contract](/guides/open-work/video-game-waterfall#series-description-fallback) |
+| `description` | One neutral sentence ≤127 Unicode characters. Reject blank, name-only and generic type-only copy such as `video game series`. Reuse useful exact-series facts/official text; if needed, fetch at most one additional verified series/about page and queue a shared description job with at most two model attempts inside the original root limits. Require supported distinguishing detail; retain source/model receipts outside the node. If still insufficient, keep a prior supported useful value or omit the field with recorded coverage/pending state. No fabricated details, recursive browsing or separate tagline. [Fallback contract](/guides/archive/video-game-build-plan#series-description-fallback) |
 | `developers` | Optional sorted string array projected from eligible `Game_Series → DEVELOPED_BY → Company` associations, even when there is one studio. Elected exact-series developer evidence, or an exact admitted member's elected developer credit plus membership, requires queued Company creation/reuse and edge replay. Retain identity and evidence scope; a name alone cannot create an edge. The list neither designates a primary studio nor credits every studio on every game. Omit unsupported values and apply public member-readiness filtering; do not enumerate members or launch company enrichment |
 | `official_website` | Verified official URL for the series, from an exact-subject statement or official source. Do not inherit an individual game's store page |
 | `image_url` | Serving URL produced by the shared avatar/movie-poster file pipeline after approved series-image ingestion. **Locked: 3:2 / 400 × 267 WebP**, with a white canvas, 32 px padding and centered proportional containment. Add a versioned `series-3x2-v1` transform inside the shared image package; current `ConvertPoster` alone does not implement this canvas. Reuse the configured GCS bucket, `ObjectKey`, uploader, media ledger/retries and shared logging. For SVG logos, use a verified source-provided raster rendition. Source evidence, transform version, storage key and output receipts remain in shared media/evidence records. An individual game's cover is not automatically series artwork |
@@ -754,7 +485,7 @@ Each release has exactly one active `RELEASE_OF` target and one exact platform. 
 
 Use award body + ceremony/year + category + nominee entry, with the game and named person/joint-recipient scope. `subject_kind` is `game`, `person_game` or `recipient_group_game` in this slice. `game_entity_id` and resolved recipient references are required before their relationships project. Separate performers nominated for one game retain separate entries; a joint nomination keeps one entry with separate recipient links.
 
-`result` is `nominee`, `winner` or unresolved. Current `Winner`/`Nominee` labels are mutually exclusive; corrections replace the modifier and current recipient edge, retaining nomination/result history in SQL. A game-only award does not manufacture an individual winner. Other subject kinds such as an adaptation season, esports team or creator remain typed pending evidence for the appropriate owner. [Full award contract](/guides/open-work/video-game-waterfall#award-identity-one-record-per-nominee-entry)
+`result` is `nominee`, `winner` or unresolved. Current `Winner`/`Nominee` labels are mutually exclusive; corrections replace the modifier and current recipient edge, retaining nomination/result history in SQL. A game-only award does not manufacture an individual winner. Other subject kinds such as an adaptation season, esports team or creator remain typed pending evidence for the appropriate owner. [Full award contract](/guides/archive/video-game-build-plan#award-identity-one-record-per-nominee-entry)
 
 **Node and HAS_AWARD edge locked September 9:** [complete node properties and JSON](#game-award-properties), [game recognition edge](/guides/ontology/edges#game-has-award) and [reused card artwork](#game-award-card-artwork). The approved field set is fixed; visual layout and Go/UI implementation remain pending.
 
@@ -867,7 +598,7 @@ If no suitable short text is available, queue one `platform_description` job thr
 
 Missing website is optional coverage. Missing evidence, invalid description, provider failure or budget exhaustion preserves any still-valid description; otherwise keep the identity internal with an explicit pending/failure reason. Resume through the same bounded metadata/graph replay; no new root or new budget. Public links require platform readiness and the game's existing publication gate. Pending optional platform metadata does not block an otherwise valid game from publishing; its unresolved platform link stays hidden. Reuse the [movie/music failure and stage facilities](/guides/open-work/video-game-waterfall#shared-universe-error-logging-required).
 
-No `tagline`, `image_url`, platform image generation/ingestion or standalone card/table is added. No maker/developer edge is inferred from the description or website. `AVAILABLE_ON` still requires its own exact game/release evidence and mandatory edge description. [Build plan and two JSON examples](/guides/open-work/video-game-waterfall#game-platform-parameters) · [Download metadata examples](/assets/video-game-waterfall/game-platform-examples.json).
+No `tagline`, `image_url`, platform image generation/ingestion or standalone card/table is added. No maker/developer edge is inferred from the description or website. `AVAILABLE_ON` still requires its own exact game/release evidence and mandatory edge description. [Build plan and two JSON examples](/guides/archive/video-game-build-plan#game-platform-parameters) · [Download metadata examples](/assets/video-game-waterfall/game-platform-examples.json).
 
 <a id="game-engine-properties" />
 
@@ -892,7 +623,7 @@ Reuse a suitable still-supported description, or exact-engine source text from t
 
 Keep actual field sources, input/prompt/model information and outcomes in the shared evidence/description ledger. If evidence, generation or budget is insufficient, preserve any still-supported useful text; otherwise leave the engine and its public link pending internally. Optional engine metadata does not block an independently valid game. Failures use the existing movie/music stage/attempt logging. No new property is inferred from the description, and it does not establish a game's `USES_ENGINE` relationship.
 
-**Unreal Engine example:** `Real-time 3D engine for building video games and interactive experiences.` This is editorial expected text based on the [official engine overview](https://www.unrealengine.com/), not a completed model call. [Updated node JSON and build instructions](/guides/open-work/video-game-waterfall#game-engine-description).
+**Unreal Engine example:** `Real-time 3D engine for building video games and interactive experiences.` This is editorial expected text based on the [official engine overview](https://www.unrealengine.com/), not a completed model call. [Updated node JSON and build instructions](/guides/archive/video-game-build-plan#game-engine-description).
 
 <a id="game-release-description" />
 
@@ -910,7 +641,7 @@ The job reads retained elected facts only. It cannot browse, enumerate releases,
 
 Validate text and the input revision before accepting output; then use bounded graph/projection replay. Store actual model, effort, prompt/input hash, fact IDs and outcome in the shared evidence/description ledger, with the existing movie/music attempt and failure logging. A date/status/scope correction refreshes the same release's description and rejects stale generation results. Preserve only still-supported prior text; otherwise keep the release and all incident public links pending internally. A pending description for an optional release does not block the independently valid parent game. Retractions do not wait for generation, and description failure/replay cannot create a new root or budget.
 
-Example expected text: `PlayStation 3 release of The Last of Us, released on June 14, 2013.` It is editorial text from the retained qualified release evidence, not a runtime model result. [Build instructions](/guides/open-work/video-game-waterfall#game-release-description) · [Source records and updated JSON](/assets/video-game-waterfall/support-type-examples.json).
+Example expected text: `PlayStation 3 release of The Last of Us, released on June 14, 2013.` It is editorial text from the retained qualified release evidence, not a runtime model result. [Build instructions](/guides/archive/video-game-build-plan#game-release-description) · [Source records and updated JSON](/assets/video-game-waterfall/support-type-examples.json).
 
 <a id="video-game-properties" />
 
@@ -937,7 +668,7 @@ Example expected text: `PlayStation 3 release of The Last of Us, released on Jun
 | `tagline` | string | Required game-card text generated after the final description; ≤112 characters, without repeating release year. This is game-only: support nodes do not inherit it |
 | `tags` | string list | Top ten supported exact-game Steam tags by retained vote rank; use an empty list with coverage when absent. Freeze before embedding; do not substitute storefront categories or invent tags |
 | `embeddings` | shared vector representation | Current shared embedder/query space: observed `google/gemini-embedding-2`, 1536 finite, L2-normalized values. Input is final name/description plus selected tags; model/dimension/input hash retained in vector provenance. No separate 3072 space or cross-model comparison |
-| `visibility` | boolean | False on an unready game stub; true only after successful game publication. Missing state cannot expose a legacy game |
+| `visibility` | boolean | False on an unready game stub; true only after successful game publication. Missing state cannot expose a game node written before the game lane |
 | `game_publication_status` / `game_publication_revision` | enum / integer revision | Pending until a committed game publication; public readers require its matching published revision. Refresh candidates remain private |
 | `image_url` | graph/display media reference; absent while pending | Required for first publication from an approved game-source asset after shared media ingestion. No IMDb image or rehosted IMDb poster. Render through shared media service; keep signed/expiring URLs out of durable graph facts |
 
@@ -965,15 +696,26 @@ See [complete game-node properties and planned file key](/guides/open-work/video
 
 <a id="theatre-nodes" />
 
-## Theatre nodes — proposed Go contract
+## Theatre nodes — Go contract (partly implemented)
 
 <Info>
   **Graph build contract — synchronized 2026-09-07.** This is the node-property reference for the [Broadway / West End Go build](/guides/open-work/roadmap/broadway-co-producers). The eleven direct-credit SQL tables and standalone research/simulation harness exist; theatre runtime types and graph writers remain unbuilt. Only `stage_production` and `theatrical_work` are new canonical SQL/API entity types; venues and award results are support records. Full synthetic examples below are specification fixtures, not ingested records.
 </Info>
 
+<Card icon="play">
+
+```
+internal/platform/graph/stage.go
+```
+
+**Universe writer status (audited 2026-09-13).** `Stage_Production` is implemented: `MERGE (s:Stage_Production:Entity {entity_id})`, `entity_type = 'Stage_Production'`, `source` stamped ON CREATE (`'stage'` unless the caller supplies one), `title` and `name` (mirrors title) on every write, and `description` either set to the elected winner or explicitly cleared to `NULL` when the source retracts it (`stage.go:83-87`, `:68-73`). The envelope (`internal/features/graph/stage_sync.go:94-141`) writes `visibility`, `market`, `form`, `production_kind`, `season_label`, `run_status`, `official_website_url`, `poster_url`, the six ISO date fields (`first_preview_date`, `opening_date`, `press_night_date`, `announced_closing_date`, `closing_date`, `booking_until_date`), `source_names`, `source_urls`, `credit_coverage`, `accepted_credit_count`, plus `embeddings` over title, market, opening date and description. **Not yet written:** the `:Play` / `:Musical` subtype labels (no label logic in the writer), and the three other kinds below — `Work:Theatrical_Work` appears only as a permitted `BASED_ON` endpoint label (`stage.go:244`), `Place:Venue:Theatre` has no writer (the music `Place` writer never adds `Venue` or `Theatre`), and `Stage_Award` has no writer.
+
+</Card>
+
+
 A **production** is the scope of a credited engagement; a **work** is the dramatic work it stages; a **venue** is the physical place; an **award result** records a particular nomination or win. Existing `Person` and `Company` identities carry creators and producing parties across theatre, movies and music.
 
-Current Go uses `Music_Work` for music-owned works and support `Place` nodes without an `entities` row or `Entity` label. Those differ from the legacy MusicBrainz sections of this page. The theatre proposal follows current ownership: production/work use canonical entity IDs; venues/results use owner-held row IDs. See the current [music entity writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music.go) and [support writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music_support.go).
+Current Go uses `Music_Work` for music-owned works and support `Place` nodes without an `entities` row or `Entity` label. The theatre proposal follows current ownership: production/work use canonical entity IDs; venues/results use owner-held row IDs. See the current [music entity writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music.go) and [support writer](https://github.com/Orbiterio/orbiter-universe/blob/a377c44/internal/platform/graph/music_support.go).
 
 ### Primary source basis
 
@@ -1007,7 +749,7 @@ Companies House and SEC filings belong to company identity and separately source
 | `entity_id` / `row_id` | UUID string · R, mutually exclusive | Production/work use `entity_id`; support nodes use `row_id`. These are the respective identity keys. |
 | `name` | string · R | Elected human-readable name; source title/venue name, or a deterministic award display name. |
 | `entity_type` | string · R | Graph family: `Stage_Production`, `Theatrical_Work`, `Place` or `Stage_Award`. Current Go graph writers use family names here; lower-case canonical SQL/API types are a different vocabulary. |
-| `display_label` | string · SQL/DTO only, optional | A consumer may derive a presentation label. Do not add a second required graph discriminator or copy the legacy `display_label` field. |
+| `display_label` | string · SQL/DTO only, optional | A consumer may derive a presentation label. Do not add a second required graph discriminator. |
 | `visibility` | boolean · R | Orbiter publish/readiness policy, independent of whether a run has closed. Unresolved parties do not become visible speculative identities. |
 | `source` | string · R | `stage` for newly stage-owned production/work/award projections. An existing shared venue retains its owner's source; stage must not restamp a music-owned place. |
 | `source_names` | string[] · R, nonempty | Sources supporting the current projection. Summary only; not a substitute for field provenance. |
@@ -1272,7 +1014,7 @@ Adding the `Entity` label later would require a deliberate shared-place canonica
 
 ### Stage_Award
 
-**Labels:** `Stage_Award`, optionally `:Nominee` or `:Winner`.
+**Labels:** `Stage_Award` and `Entity` (same shape as `Film_TV_Award:Entity` and `Game_Award:Entity`, so `uuid` lookups and the `Entity(embeddings)` vector index cover it), optionally `:Nominee` or `:Winner`.
 
 **Canonical Go type:** none; a proposed stage-owned support record and bounded support replay.
 
@@ -1281,6 +1023,12 @@ Adding the `Entity` label later would require a deliberate shared-place canonica
 | Property | Type / requirement | Source basis and mapping rule |
 | --- | --- | --- |
 | `entity_type` | string · R | Proposed support graph vocabulary `Stage_Award`; no automatic canonical entity admission |
+| `award_entry_key` | string · R | **The MERGE key** — `body_key::year::category_slug::person::<person_entity_id>::<production_entity_id>`; outcome excluded so a nomination-to-win updates the same node. Indexed (`Stage_Award(award_entry_key)`). |
+| `uuid` / `row_id` | string · R | Both set to the `stage_awards` ledger row id on create — one durable id for graph and SQL |
+| `name` | string · R | Deterministic display projection: `<Body> <year> — <category> — <recipient>` |
+| `description` | string · R | Deterministic sentence ≤127 chars — `<Recipient> won \| was nominated for <category> for <production>.` |
+| `poster_url` | string · O | The production's re-hosted GCS poster — the card image, same property `Stage_Production` carries |
+| `embeddings` / `embedding_model` / `embedding_dimensions` | float32[] / string / int · O | Vector over `name + ". " + description` (plain prose, no field labels); model + dims stamped alongside per the vector rule |
 | `awarding_body` / `awarding_body_key` | string, string · R | **T/A** public series name plus controlled namespace, initially `tony` or `olivier` |
 | `award_year` | integer · R | **T/A** award edition year, independently of the production's opening year |
 | `category_name` | string · R | **T/A** category label with its original sponsor wording retained in evidence |
@@ -1308,6 +1056,7 @@ Award nodes may retain unresolved source context for discovery/admin use, but pu
   {
     "labels": [
       "Stage_Award",
+      "Entity",
       "Winner"
     ],
     "properties": {
@@ -1385,6 +1134,7 @@ Award nodes may retain unresolved source context for discovery/admin use, but pu
   {
     "labels": [
       "Stage_Award",
+      "Entity",
       "Nominee"
     ],
     "properties": {
@@ -1438,7 +1188,7 @@ The theatre envelope above governs new theatre-owned projections and the propose
 | `Entity:Music_Group` | [Music Group](#music_group) | Optional explicit collective work creator; a joint billing string does not establish a music group |
 | `Entity:Film_TV` with its current subtype | [Film/TV](#film_tv) | Existing resolved source-work endpoint for `ADAPTED_FROM`; stage does not create or enrich the film |
 
-**Minimal synthetic endpoint-reference examples:** these show the identity/type properties the stage writer reads after canonical resolution, not complete replacement node payloads. `canonical_entity_type` is SQL/API routing metadata and `labels` is selection metadata; neither wrapper is written as a nested graph property. Reused legacy nodes' returned graph UUID remains authoritative; stage must not restamp one to fit a sample.
+**Minimal synthetic endpoint-reference examples:** these show the identity/type properties the stage writer reads after canonical resolution, not complete replacement node payloads. `canonical_entity_type` is SQL/API routing metadata and `labels` is selection metadata; neither wrapper is written as a nested graph property. A reused existing node's returned graph UUID remains authoritative; stage must not restamp one to fit a sample.
 
 ```json
 [
@@ -1524,149 +1274,86 @@ Before implementation, freeze the property/identifier enums and minimum fixture 
 
 ## Expertise
 
-Nodes representing domains and sub-domains of professional expertise.
+### DomainExpertise and SubDomainExpertise
 
-<Card icon="circle-plus">
-  ```text
-  mvp/node/sync-domain-expertise-nodes — 12663
-  ```
+<Card icon="play">
 
-  **Creates** both `DomainExpertise` and `SubDomainExpertise` nodes from the reference tables (`CREATE`). Stamps `created_at` \+ `updated_at`. ✅ _(the canonical synced creator)_ **v1.2 (2026-07-06) — GEMINI-ONLY VECTORS:** new taxonomy nodes from the sync (and the batch seeder #13161 v1.3) carry `expert_embeddings` (Gemini 1536) only; the OpenAI `name_embedding` write was removed per Mark. Existing nodes keep whatever vectors they have.
+```
+internal/platform/graph/expertise.go — EnsureDomainExpertise · EnsureSubDomainExpertise · adoptExpertiseNode
+```
+
+Get-or-create, not a bare MERGE. The lookup (`expertise.go:112-118`) matches a node holding the key (`domain_key = lower(category)::lower(name)`, `sub_domain_key = lower(parent)::lower(name)`) **or** a node that predates the key, by lowercased name and parent, stamps the key on it (oldest wins), and only then runs `CREATE (d:DomainExpertise:Entity {…})` / `CREATE (s:SubDomainExpertise:Entity {…})` (`expertise.go:161,189`). Seeded from `universe.domain_expertise` and `universe.sub_domain_expertise` by the admin seed route; subdomains are also minted by the company specialties rebuild. No property envelope.
+
 </Card>
 
-<Card icon="circle-check">
-  ```text
-  mvp/expertise/resolve-person-expertise-v2 — 12926
-  mvp/expertise/resolve-company-specialties — 12746
-  ```
-
-  **Create** `SubDomainExpertise` nodes on-the-fly when an LLM identifies a new area (`source: "llm_identified"` / `"company_specialty"`). ✅ Both stamp `created_at` \+ `updated_at`, and both write `name_embedding` **and** `expert_embeddings` on the nodes they mint. _(The legacy `resolve-person-expertise` #12668 has been uncalled since 2026-06-19.)_
-</Card>
-
-### DomainExpertise
-
-Top-level expertise categories. Synced from the `domain_expertise` table.
-
-| Property | Type | Description |
+| Property | Kind | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Domain name |
-| `description` | string | Domain description |
-| `category` | string | Expertise category grouping |
-| `display_label` | string | `"DomainExpertise"` |
-| `name_embedding` | vecf32 | Legacy OpenAI embedding — no longer written on new taxonomy nodes (Gemini-only since 2026-07-06) |
-| `expert_embeddings` | vecf32 | Gemini 1536 embedding of `"{name}: {description}"` — the expertise-matching KNN target (older nodes may also carry the retired `expertise_embedding` property) |
-
-<Accordion title="Real example — Software Engineering">
-  ```json
-  {
-    "uuid": "e2b4bd5c-1e5f-4781-be02-9b80916bbf5c",
-    "name": "Software Engineering",
-    "description": "Software Engineering: systematic design, coding, testing, DevOps, agile, cloud, microservices, algorithms, databases, APIs, CI/CD, version control, scalable reliable systems.",
-    "category": "engineering and software development categories",
-    "display_label": "DomainExpertise"
-  }
-  ```
-</Accordion>
-
-### SubDomainExpertise
-
-Specific expertise areas within a domain. Can be synced from the `sub_domain_expertise` table or created on-the-fly during person expertise resolution.
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Sub-domain name |
-| `description` | string | LLM-generated description |
-| `parent_domain` | string | Parent domain name (when synced from table) |
-| `display_label` | string | `"SubDomainExpertise"` |
-| `source` | string | `"llm_identified"` / `"company_specialty"` when created during resolution |
-| `parent_unresolved` | boolean | Set when the parent-domain LLM returned NONE — flags the node for human review (#13142) |
-| `name_embedding` | vecf32 | OpenAI embedding — written by the LLM resolvers on minted nodes; no longer written by the taxonomy sync/seeder (Gemini-only since 2026-07-06) |
-| `expert_embeddings` | vecf32 | Gemini 1536 embedding — the expertise-matching KNN target (older nodes may also carry the retired `expertise_embedding` property) |
-
-<Accordion title="Real example — Web Development">
-  ```json
-  {
-    "uuid": "4414d987-a22e-438f-a450-21faeb440e8e",
-    "name": "Web Development",
-    "description": "Web development covers front-end & back-end coding, responsive design, APIs, databases, and deployment to create fast, secure, interactive websites and web apps using JavaScript, HTML, CSS, and modern frameworks.",
-    "display_label": "SubDomainExpertise"
-  }
-  ```
-</Accordion>
+| `uuid` | both | `randomUUID()` on CREATE |
+| `domain_key` / `sub_domain_key` | Domain / SubDomain | Identity key; stamped onto pre-key nodes on first match |
+| `name` | both | |
+| `description` | both | Always written on CREATE, possibly empty |
+| `category` | Domain | Category grouping |
+| `parent_domain`, `parent_domain_uuid` | SubDomain | Parent name and node uuid |
+| `entity_type` | both | `"DomainExpertise"` / `"SubDomainExpertise"` |
+| `parent_unresolved`, `parent_unresolved_at` | SubDomain, later | Set by the rebuild when the parent LLM returns NONE (`specialties.go:283-285`) |
+| `expert_embeddings`, `embedding_model`, `embedding_dimensions` | both, on CREATE | Gemini 1536 over `"name: description"`; the expertise KNN target. The property name differs from every other node kind on purpose |
+| `created_at`, `updated_at` | both | |
 
 ---
 
 ## Funding
 
-### Funding\_Round
+### Funding_Round
 
-Represents a single financing event for a company.
+<Card icon="play">
 
-<Card icon="circle-plus">
-  ```text
-  mvp/funding/add-fundable-deal-node — 12701
-  ```
+```
+internal/platform/graph/funding.go — MergeFundingRound · MergeInvestedIn
+```
 
-  **Creates / updates** the `Funding_Round` node (v1.17, 2026-07-09) — `MERGE` on `uuid`; since v1.10 both branches add the **`:Entity` base label** \+ `visibility: true`; every string prop is JSON-encoded (quote-safe), the node always gets a non-empty `description` \+ a natural display `name`, and materialized uuids are registered in `node_registry` (v1.17). Stamps `created_at` \+ `updated_at`. ✅
+`MERGE (fr:Funding_Round {uuid: $round_uuid}) … SET fr:Entity, …` — the `Entity` label is added on every write rather than named in the pattern, which is why the graph carries a `Funding_Round.uuid` index. The round uuid is the Fundable deal id (`source = 'Fundable'`) or a generated uuid on the Company-LLM fallback (`source = 'Company_LLM'`, `provisional = true`). The same statement draws `(Company)-[:RAISED]->(Funding_Round)` with the edge's `created_at` floored to the announced date. No property envelope.
+
 </Card>
 
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier (Fundable deal ID) |
-| `name` | string | Display name (e.g. "Frame.io Series C") |
-| `display_label` | string | `"Funding_Round"` |
-| `company_name` | string | Funded company name |
-| `funding_type` | string | Financing type (Seed, Series A, etc.) |
-| `announced_date` | string | Date announced (YYYY-MM-DD) |
-| `size_usd` | number | Round size in USD |
-| `size` | number | Round size in original currency |
-| `currency` | string | Original currency code |
-| `short_description` | string | One-line summary |
-| `long_description` | string | Detailed description |
-| `number_of_angel_investors` | integer | Angel investor count |
-| `number_of_institutional_investors` | integer | VC/institutional investor count |
-| `total_number_of_investors` | integer | Total investor count |
-| `visibility` | boolean | UI visibility flag |
-| `name_embedding` | vecf32 | Semantic embedding |
+| `uuid` | MERGE key | Deal id or generated |
+| `entity_type` | every write | `"Funding_Round"` |
+| `name`, `company_name`, `description`, `source`, `provisional` | every write | |
+| `visibility` | ON CREATE | `true` |
+| `short_description` | every write | Falls back to `description` |
+| `long_description`, `funding_type`, `announced_date` (`YYYY-MM-DD`), `investors_text` | when present | Never zeroed on re-merge |
+| `size`, `size_usd` + `currency` | when > 0 | `currency` defaults to `"usd"` |
+| `investor_count` | when present | Integer |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when supplied | Over the description |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
-<Accordion title="Real example — Frame.io Series C">
-  ```json
-  {
-    "uuid": "a1b2c3d4-fund-1234-abcd-ef0123456789",
-    "name": "Frame.io Series C",
-    "display_label": "Funding_Round",
-    "company_name": "Frame.io",
-    "funding_type": "Series C",
-    "announced_date": "2019-11-25",
-    "size_usd": 50000000,
-    "currency": "USD",
-    "number_of_institutional_investors": 4,
-    "total_number_of_investors": 4,
-    "visibility": true
-  }
-  ```
-</Accordion>
+### InvestmentThesis
 
-<Accordion title="Real example — Frame.io Seed">
-  ```json
-  {
-    "uuid": "b2c3d4e5-seed-5678-bcde-f01234567890",
-    "name": "Frame.io Seed",
-    "display_label": "Funding_Round",
-    "company_name": "Frame.io",
-    "funding_type": "Seed",
-    "announced_date": "2015-10-05",
-    "size_usd": 2200000,
-    "currency": "USD",
-    "number_of_angel_investors": 5,
-    "number_of_institutional_investors": 1,
-    "total_number_of_investors": 6,
-    "visibility": true
-  }
-  ```
-</Accordion>
+<Card icon="play">
+
+```
+internal/platform/graph/investment_thesis.go — buildInvestmentThesisMerge · MergeHasInvestmentThesis · DeleteStaleInvestmentTheses
+```
+
+`MERGE (t:InvestmentThesis:Entity {thesis_id: $thesis_id})`; `uuid = thesis_id`. The `(investor)-[:HAS_INVESTMENT_THESIS]->(thesis)` edge is a separate statement on purpose, and a rebuild deletes the investor's other thesis nodes. Facets are a fixed typed set that is explicitly `NULL`ed when absent, unlike the envelope-based writers which omit absent keys. Runs on `thesis.build_requested` and the evidence-narrative worker.
+
+</Card>
+
+| Property | Written | Description |
+| --- | --- | --- |
+| `uuid` | ON CREATE | Equal to `thesis_id` |
+| `thesis_id` | MERGE key | |
+| `entity_id`, `investor_uuid` | every write | The investor entity and its node |
+| `entity_type` | every write | `"InvestmentThesis"` |
+| `name`, `visibility` | every write | `visibility = true` |
+| `firm_name`, `investor_type`, `declared_thesis_summary`, `derived_thesis_summary`, `investor_narrative`, `thesis_payload` | when non-empty | |
+| `fundable_org_id`, `fundable_person_id` | when present | |
+| `industries`, `stage_focus`, `geography` | every write | Lowercased lists, or `NULL` |
+| `check_size_min`, `check_size_max`, `check_size_sweet_spot`, `lead_ratio` | every write | Floats, or `NULL` |
+| `total_deals_count`, `lead_deals_count` | every write | Integers, or `NULL` |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when supplied | The derived summary, in the shared Entity space; thesis narrative vectors stay in Postgres |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
 ---
 
@@ -1674,17 +1361,27 @@ Represents a single financing event for a company.
 
 <a id="media-appearances" />
 
-**Proposed Go contract, 2026-09-06; not implemented.** The [media build plan](/guides/open-work/roadmap/media-co-occurrence) adds one graph node family, `Entity:MediaAppearance`, and proposes two Go canonical registrations: `media_appearance` and `live_event`. Live events reuse the existing `Entity:Event:Live_*` ontology below. Neither registration exists in the Go constants inspected at `ef167b0`; legacy event writers are not proof of Go availability.
+**Contract proposed 2026-09-06; a first writer exists (audited 2026-09-13, see the card below). The proposed table remains the target shape.** The [media build plan](/guides/open-work/orbiter-univers-standalone/social-media-enrichment) adds one graph node family, `MediaAppearance`, and proposes two Go canonical registrations: `media_appearance` and `live_event`. Live events reuse the existing `Entity:Event:Live_*` ontology below. Neither registration exists in the Go constants inspected at `ef167b0`.
 
 ### MediaAppearance
 
+<Card icon="play">
+
+```
+internal/platform/graph/appearances.go
+```
+
+**Universe writer, as implemented.** `MERGE (m:MediaAppearance {media_key})` — **no `Entity` label**, on purpose: an episode is not an entity and must not be found by entity-wide reads or the shared vector index (`appearances.go:19-21`, `:147-151`). ON CREATE: `uuid` (= the `media_appearances` row id), `created_at`, `entity_type = 'MediaAppearance'`, `source`, `visibility = true`. Every write: `updated_at`, `title`, `episode_url`; `show` and `valid_from` (the year) when present. No property envelope and no embedding yet. The wider property set in the table below is the planned contract, not what the node carries today.
+
+</Card>
+
 One source-identified episode or session, independent of the sites/assets distributing it. A publisher podcast episode and an explicitly equivalent video share one canonical identity. A show, channel, conference edition, clip and news article are different things. Do not key this node by title/date/host set or use a show-level URL as an episode ID.
 
-**Proposed upsert identity:** canonical `entity_id`; `uuid` remains the stable graph UUID. Typed source aliases are resolved through `entity_identifiers` and the media source-association owner. Review these keys before implementing the writer. YouTube video IDs are case-sensitive; RSS GUIDs are exact and feed-scoped; conference session IDs are organizer/edition-scoped. Compilation assets map to scoped segments in SQL and are not single-appearance strong aliases. Source identity and retention rules are in the [build contract](/guides/open-work/roadmap/media-co-occurrence#identity-node-types-and-cross-source-deduplication).
+**Proposed upsert identity:** canonical `entity_id`; `uuid` remains the stable graph UUID. Typed source aliases are resolved through `entity_identifiers` and the media source-association owner. Review these keys before implementing the writer. YouTube video IDs are case-sensitive; RSS GUIDs are exact and feed-scoped; conference session IDs are organizer/edition-scoped. Compilation assets map to scoped segments in SQL and are not single-appearance strong aliases. Source identity and retention rules are in the [build contract](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#identity-node-types-and-cross-source-deduplication).
 
 | Property | Type / requirement | Source and semantics |
 | --- | --- | --- |
-| `uuid`, `entity_id` | UUID strings · required | Graph/canonical identity; not provider IDs or legacy `master_*` keys. |
+| `uuid`, `entity_id` | UUID strings · required | Graph/canonical identity; not provider IDs. |
 | `entity_type` | string · required | Graph kind `MediaAppearance`; canonical SQL/API type is `media_appearance`. `display_label` may be emitted for a versioned compatibility consumer. |
 | `name`, `title` | strings · required | Chosen publisher episode title or organizer session title, not an LLM-invented title. |
 | `appearance_kind` | enum · required | `interview`, `panel`, `solo_talk`, `other`, `unknown`; mixed assets require scoped interaction groups, not a guessed clique. |
@@ -1736,7 +1433,7 @@ Graph properties are scalars and bounded scalar arrays. Interaction membership, 
 }
 ```
 
-Primary mapping references: [publisher RSS requirements](https://podcasters.apple.com/support/823-podcast-requirements), [YouTube video metadata](https://developers.google.com/youtube/v3/docs/videos/list), [organizer programme example](https://conferences.ted.com/ted2026/program), and [archive capture metadata](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md). Provider fields are source candidates, not permission to infer participation or reuse restricted API data; the [YouTube source gate](/guides/open-work/roadmap/media-co-occurrence#youtube-data-api-permission-gated-metadata-adapter) must pass first.
+Primary mapping references: [publisher RSS requirements](https://podcasters.apple.com/support/823-podcast-requirements), [ScrapeCreators OpenAPI](https://docs.scrapecreators.com/openapi.json), [organizer programme example](https://conferences.ted.com/ted2026/program), and [archive capture metadata](https://github.com/internetarchive/wayback/blob/master/wayback-cdx-server/README.md). Provider fields are source candidates, not permission to infer participation or reuse restricted API data; the [YouTube source gate](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#scrapecreators-youtube-one-ingestion-owner) must pass first.
 
 ## Live Events
 
@@ -1744,130 +1441,45 @@ Primary mapping references: [publisher RSS requirements](https://podcasters.appl
 
 ### Event
 
-Represents a live industry event — summits, conferences, trade shows, workshops, etc. Source of truth lives in Xano table `live_events` (#702).
+One label, two writers. Live industry events (talks, conferences, podcasts' host events) come from the Deep Bio appearance lane; music events come from the MusicBrainz sync. They share the `Event` label and nothing else.
 
-<Card icon="circle-check">
-  ```text
-  mvp/node/add-live-event-node — 12851
-  ```
+<Card icon="play">
 
-  **Creates** the live-event `Event` node — `CREATE (p:Entity:Event:Live_{event_type} {...})`, properties built dynamically from the `live_events` row. ✅ Now stamps `created_at` \+ `updated_at`; the dynamic property loop skips any incoming timestamp keys (fixed 2026-06-01).
+```
+internal/platform/graph/appearances.go — buildLiveEventNode   (live events)
+```
+
+`MERGE (e:Event {event_key: $event_key})` on the **base label only**, so an edition already seeded with a different sub-label is matched rather than duplicated (`appearances.go:104-106`). `ON CREATE SET e:Entity:Live_<Type>` where `<Type>` is the source's event type (`Live_Event` when absent), validated as a Cypher identifier: the sub-label vocabulary is whatever the source reports, not a fixed list, and it is never repaired after creation. No envelope, no embedding.
+
 </Card>
 
-The base node always carries `Entity:Event` plus one dynamic live-event sub-label drawn from a controlled vocabulary (`event_type`). The sub-label is prefixed with `Live_` so the shared `Event` model can also hold music events.
-
-**Possible label combinations:**
-
-- `Entity:Event:Live_Summit`
-- `Entity:Event:Live_Conference`
-- `Entity:Event:Live_Festival`
-- `Entity:Event:Live_Trade_Show`
-- `Entity:Event:Live_Workshop`
-- `Entity:Event:Live_Webinar`
-- `Entity:Event:Live_Hackathon`
-- `Entity:Event:Live_Meetup`
-- `Entity:Event:Live_Networking_Event`
-
-<Info>
-  Sub-labels are Cypher identifiers — **alphanumeric and underscore only, no spaces or slashes**. Never derive the label from the free-form `category` property. Use `event_type` only.
-</Info>
-
-<Note>
-  Edge types for connecting live events to Person / Company / Organization nodes (hosting, speaking, sponsoring, attending, succeeding editions, etc.) are specified in the [Edge Types reference](/guides/ontology/edges#live-events) (spec locked 2026-09-05) — only `REGISTERED_FOR` is implemented so far.
-</Note>
-
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier (matches Xano `node_uuid`) |
-| `master_event_id` | integer | FK to Xano `live_events.id` |
-| `name` | string | Official event name |
-| `display_label` | string | Always `"Event"` |
-| `event_type` | string | Controlled sub-label (`Summit`, `Conference`, etc.) — drives the `Live_*` Cypher label |
-| `visibility` | boolean | UI visibility flag |
-| `event_url` | string | Canonical event page URL (unique) |
-| `event_key` | string | Stable slug for the specific edition (e.g. `lsi-usa-26-emerging-medtech-summit`) |
-| `slug` | string | Short slug |
-| `edition_year` | integer | Calendar year of this edition |
-| `start_date` | timestamp | Event start (epoch ms) |
-| `end_date` | timestamp | Event end (epoch ms) |
-| `duration_days` | integer | Number of days |
-| `status` | string | `upcoming`, `completed`, `cancelled` |
-| `announced_at` | timestamp | When the edition was publicly announced |
-| `cancelled_at` | timestamp | Populated only if cancelled |
-| `annual_recurring` | boolean | True if part of a recurring series |
-| `recurrence_pattern` | string | e.g. `annual`, `biennial`, `quarterly` |
-| `series_name` | string | Name of the recurring series |
-| `series_slug` | string | Stable slug for the series (shared across editions) |
-| `first_edition_year` | integer | Year of the series' first edition |
-| `venue_name` | string | Host venue |
-| `city_name` | string | City |
-| `region_name` | string | State/region |
-| `country_name` | string | Country |
-| `format` | string | `in-person`, `virtual`, `hybrid` |
-| `industry` | string | Primary industry (e.g. `Medical Technology`) |
-| `category` | string | Human-readable category text (free-form; **not** used for labels) |
-| `topics` | string | Comma-separated topic tags |
-| `expected_attendance` | integer | Projected attendee count |
-| `actual_attendance` | integer | Post-event attendee count |
-| `audience_types` | string | Comma-separated audience roles |
-| `presenter_count` | integer | Total presenting companies/people |
-| `speaker_count` | integer | Total unique speakers |
-| `session_count` | integer | Total sessions/panels |
-| `registration_url` | string | Registration page |
-| `registration_status` | string | `open`, `at capacity - waitlist available`, `closed` |
-| `ticket_price_usd_min` | string | Lowest pass price in USD |
-| `ticket_price_usd_max` | string | Highest pass price in USD |
-| `tagline` | string | Marketing tagline |
-| `short_description` | string | One-to-two sentence summary |
-| `long_description` | string | 150–200 word description |
-| `logo_url` | string | Event logo image URL |
-| `website` | string | Organizer/series website |
-| `twitter_handle` | string | X/Twitter handle |
-| `linkedin_url` | string | LinkedIn company/showcase URL |
-| `name_embedding` | vecf32 | Semantic embedding |
+| `uuid` | ON CREATE | The `live_events` row id |
+| `event_key` | MERGE key | Durable edition key |
+| `entity_type` | ON CREATE | `"Event"` |
+| `display_label` | ON CREATE | `"Event"` |
+| `event_type` | ON CREATE | The sub-label without its `Live_` prefix |
+| `source`, `visibility` | ON CREATE | `visibility = true` |
+| `name` | every write | |
+| `event_url`, `edition_year` | first write wins | `coalesce(existing, new)` |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
-<Accordion title="Real example — LSI USA '26 Emerging Medtech Summit">
-  ```json
-  {
-    "uuid": "b3c1d4a2-...-...",
-    "master_event_id": 1,
-    "name": "LSI USA '26 Emerging Medtech Summit",
-    "display_label": "Event",
-    "event_type": "Summit",
-    "visibility": true,
-    "event_url": "https://www.lsiusasummit.com/2026",
-    "event_key": "lsi-usa-26-emerging-medtech-summit",
-    "edition_year": 2026,
-    "start_date": 1773648000000,
-    "end_date": 1774029600000,
-    "duration_days": 5,
-    "status": "completed",
-    "annual_recurring": true,
-    "recurrence_pattern": "annual",
-    "series_name": "LSI USA Emerging Medtech Summit",
-    "series_slug": "lsi-usa-emerging-medtech-summit",
-    "venue_name": "Waldorf Astoria Monarch Beach Resort",
-    "city_name": "Dana Point",
-    "region_name": "California",
-    "country_name": "United States",
-    "format": "in-person",
-    "industry": "Medical Technology",
-    "category": "Summit / Conference",
-    "tagline": "Partner with the Leaders in Medtech",
-    "registration_status": "at capacity - waitlist available",
-    "website": "https://www.lsiusasummit.com/",
-    "linkedin_url": "https://www.linkedin.com/company/life-science-intelligence"
-  }
-  ```
+<Card icon="play">
 
-  _Node labels: `Entity`, `Event`, `Live_Summit`_
-</Accordion>
+```
+internal/platform/graph/music.go — buildMusicNodeSync with Label = Event   (music events)
+```
+
+`MERGE (g:Event:Entity {entity_id: $entity_id})`, `entity_type = 'Event'`, `source = 'musicbrainz.org'`, `visibility = true` ON CREATE; `Music_<Type>` sub-label added every sync from the closed list `Concert`, `Festival`, `Launch event`, `Convention/Expo`, `Masterclass/Clinic`, `Stage performance`, `Award ceremony` (spaces become `_`). Envelope: `disambiguation`, `event_type`, `begin_date`, `end_date`, `start_time`, `cancelled`, `setlist`, `genres`, `tags`, `mb_rating`, `mb_rating_votes` (`music_sync_catalog.go:173-187`); `mbid` and `description` explicit; `embeddings` over name, disambiguation, type, date and place. See [Music Event](#music-event).
+
+</Card>
 
 ### Go live-event registration for the media lane
 
 <a id="media-live-event" />
 
-**Proposed, not a rewrite of the legacy writer above.** The media lane needs canonical `entity_type=live_event` and facts-owned `live_event` cache in Go, reusing the existing graph family. Resolve organizer-defined edition identifiers through the event owner's public seam; preserve imported canonical/graph UUIDs and source aliases. `name + year`, an organizer homepage and series branding are only candidate matches. Do not write legacy `master_event_id` as a new Go foreign key or reuse the music-event runner.
+**Proposed extension of the live-event writer above.** The media lane needs canonical `entity_type=live_event` and facts-owned `live_event` cache in Go, reusing the existing graph family. Resolve organizer-defined edition identifiers through the event owner's public seam; preserve imported canonical/graph UUIDs and source aliases. `name + year`, an organizer homepage and series branding are only candidate matches. Do not reuse the music-event runner.
 
 Use the media node envelope (`uuid`, `entity_id`, source/provenance/revision/policy fields, timestamps, visibility/tombstone), with graph `entity_type=Event`. Dates and status are chosen source facts, not processing-time guesses.
 
@@ -1877,7 +1489,7 @@ Use the media node envelope (`uuid`, `entity_id`, source/provenance/revision/pol
 | `event_url`, `event_key` | strings · required | Verified edition-level URL and durable owner key. Source IDs/URL redirects are aliases, not replacement UUIDs. |
 | `organizer_source_ref`, `source_edition_id` | strings · optional | Exact organizer/platform and edition keys. Owner-reviewed composite key if no native ID exists. |
 | `edition_year`, `series_name`, `series_slug` | integer/strings · optional | Source-backed context only; several editions may share these values. |
-| `start_date`, `end_date`, `date_precision`, `timezone` | ISO date strings / enums / IANA zone · optional | Proposed Go wire format; do not silently mix legacy epoch-ms fields. Event-local dates are not fabricated UTC instants. |
+| `start_date`, `end_date`, `date_precision`, `timezone` | ISO date strings / enums / IANA zone · optional | Proposed Go wire format; do not mix epoch-ms fields. Event-local dates are not fabricated UTC instants. |
 | `status` | enum · required | `upcoming|completed|cancelled|unknown`; completed requires reliable source confirmation. |
 | `format`, `venue_name`, `city_name`, `region_name`, `country_name` | strings · optional | Organizer facts. Venue names remain context until the shared place owner resolves them. |
 | `speaker_count`, `speaker_count_complete`, `speaker_count_observed_at` | integer/boolean/timestamp · optional | Accepted, deduplicated roster count with completeness and source time. A partial count below 50 does not qualify for the 15-weight speaker tier. |
@@ -1914,616 +1526,193 @@ A session is a `MediaAppearance` linked through proposed [SESSION_OF](/guides/on
 
 ## MusicBrainz Nodes
 
-MusicBrainz nodes are produced by the [Music Industry Waterfall](/guides/enrichment/waterfall/music-waterfall). This section is the canonical graph contract for music node labels, properties, media fields, vector fields, and reconciliation behavior. The waterfall pages should link here instead of redefining node schemas.
+MusicBrainz nodes are produced by the [Music Industry Waterfall](/guides/enrichment/waterfall/music-waterfall). Five entity kinds share one Go builder; two support kinds have their own.
 
-<Note>
-  Every enriched music node converges on the standard envelope: `created_at`, `updated_at`, `uuid`, `mbid`, `display_label`, `visibility`, semantic-null or GOOD `description`, and both vector fields. `Recording`, `Music_Group`, and `Person:Music_Artist` can additionally carry `image_url`.
-</Note>
+<Card icon="play">
+
+```
+internal/platform/graph/music.go — buildMusicNodeSync   (Music_Group, Recording, Release_Group, Music_Work, Event)
+internal/platform/graph/music_support.go — buildMusicSupportNode   (Release, Place)
+```
+
+Entity kinds: `MERGE (g:<Label>:Entity {entity_id: $entity_id})`; ON CREATE `uuid = entity_id`, `created_at`, `entity_type = <Label>`, `source = 'musicbrainz.org'`, `visibility = true`; every sync `updated_at`, `name`, `mbid` and `description` when present, the subtype label from the per-kind whitelist, and the envelope. The identity key is `entity_id`, never `mbid`: MusicBrainz merges entities and answers under the survivor's id, so an mbid key would mint a second node for a merged-away band (`music.go:89-92`). Support kinds: `MERGE (n:<Release|Place> {row_id: $row_id})` with **no `Entity` label** (`music_support.go:136-137`); `uuid = row_id`.
+
+</Card>
 
 <Warning>
-  MusicBrainz `artist` records split into two graph shapes:
-
-  - `type == "Person"` -\> `Entity:Person:Music_Artist`
-  - `type in {Group, Orchestra, Choir, Other}` -\> `Entity:Music_Group`
-
-  A band is never a `Person`. `MEMBER_OF` is therefore always `(Person:Music_Artist)->(Music_Group)`.
+  MusicBrainz `artist` records split into two graph shapes: `type = Person` becomes a [Person](#person) node with the `Music_Artist` modifier label (owned by the person sync), and every other type becomes `Music_Group:Entity`. A band is never a `Person`; `MEMBER_OF` runs `(Entity)-[:MEMBER_OF]->(Music_Group:Entity)`.
 </Warning>
 
 <a id="music-standard-node-envelope" />
 
-### Standard Music Node Envelope
+### Standard music node shape
 
-```cypher
-MERGE (n:<labels> {mbid: $mbid})
-SET n.uuid           = coalesce(n.uuid, randomUUID()),
-    n.display_label  = "<Label>",
-    n.visibility     = true,
-    n.description    = <good <=127 summary | null>,
-    n.name_embedding = vecf32($embedding),
-    n.embeddings     = vecf32($geminiEmbedding),
-    n.created_at     = coalesce(n.created_at, timestamp()),
-    n.updated_at     = timestamp()
-    // node-specific properties, plus image_url where supported
-```
-
-| Field | Type | Required | Notes |
-| --- | --- | :-: | --- |
-| `uuid` | string | Yes | `randomUUID()`, stable via `coalesce` |
-| `mbid` | string | Yes | MusicBrainz ID and MERGE key |
-| `display_label` | string | Yes | Product-facing label |
-| `visibility` | boolean | Yes | UI flag |
-| `description` | string/null | Yes | GOOD-or-null invariant: one clean factual sentence \<=127 characters beginning with the entity name, or exactly `null` |
-| `name_embedding` | vecf32 | Yes | OpenAI `text-embedding-3-small`, 1536 dimensions; indexed on `:Entity` today |
-| `embeddings` | vecf32 | Yes | Google `gemini-embedding-001`, 1536 dimensions, L2-normalized (3072→1536 migrated 2026-07-06); indexed @1536 on `Entity`; read cutover from `name_embedding` pending |
-| `image_url` | string/null | Selective | Only `Recording`, `Music_Group`, and `Person:Music_Artist` |
-| `created_at` | timestamp | Yes | `coalesce(n.created_at, timestamp())` |
-| `updated_at` | timestamp | Yes | `timestamp()` on every write |
-
-`Recording`, `Music_Group`, and `Person:Music_Artist` receive generated descriptions through `mb/node/finalize-music-node` (#13117). Other music node types intentionally carry `description = null` unless a future description pass supports them. Null is preferred over low-quality generated text because descriptions are used as embedding source text.
-
-<a id="music-node-embeddings" />
-
-### Music Node Embeddings
-
-Forward-created music nodes carry both vector fields. `name_embedding` is the current indexed vector, and `embeddings` is the Gemini migration field.
-
-| Node type | Written by | Embed text |
+| Property | Written | Notes |
 | --- | --- | --- |
-| `Company:Music_Label` | `mb/node/add-music-label-node` #13090 | name \+ disambiguation |
-| `Person:Music_Artist` | `mb/node/add-music-artist-node` #13092 initially; #13117 rewrites from description | description once finalized |
-| `Music_Group` | #13092 initially; #13117 rewrites from description | description once finalized |
-| `Recording` | `mb/run-base-recording-enrich` #13100 -\> #13117 | description once finalized |
-| `Work` | `mb/run-base-work-enrich` #13101 -\> #13117 (`kind=other`) | name \+ disambiguation |
-| `Release_Group` | `mb/run-base-release-group-enrich` #13099 -\> #13117 (`kind=other`) | name \+ disambiguation |
-| `Release` | canonical release materialization in #13099 -\> #13117 (`kind=other`) | name \+ disambiguation |
-| `Event:Music_*` | `mb/run-base-event-enrich` #13105 -\> #13117 (`kind=other`) | name \+ disambiguation |
-| `Place` | inline materialization in #13100/#13105 -\> #13117 (`kind=other`) | name \+ disambiguation |
+| `uuid` | ON CREATE | Equal to `entity_id` (entity kinds) or `row_id` (support kinds) |
+| `entity_id` / `row_id` | MERGE key | Entity kinds / support kinds |
+| `mbid` | every write when present | A property, not the key |
+| `entity_type` | ON CREATE | The base label |
+| `source`, `visibility` | ON CREATE | `"musicbrainz.org"`, `true` |
+| `name` | every write | Title for recordings, works and release groups; name otherwise |
+| `description` | when present | LLM-generated only for `Music_Group` (D-13, write-once); a person artist's description rides the Person node |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | when supplied | Gemini 1536; embed text differs per kind (below). `Release` never embeds |
+| `created_at`, `updated_at` | ON CREATE / every write | |
 
-`disambiguation` is the MusicBrainz disambiguation comment, such as `1980s-1990s US grunge band` for Nirvana or `lead singer and guitarist for Nirvana` for Kurt Cobain. For name-based node types it is appended to the embed text so the vector carries era, genre, region, or identity context.
+Genres and tags stay properties on the node ([genre policy](#music-genre-policy)); no `Genre` nodes or `HAS_GENRE` edges exist.
 
 <a id="music-person-artist" />
 
-### Person:Music\_Artist
+### Person:Music_Artist
 
-A human musician. This is a `Person`-shaped graph node with the additive `Music_Artist` label, distinct from a business-side `master_person` node. The music person-resolution pass bridges the two with `SAME_AS` instead of merging the MusicBrainz artist node into the master-person node.
-
-**Labels:** `Entity:Person:Music_Artist`
-
-**Materializes via:** `mb/run-base-artist-enrich` (#13094) \+ `mb/node/add-music-artist-node` (#13092). Reconciles through `mb/resolve-and-link-music-person` (#13121).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz artist ID |
-| `name` / `sort_name` | string | Display and sort names |
-| `display_label` | string | `Music_Artist` |
-| `gender` | string | MusicBrainz gender value |
-| `country` | string | Country code |
-| `birth_date` / `death_date` | string | Life-span dates |
-| `begin_area` | string | Hometown/begin area |
-| `instruments` | string | Aggregated instruments from memberships and credits |
-| `isnis` / `ipis` | string | Rights-society identifiers |
-| `music_rating` / `music_rating_votes` | number/int | MusicBrainz rating metadata |
-| `genres` | string | Genre metadata property only |
-| `disambiguation` | string | MusicBrainz disambiguation comment |
-| `image_url` | string/null | Re-hosted avatar from person-resolution |
-| `social_links` | list | Verified social, streaming, and homepage URLs |
-| `social_resolved_at` | string | ISO timestamp for resolution pass |
-
-<Accordion title="Real example — Kurt Cobain">
-  ```json
-  {
-    "mbid": "3c9b356d-d1db-4f4e-a7a3-2d00c1d70255",
-    "name": "Kurt Cobain",
-    "sort_name": "Cobain, Kurt",
-    "display_label": "Music_Artist",
-    "gender": "Male",
-    "country": "US",
-    "birth_date": "1967-02-20",
-    "death_date": "1994-04-05",
-    "begin_area": "Aberdeen",
-    "instruments": "guitar, vocals",
-    "isnis": "0000000110685005",
-    "music_rating": 5,
-    "genres": "grunge, rock",
-    "disambiguation": "lead singer and guitarist for Nirvana",
-    "description": "Kurt Cobain was an American musician and Nirvana singer-guitarist.",
-    "visibility": true
-  }
-  ```
-
-  _Node labels: `Entity`, `Person`, `Music_Artist`_
-</Accordion>
+A human musician is a [Person](#person) node with the add-only `Music_Artist` label. Its properties are the person sync's; the music-specific fields live on the `mb_artist` row and reach the graph only through the person envelope and the person-resolution bridge. No separate node exists.
 
 <a id="music-group" />
 
-### Music\_Group
+### Music_Group
 
-A band, orchestra, choir, or other non-person act.
+**Labels:** `Music_Group:Entity` plus `Group`, `Orchestra` or `Choir` when MusicBrainz states one of those types.
 
-**Labels:** `Entity:Music_Group`
-
-**Materializes via:** `mb/run-base-artist-enrich` (#13094) \+ `mb/node/add-music-artist-node` (#13092).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz artist ID |
-| `name` / `sort_name` | string | Display and sort names |
-| `display_label` | string | `Music_Group` |
-| `group_type` | string | `Group`, `Orchestra`, `Choir`, or `Other` |
-| `country` / `area` | string | Country and area labels |
-| `formed_year` / `dissolved_year` / `ended` | int/int/bool | Life-span fields |
-| `music_rating` / `music_rating_votes` | number/int | MusicBrainz rating metadata |
-| `genres` | string | Genre metadata property only |
-| `tags` | string | Folksonomy metadata property only |
-| `disambiguation` | string | MusicBrainz disambiguation comment |
-| `image_url` | string/null | Re-hosted group image from GCS |
-
-<Accordion title="Real example — Nirvana">
-  ```json
-  {
-    "mbid": "5b11f4ce-a62d-471e-81fc-a69a8278c7da",
-    "name": "Nirvana",
-    "display_label": "Music_Group",
-    "group_type": "Group",
-    "country": "US",
-    "area": "United States",
-    "formed_year": 1987,
-    "ended": true,
-    "music_rating": 4.6,
-    "genres": "grunge, alternative rock, noise rock",
-    "disambiguation": "1980s-1990s US grunge band",
-    "description": "Nirvana was an American grunge band formed in Aberdeen, Washington.",
-    "visibility": true
-  }
-  ```
-
-  _Node labels: `Entity`, `Music_Group`_
-</Accordion>
+| Property | Description |
+| --- | --- |
+| `sort_name`, `disambiguation`, `artist_type`, `country`, `area` | Envelope (`music_sync.go:277-292`) |
+| `begin_year`, `end_year`, `ended` | Life span |
+| `genres`, `tags`, `mb_rating`, `mb_rating_votes` | Metadata |
+| `description` | Generated once when missing |
+| `embeddings` | Over name, disambiguation, type, country, genres and description |
 
 <a id="music-recording" />
 
 ### Recording
 
-A specific audio capture or track, independent of the underlying composition.
+**Labels:** `Recording:Entity`. No subtype labels.
 
-**Labels:** `Entity:Recording`
-
-**Materializes via:** `mb/run-base-recording-enrich` (#13100).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz recording ID |
-| `title` | string | Recording title |
-| `length_ms` | int | Track length |
-| `video` | boolean | Whether the recording is a video |
-| `isrcs` | string | Recording identifiers |
-| `first_release_date` | string | First release date |
-| `genres` | string | Genre metadata property only |
-| `image_url` | string/null | Re-hosted GCS cover art |
-
-<Accordion title="Real example — Smells Like Teen Spirit recording">
-  ```json
-  {
-    "mbid": "a8242652-c086-43b4-8971-5f8d68ae273b",
-    "title": "Smells Like Teen Spirit",
-    "length_ms": 275106,
-    "video": false,
-    "display_label": "Recording",
-    "description": "Smells Like Teen Spirit is a 4:35 studio recording by Nirvana.",
-    "visibility": true
-  }
-  ```
-</Accordion>
+| Property | Description |
+| --- | --- |
+| `disambiguation`, `length_ms`, `first_release_year`, `video`, `isrcs` | Envelope (`music_sync_catalog.go:131-145`) |
+| `genres`, `tags`, `mb_rating`, `mb_rating_votes` | Metadata |
+| `image_url`, `image_source_url` | Re-hosted cover art and its source |
+| `embeddings` | Over title and primary artist credit |
 
 <a id="music-work" />
 
-### Work
+### Music_Work
 
-The underlying composition, lyrics, score, or rights work behind one or more recordings.
+**Labels:** `Music_Work:Entity` plus one of 22 work-type labels (`Song`, `Symphony`, `Opera`, `Ballet`, `Sonata`, `Suite`, `Concerto`, `Quartet`, `Madrigal`, `Mass`, `Motet`, `Overture`, `Partita`, `Play`, `Poem`, `Prose`, `Zarzuela`, `Étude`, `Incidental_music`, `Musical`, `Soundtrack`, `Audio_drama`). The label is `Music_Work`, not `Work`: person projects and publications are `Work:Project:Entity` and `Work:Publication:Entity`, and a shared `Work` label would let either pipeline's wipe delete the other's nodes (`music.go:33-35`).
 
-**Labels:** `Entity:Work` plus optional work-type sub-labels such as `Song`, `Symphony`, or sanitized MusicBrainz work type.
-
-**Materializes via:** `mb/run-base-work-enrich` (#13101).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz work ID |
-| `title` | string | Work title |
-| `work_type` | string | MusicBrainz work type |
-| `languages` | string | Language codes |
-| `iswcs` | string | ISWC identifiers |
-| `pro_ids` | json | Rights-society identifiers |
-
-<Accordion title="Real example — Smells Like Teen Spirit work">
-  ```json
-  {
-    "mbid": "9840e142-269d-3fa3-9805-041a9235c18a",
-    "title": "Smells Like Teen Spirit",
-    "work_type": "Song",
-    "languages": "eng",
-    "iswcs": "T-070.243.691-6",
-    "pro_ids": { "ASCAP": "905650303", "BMI": "1358504", "SACEM": "91 317 340 11" },
-    "display_label": "Work",
-    "description": null,
-    "visibility": true
-  }
-  ```
-</Accordion>
+| Property | Description |
+| --- | --- |
+| `disambiguation`, `work_type`, `languages`, `iswcs` | Envelope (`music_sync_catalog.go:160-171`) |
+| `genres`, `tags`, `mb_rating`, `mb_rating_votes` | Metadata |
+| `embeddings` | Over title, disambiguation, type and genres |
 
 <a id="music-release-group" />
 
-### Release\_Group
+### Release_Group
 
-The abstract album, single, EP, broadcast, or other grouped release concept.
+**Labels:** `Release_Group:Entity` plus `Album`, `Single`, `EP`, `Broadcast` or `Other`.
 
-**Labels:** `Entity:Release_Group` plus optional sub-labels such as `Album`, `Single`, `EP`, `Broadcast`, or `Other`.
-
-**Materializes via:** `mb/run-base-release-group-enrich` (#13099).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz release-group ID |
-| `title` | string | Release-group title |
-| `primary_type` | string | Album, Single, EP, Broadcast, Other |
-| `secondary_types` | string | CSV of secondary types |
-| `first_release_date` | string | First known release date |
-| `music_rating` | number | MusicBrainz rating |
-| `genres` | string | Genre metadata property only |
+| Property | Description |
+| --- | --- |
+| `disambiguation`, `primary_type`, `secondary_types`, `first_release_year` | Envelope (`music_sync_catalog.go:147-158`) |
+| `genres`, `tags`, `mb_rating`, `mb_rating_votes` | Metadata |
+| `embeddings` | Over title, artist credit, disambiguation, type and genres |
 
 <a id="music-release" />
 
 ### Release
 
-One concrete edition: a specific pressing, country, barcode, packaging, or format.
+**Labels:** `Release` — no `Entity`. A support node keyed on `row_id`; edges `RELEASE_OF` (to the release group), `APPEARS_ON` (from recordings) and `RELEASED_ON` (to the label company) are written by the support replay.
 
-**Labels:** `Entity:Release`
-
-**Materializes via:** `mb/run-base-release-group-enrich` (#13099).
-
-<Note>
-  Canonical-release rule: exactly one `Release` node materializes per `Release_Group`: `status = Official`, earliest release date, any country. Other pressings stay in source-table JSON.
-</Note>
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz release ID |
-| `title` | string | Release title |
-| `status` | string | Release status |
-| `date` / `country` | string | Release date and country |
-| `barcode` / `packaging` | string | Retail metadata |
-| `formats` / `track_count` | string/int | Format summary and track count |
-
-<Accordion title="Real examples — Nevermind release group and canonical release">
-  ```json
-  {
-    "mbid": "1b022e01-4da6-387b-8658-8678046e4cef",
-    "title": "Nevermind",
-    "primary_type": "Album",
-    "first_release_date": "1991-09-24",
-    "display_label": "Release_Group",
-    "description": null,
-    "visibility": true
-  }
-  ```
-
-  ```json
-  {
-    "mbid": "eccae410-7577-4daa-b602-92d305828331",
-    "title": "Nevermind",
-    "status": "Official",
-    "date": "1991-09-24",
-    "country": "AU",
-    "barcode": "720642442524",
-    "packaging": "Jewel Case",
-    "formats": "CD",
-    "track_count": 12,
-    "display_label": "Release",
-    "description": null,
-    "visibility": true
-  }
-  ```
-</Accordion>
+| Property | Description |
+| --- | --- |
+| `status`, `release_year`, `country`, `barcode`, `packaging`, `media_count`, `track_count` | Envelope (`music_support_replay.go:221-258`) |
+| `mbid` | When present |
+| embeddings | None; the release group already embeds |
 
 <a id="music-label" />
 
-### Music\_Label
+### Music_Label
 
-A record label, publisher, distributor, or label-like music organization. This is company-shaped in the graph and can bridge to a canonical Orbiter `Company` through `SAME_AS`.
-
-**Labels:** `Entity:Company:Music_Label`
-
-**Materializes via:** `mb/node/add-music-label-node` (#13090) \+ `mb/run-base-label-enrich` (#13091).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz label ID |
-| `name` | string | Label name |
-| `label_type` | string | Original Production, Publisher, Distributor, Holding, etc. |
-| `country` / `area` | string | Country and area labels |
-| `label_code` | int | Label code |
-| `begin_year` / `end_year` / `ended` | int/int/bool | Life-span fields |
-| `music_rating` | number | MusicBrainz rating |
-| `genres` | string | Genre metadata property only |
-
-<Accordion title="Real example — Sub Pop Records">
-  ```json
-  {
-    "mbid": "38dc88de-7720-4100-9d5b-3cdc41b0c474",
-    "name": "Sub Pop Records",
-    "label_type": "Original Production",
-    "country": "US",
-    "label_code": 8323,
-    "begin_year": 1979,
-    "ended": false,
-    "music_rating": 4.5,
-    "display_label": "Company",
-    "description": null,
-    "visibility": true
-  }
-  ```
-</Accordion>
+A record label is a [Company](#company) node with the `Music_Label` extra label (D-2). Identity, envelope and embedding are the company sync's; `entity_type` reports `Music_Label`. The music-specific fields (`label_type`, `label_code`, life span, `mb_rating`) stay on the `mb_label` row unless the company envelope carries them.
 
 <a id="music-event" />
 
 ### Music Event
 
-A live music event: festival, concert, convention, or award ceremony. Music events share the `Event` model with live/business events but use `Music_` sub-labels.
-
-**Labels:** `Entity:Event:Music_Festival`, `Entity:Event:Music_Concert`, `Entity:Event:Music_Convention`, `Entity:Event:Music_Award_Ceremony`
-
-**Materializes via:** `mb/run-base-event-enrich` (#13105).
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz event ID |
-| `name` | string | Event name |
-| `event_type` | string | Festival, Concert, Convention, Award Ceremony |
-| `begin_date` / `end_date` / `ended` | string/string/bool | Event dates |
-| `cancelled` | boolean | Cancellation flag |
-| `time` / `setlist` | string | Optional MusicBrainz event data |
-
-<Accordion title="Real example — Reading Festival 1992">
-  ```json
-  {
-    "mbid": "cfc00c5b-b805-4f12-a704-4f28eb081532",
-    "name": "Reading Festival",
-    "event_type": "Festival",
-    "begin_date": "1992-08-28",
-    "end_date": "1992-08-30",
-    "ended": true,
-    "cancelled": false,
-    "display_label": "Event",
-    "description": null,
-    "visibility": true
-  }
-  ```
-
-  _Node labels: `Entity`, `Event`, `Music_Festival`_
-</Accordion>
+**Labels:** `Event:Entity` plus `Music_Concert`, `Music_Festival`, `Music_Launch_event`, `Music_Convention/Expo`, `Music_Masterclass/Clinic`, `Music_Stage_performance` or `Music_Award_ceremony`. Written by the shared music builder; see the second card under [Event](#live_event) for the property set.
 
 <a id="music-place" />
 
 ### Place
 
-A venue, studio, stadium, amphitheater, or other MusicBrainz place used by recording and event relationships.
+**Labels:** `Place` — no `Entity`, and no `Studio` / `Venue` / `Stadium` sub-labels. A support node keyed on `row_id`; endpoints of `RECORDED_AT` (from recordings) and `HELD_AT` (from events).
 
-**Labels:** `Entity:Place` plus optional place-type sub-labels such as `Studio`, `Venue`, `Stadium`, or `Amphitheater`.
-
-**Materializes via:** inline writers in `mb/run-base-recording-enrich` (#13100) and `mb/run-base-event-enrich` (#13105). There is no dedicated place lookup or queue.
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `mbid` | string | MusicBrainz place ID |
-| `name` | string | Place name |
-| `place_type` | string | Venue, Studio, Stadium, etc. |
-| `address` | string | Street/location address |
-| `latitude` / `longitude` | float | Coordinates |
-| `area` | string | Area label |
-
-<Accordion title="Real example — Little John's Farm">
-  ```json
-  {
-    "mbid": "fe133456-63a0-488b-b24e-5543890bf2c0",
-    "name": "Little John's Farm",
-    "place_type": "Venue",
-    "address": "Richfield Avenue",
-    "latitude": 51.467222,
-    "longitude": -1.011944,
-    "area": "Reading",
-    "display_label": "Place",
-    "description": null,
-    "visibility": true
-  }
-  ```
-</Accordion>
+| Property | Description |
+| --- | --- |
+| `disambiguation`, `place_type`, `address`, `latitude`, `longitude`, `area` | Envelope |
+| `mbid` | When present |
+| `embeddings` | Over name, place type and area (the only support kind that embeds) |
 
 <a id="music-genre-policy" />
 
 ### Music Genre Policy
 
-Genres are metadata properties on music nodes, not graph nodes.
-
-Do not create `Entity:Genre` nodes or `HAS_GENRE` edges. Keep genre values on the source music node as normalized `genres` metadata so the product can use them as facets, filters, badges, search text, or side-panel context without turning every genre into a first-class entity.
+Genres are metadata properties on music nodes, not graph nodes. Do not create `Entity:Genre` nodes or `HAS_GENRE` edges; keep genre values on the source music node as normalized `genres` metadata so the product can use them as facets, filters, badges and search text.
 
 <a id="music-media-image-url" />
 
 ### Music Media (`image_url`)
 
-Three node types can carry a re-hosted image on `image_url`, matching the `film_tv.image_url` convention. The value is the GCS-hosted WebP URL, not the raw external URL. When no image is found, the property is explicitly set to `null`.
-
-| Node | Source field | GCS path | Raw source |
-| --- | --- | --- | --- |
-| `Recording` | `mb_recording.gcp_cover_art_url` (#738) | `music-cover-art/<mbid>.webp` | Cover Art Archive |
-| `Music_Group` | `mb_artist.gcp_music_group_image_url` (#737) | `music-group-image/<mbid>.webp` | serper.dev image search |
-| `Person:Music_Artist` | `mb_artist.gcp_person_avatar_url` (#737) | `music-person-avatar/<mbid>.webp` | serper.dev image search |
-
-Image writers are `mb/media/fetch-recording-cover-art` (#13108), `mb/media/fetch-group-image` (#13109), and `mb/media/fetch-person-avatar` (#13120). After the GCS URL is stamped on the source row, Cypher updates the node's `image_url`. The already-done path self-heals existing nodes.
+`Recording` carries `image_url` (re-hosted cover art) and `image_source_url`. Group images and person avatars reach the graph through the Company and Person envelopes (`logo`, `avatar`) rather than a music-specific property.
 
 <a id="music-node-summary" />
 
-### Summary — All MusicBrainz Node Types
+### Summary — MusicBrainz node kinds
 
-| Node | Labels | Seed? | Description | Reconciles to |
-| --- | --- | :-: | :-: | --- |
-| Person artist | `Entity:Person:Music_Artist` | Yes | Generated | `master_personPerson` through `SAME_AS` |
-| Group / band | `Entity:Music_Group` | Yes | Generated | — |
-| Recording | `Entity:Recording` | Yes | Generated | — |
-| Work | `Entity:Work` plus subtype labels | Cascade | null today | — |
-| Release group | `Entity:Release_Group` plus subtype labels | Cascade | null today | — |
-| Release | `Entity:Release` | Cascade | null today | — |
-| Label | `Entity:Company:Music_Label` | Yes | null today | Company card/display contract; optional `SAME_AS` |
-| Event | `Entity:Event:Music_*` | Yes | null today | Shared Event contract |
-| Place | `Entity:Place` plus subtype labels | Inline | null today | — |
-
-These nine node types all carry `created_at`, `updated_at`, semantic-null or generated `description`, `name_embedding`, `embeddings`, `uuid`, `mbid`, `display_label`, and `visibility`. Forward-only vector coverage is wired for every type.
+| Kind | Labels | Key | `Entity`? | Embeds? |
+| --- | --- | --- | :-: | :-: |
+| Person artist | `Person:Entity` + `Music_Artist` | `entity_id` | Yes | Person sync |
+| Group / band | `Music_Group:Entity` (+ `Group` / `Orchestra` / `Choir`) | `entity_id` | Yes | Yes |
+| Recording | `Recording:Entity` | `entity_id` | Yes | Yes |
+| Work | `Music_Work:Entity` (+ 22 types) | `entity_id` | Yes | Yes |
+| Release group | `Release_Group:Entity` (+ 5 types) | `entity_id` | Yes | Yes |
+| Release | `Release` | `row_id` | No | No |
+| Label | `Company:Entity` + `Music_Label` | `entity_id` | Yes | Company sync |
+| Event | `Event:Entity` + `Music_<Type>` | `entity_id` | Yes | Yes |
+| Place | `Place` | `row_id` | No | Yes |
 
 ---
 
 ## Credentials & Achievements
 
-### Certification
+### Certification, Honor, Project, Publication
 
-Professional certifications held by people.
+<Card icon="play">
 
-<Card icon="circle-check">
-  ```text
-  mvp/resolve/resolve-edges-certifications — 12578
-  ```
+```
+internal/platform/graph/person_credentials.go — buildCredentialNode · buildCredentialEdge
+```
 
-  **Creates / updates** the `Certification` node — `MERGE (certification:Entity:Certification {name})` then `SET certification += {...}`. ✅ Now stamps `created_at: coalesce(certification.created_at, timestamp())` \+ `updated_at` (fixed 2026-06-01; legacy `mvp/certifications/resolve-certifications` #4572 patched too).
+`MERGE (c:<Certification|Honor|Work:Project|Work:Publication>:Entity {merge_key: $merge_key})`. The key is lowercased and computed by the caller: a certification is **shared** (`"AWS Solutions Architect"` is one node for everyone), while an honor, project or publication is **personal** and keyed per person with the node uuid pinned to the owning row. The whole property set, including the envelope and `description`, is written **ON CREATE only**; ON MATCH touches `updated_at` alone, so a later thinner sighting never blanks a richer one.
+
 </Card>
 
-| Property | Type | Description |
+| Property | Written | Description |
 | --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Certification name (MERGE key) |
-| `description` | string | Certification description |
-| `issue_date` | string | Date issued (YYYY-MM) |
-| `issued_by` | string | Issuing organization name |
-| `name_embedding` | vecf32 | Semantic embedding |
+| `uuid` | ON CREATE | The owning row id when pinned, else `randomUUID()` |
+| `merge_key` | MERGE key | Lowercased; shared for certifications, per-person otherwise |
+| `name` | ON CREATE | Certification name, honor title, project or publication title |
+| `entity_type` | ON CREATE | `"Certification"`, `"Honor"`, `"Project"` or `"Publication"` |
+| `description` | ON CREATE, when non-empty | |
+| `url` | ON CREATE, envelope | The only envelope key; certification, project and publication only |
+| `embeddings`, `embedding_model`, `embedding_dimensions` | ON CREATE, when supplied | Over the name |
+| `created_at`, `updated_at` | ON CREATE / ON MATCH | |
 
-<Accordion title="Real example — iSAQB Software Architecture">
-  ```json
-  {
-    "uuid": "dfd0d5e2-fea8-45d4-a0c1-760d2bde858d",
-    "name": "Certified Professional For Software Architecture (Isaqb)",
-    "description": "Mario Haarmann holds the Certified Professional for Software Architecture (iSAQB), demonstrating expertise in systematic software architecture design.",
-    "issue_date": "2021-03",
-    "issued_by": "Certible"
-  }
-  ```
-</Accordion>
-
-### Honor
-
-Awards, recognitions, and honors received by people.
-
-<Card icon="circle-check">
-  ```text
-  mvp/resolve/resolve-edges-honor — 4574
-  ```
-
-  **Creates** the `Honor` node — `CREATE (h:Honor {uuid, created_at, updated_at, title, …})`. ✅ Now stamps `created_at` \+ `updated_at` (fixed 2026-06-01).
-</Card>
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `title` | string | Honor name |
-| `description` | string | Additional context |
-| `issued_on_year` | integer | Year awarded |
-| `issued_on_month` | integer | Month awarded |
-| `issued_on_day` | integer | Day awarded |
-| `issuer_name` | string | Name of the awarding organization |
-
-<Accordion title="Real example — Apple Design Award">
-  ```json
-  {
-    "uuid": "e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b",
-    "title": "2016 Apple Design Award",
-    "description": "Won the 2016 Apple Design Award for version 1.0 of Frame.io for iOS.",
-    "issued_on_year": 2016,
-    "issuer_name": "Apple"
-  }
-  ```
-</Accordion>
-
-<Accordion title="Real example — Bay Area CFO of the Year">
-  ```json
-  {
-    "uuid": "f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c",
-    "title": "Bay Area CFO of the Year",
-    "issued_on_year": 2019,
-    "issued_on_month": 6,
-    "issued_on_day": 1,
-    "issuer_name": "San Francisco Business Times"
-  }
-  ```
-</Accordion>
+Edges: `HAS_CERTIFICATION`, `GRANTED_BY`, `CERTIFIED_BY` (keyed on the pair plus `cert_type`), `RECEIVED_HONOR`, `ISSUED_BY`, `CONTRIBUTED_TO`, `AUTHORED`, `PUBLISHED_BY`, `VOLUNTEERED_AT`; the issuer-side edges stamp `Organization` on the target company.
 
 ---
 
-## Work Products
+## Timestamps
 
-### Project
-
-Individual projects a person has contributed to.
-
-<Card icon="circle-check">
-  ```text
-  mvp/resolve/resolve-edges-projects-publications — 12579
-  mvp/projects/add-projects-publications-clado — 12576
-  mvp/projects/add-projects-publications-pdl — 4576
-  ```
-
-  **Create / update** the Project node — since #12579 v6 (2026-07-04) `CREATE (proj:Entity:Work:Project {uuid, created_at, updated_at})` with `display_label: "Project"`, `name`/`title`, and a guaranteed description; re-runs process existing rows (repair, not duplicate). All three creators stamp `created_at` \+ `updated_at`. ✅ _(Nodes minted before v6 carry the bare legacy `:Project` label.)_
-</Card>
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` / `title` | string | Project name (both keys written since v6) |
-| `display_label` | string | `"Project"` |
-| `description` | string | Project description (falls back to `"Project: {title}"`) |
-| `start_day` | integer | Start day |
-| `start_month` | integer | Start month |
-| `start_year` | integer | Start year |
-| `end_day` | integer | End day |
-| `end_month` | integer | End month |
-| `end_year` | integer | End year (null = current) |
-
-<a id="publication" />
-
-### Work:Publication
-
-Published works authored by a person. Publications are now modeled as `Work` nodes with the `Publication` subtype label.
-
-<Card icon="circle-check">
-  ```text
-  mvp/resolve/resolve-edges-projects-publications — 12579
-  mvp/projects/add-projects-publications-clado — 12576
-  mvp/projects/add-projects-publications-pdl — 4576
-  ```
-
-  **Create / update** the `Work:Publication` node — `CREATE (pub:Entity:Work:Publication {uuid, created_at, updated_at})` then `SET pub.name = …`. ✅ All three creators now stamp `created_at` \+ `updated_at` (fixed 2026-06-01) and use the unified `Work` parent label (updated 2026-07-01).
-</Card>
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `uuid` | string | Primary identifier |
-| `name` | string | Publication title |
-| `publisher` | string | Publisher name |
-| `publication_url` | string | URL to the publication |
-| `published_on_day` | integer | Publication day |
-| `published_on_month` | integer | Publication month |
-| `published_on_year` | integer | Publication year |
-
----
-
-## Timestamp coverage audit
-
-The historical writer convention is `created_at` set in the create/`ON CREATE SET` clause and `updated_at` set in the update/`ON MATCH SET` clause — both as Cypher `timestamp()` (epoch-millis). **The July audit reported both stamps for the legacy types it covered** — the gaps found by the 2026-06-01 sweep were all patched (creators that omitted `created_at`: Country, SubDomainExpertise, Event:Live\_\*, Certification, Honor, Project, Publication, Organization; updaters that omitted `updated_at`: the IMDB visibility flip #12880, the company dedup fold #10505, the VC\_Firm / Organization label-adds, and the certification `SET`). The proposed theatre nodes are not implemented and have no timestamp-coverage claim; their future timestamp requirements are specified in the shared theatre envelope above.
-
-<Note>
-  **Known remaining gaps** (outside the enrichment pipelines' documented types): `contextFounded` (`mvp/yc/process-yc-people` #12700) sets no `created_at` on the hub node, and the `Document`/`DocumentChunk` (`#12850`, `#4596`) and user/organization-graph types `MasterPerson` / `MasterOrganization` (`#12869`, `#12884`) remain unstamped. The `qa/resolve-edges-*` functions (#12715/#12718/#12719) are QA mirrors of the production resolvers — patch them alongside if QA parity matters.
-</Note>
+Every Go writer stamps `created_at` ON CREATE and `updated_at` on every write with Cypher `timestamp()` (epoch milliseconds). Edge writers share one identity helper (`person_edges.go:44-48`) that keeps the first `created_at` across re-merges.
