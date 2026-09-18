@@ -71,7 +71,7 @@ paths:
         - Projections
       summary: Get the versioned projection for a company, person, stage production or video game
       description: |
-        Returns `company_projection.v1`, `person_projection.v1`, `stage_production_projection.v1` or `video_game_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. A video game (including a legacy `film_tv` row the game waterfall owns) answers 404 until its publication is promoted; the body served is the one frozen at promotion, so a refresh in flight never leaks. Requires scope `projections:pull`.
+        Returns `company_projection.v1`, `person_projection.v1`, `stage_production_projection.v1` or `video_game_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. Once a run HAS satisfied, a later run in flight no longer hides the package: the last satisfied one is served with `meta.projection_status: stale` until the new run settles. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. A video game (including a legacy `film_tv` row the game waterfall owns) answers 404 until its publication is promoted; the body served is the one frozen at promotion, so a refresh in flight never leaks. Requires scope `projections:pull`.
       security:
         - bearerAuth: []
       parameters:
@@ -3674,7 +3674,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -4622,7 +4622,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -6392,7 +6392,7 @@ components:
         Whether the consumer package rode along on this get-add and, when it did not, which gate stopped it. Always present, including when `projection` is null.
         The response status is always 200 — a resolved entity is not an error. `class` is an HTTP-SHAPED CLASS for the projection field alone, so a client can branch without knowing every slug: 200 you have it, 202 it is coming, 4xx this call will not give it to you.
         `poll` is DERIVED from `code`; a client that reads only `poll` is never wrong about whether to come back.
-        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `202:enriching`; `409:unsatisfied` is reserved for a run that settled with a failed clause.
+        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `200:stale` with the package from the last satisfied run, or `202:enriching` when no run has ever satisfied; `409:unsatisfied` is reserved for a run that settled with a failed clause.
         The two `disputed` codes are the pair to handle deliberately. They mean a provider resolved an IDENTITY that contradicts the name we hold, so we no longer know for certain who the record describes. `200:disputed` still carries the package — most of it is likely correct, only the identity is in doubt, so hold the record rather than discard it and do not act on its identity; `409:disputed` means there is no package to send. Both are `poll: false`: the record is frozen on our side and no further run will revisit it until a human reconciles it, so re-reading never changes the answer. Tell us instead.
       properties:
         code:
