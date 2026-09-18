@@ -1,197 +1,221 @@
 ---
-title: "Phase 1: YouTube Adapter"
-sidebarTitle: "Phase 1: YouTube Adapter"
-description: "Go implementation plan for a conditional YouTube metadata adapter using canonical Universe appearance identities, source evidence, chosen relationship facts and revisioned replay."
+title: "Media Phase 1: YouTube Co-Occurrence"
+sidebarTitle: "Media Phase 1: YouTube"
+description: "Go implementation plan for deriving verified YouTube appearances from the shared ScrapeCreators social-ingestion layer without duplicate provider calls."
 ---
 
 import BakeOffRules from '/snippets/bake-off-rules.mdx';
 
-**Status: adapter plan; all three storage decisions accepted and 23 shared tables created in development AlloyDB on 2026-09-07. The adapter remains unimplemented.** Build in `orbiter-universe`, using its AlloyDB database `orbiter_universe` and the `universe` schema. The [overview](/guides/open-work/roadmap/media-co-occurrence) owns the shared identity, evidence, storage and release contracts. This page specializes those contracts for YouTube metadata.
+**Status: planned Go PR.** The 23 shared media/event/news/quota tables exist in development Universe AlloyDB; the social-ingestion tables and both runtime layers remain unimplemented. This phase runs in `orbiter-universe` after the YouTube slice of [Social S2](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#phase-s2) and [Media Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations).
 
 <Note>
-  **YouTube is Phase 1, as approved by Mark**, following [Phase 0: Shared Go Foundations](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations). The former seven-table DDL, video-owned appearance identity and direct edge-ledger writer are superseded. This page contains no migration to apply. Source-use permission is still required before live extraction/publication is enabled; that gate does not change the approved adapter order.
+  This phase does **not** build a YouTube or ScrapeCreators HTTP client. The
+  social feature is the sole owner of channel, video, Shorts, detail, transcript,
+  comments, playlist, community-post and discovery calls. Media reads stored
+  evidence through `socialspub` and requests missing bounded hydration through
+  that same seam.
 </Note>
 
 ## PR boundary and handoff
 
-Suggested PR title: **Add the first media source adapter for YouTube metadata**. This PR implements the YouTube client, roster enumeration/hydration, source-specific parsing, permitted extraction and refresh/reconciliation through Phase 0's shared work/evidence interfaces. It does not reimplement shared storage, budgets, person resolution or delivery infrastructure.
+Suggested PR title: **Derive verified YouTube appearances from social evidence**.
 
-[Phase 5: Facts & Graph Replay](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) owns chosen claims, cache distillation, graph mutation and reader enforcement; [Phase 6: Consumer Publication](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication) owns public packages. The pipeline below describes the end-to-end destination; this adapter PR stops at durable source/support state and shared reconciliation intent. It can merge with fake/fixture providers and live operations disabled. Graph/publication work can begin against those fixtures without waiting for the other source adapters.
+This PR implements:
 
-## Provider field map and worker contract
+- admission of new or changed owner-verified YouTube posts into `media_work`;
+- source-located participant and interaction-group extraction from stored details and permitted transcripts;
+- canonical appearance/source resolution across YouTube, publisher pages and RSS episodes;
+- durable mentions, resolution attempts, memberships and reconciliation intent;
+- requests for missing detail/transcript artifacts through the social feature;
+- correction, expiry and retraction propagation into the existing media ledgers.
 
-| Official response | Normalize / persist |
+It does not implement social URL classification, profile/feed refresh, provider cursors, raw provider storage, quota charging for provider calls, graph mutation or consumer publication. Those belong to Social S0–S2, [Media Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) and [Media Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication).
+
+## Single-provider-owner contract
+
+The YouTube flow is one pipeline with two persistence layers:
+
+```mermaid
+flowchart LR
+  A[ScrapeCreators YouTube] -->|socials owns call| B[enrichment_payloads]
+  B --> C[social_profiles / social_posts]
+  C --> D[social_post_artifacts]
+  C -->|revision event| E[media_work]
+  D -->|artifact-ready event| E
+  E --> F[mentions / groups / memberships]
+  F --> G[chosen facts]
+  G --> H[graph replay and publication]
+```
+
+Rules:
+
+- Media never imports `internal/clients/scrapecreators` and never calls the provider directly.
+- One external response has one raw payload row. Media references the payload/artifact revision; it does not create an immortal second raw copy.
+- Media never advances `social_profile_streams` cursors or changes social freshness.
+- A hydration request is capability-keyed by post, artifact kind and policy version. Social leases and attempt fingerprints coalesce duplicates.
+- A provider failure is recorded on the social stream/artifact request. Media work waits or proceeds with the evidence it already has; it does not bypass the owner.
+- Social-post publication and media-appearance publication are independent. A video can be a valid authored social post while lacking enough evidence to become an appearance.
+
+## Public seam
+
+Declare the interface where media consumes it; the concrete adapter is wired in `internal/app`.
+
+```go
+type YouTubeEvidenceReader interface {
+    Profile(
+        ctx context.Context,
+        profileID uuid.UUID,
+    ) (socialspub.Profile, error)
+
+    Posts(
+        ctx context.Context,
+        profileID uuid.UUID,
+        query socialspub.PostsQuery,
+    ) ([]socialspub.Post, error)
+
+    Artifacts(
+        ctx context.Context,
+        postID uuid.UUID,
+        kinds []socialspub.ArtifactKind,
+    ) ([]socialspub.PostArtifact, error)
+
+    RequestHydration(
+        ctx context.Context,
+        req socialspub.HydrationRequest,
+    ) (socialspub.HydrationResult, error)
+}
+```
+
+`RequestHydration` returns `fresh|queued|unavailable|blocked|failed` plus the work ID and existing artifact revision. Explicit operator work may synchronously wait within a bounded deadline; background media work records the dependency and releases its lease until the artifact-ready event or next eligible time.
+
+## Evidence field map
+
+| Stored social evidence | Media normalization |
 | --- | --- |
-| Channel `id`, `snippet.title`, `contentDetails.relatedPlaylists.uploads` | Verified roster channel key, display context and uploads playlist checkpoint/config; no default host membership |
-| Playlist item `contentDetails.videoId` / `snippet.resourceId.videoId`; `nextPageToken` | Durable video child work before advancing page cursor; playlist item ID is not video identity |
-| Video `id`, `snippet.title`, `description`, `channelId`, `publishedAt`, language fields | Case-preserved asset anchor, observation/snapshot and normalized scalar/extraction input; publication is not recording time |
-| `contentDetails.duration`, `status`, `liveStreamingDetails` | Validated duration, availability and separate scheduled/actual timing evidence; unknown fields remain unknown |
-| Search `id.videoId` and result snippet | Bounded discovery candidate only; hydrate and verify before extracting accepted evidence |
+| Verified profile platform ID, channel ID, canonical URL and payload provenance | Source roster/channel context and verified asset owner. A channel owner is not a default participant. |
+| Video/Short external ID, canonical URL, title, description, posted time and post type | Case-preserved source anchor and appearance candidate. Publication time is not recording/performance time. |
+| Video-detail artifact: chapters, collaborators, duration, keywords, caption inventory and exact metadata | Candidate item scope, segment boundaries and source-located participant evidence. Recommended/watch-next items are ignored. |
+| Transcript artifact with timestamped segments | Permitted extraction input and precise evidence locators. Null transcript is `unavailable`, not a data failure. |
+| Comments artifact | Audience-response context only. Comment text and authors never prove participation or authorship. |
+| Explicit playlist/community-post object | Candidate source only after returned channel ID matches the verified profile. |
+| Search/hashtag/trending result | Discovery nomination only; hydrate and verify owner/item scope before evidence admission. |
 
-See the overview's linked [official request contracts](/guides/open-work/roadmap/media-co-occurrence#youtube-data-api-permission-gated-metadata-adapter) for endpoint parameters and quota buckets. Common returned fields are source namespace/key, observation/snapshot IDs, content revision, policy reference, coverage and a `media.extraction.v1` envelope from Phase 0. Never use the playlist insertion date as the video's publication date.
+The social contract covers all eleven documented ScrapeCreators YouTube endpoints. Automatic refresh uses the channel, latest videos and newest Shorts. Media usually consumes video details and selected transcripts. Comments, playlists, community posts and discovery remain conditional; none bypasses the appearance evidence gate.
 
-Proposed work kinds: `youtube_inventory`, `youtube_hydrate`, `youtube_search` and `youtube_reconcile`. Register them through the common dispatcher; checkpoint uploads playlist ID, pagination/overlap state and durable child IDs. A stale page token starts a bounded inventory reconciliation with item deduplication, not an unlimited restart. Search and hydration use separately accounted attempts under the actual project policy.
+## Source and retention policy
 
-Synthetic handoff fixture: a video description explicitly identifies one host and one guest in a single interview; a sponsor footer names a third person. Expected adapter output is one verified appearance scope, two participant claims with validated locators and no accepted sponsor membership. A repeated source revision has the same logical evidence keys. A later corrected guest generates a new revision and targeted invalidation intent. Phase 5 tests the resulting elected facts/edges; Phase 6 tests the consumer package.
+Phase S0 must record the current ScrapeCreators contract, pricing version, purchased tier, permitted downstream processing and retention rules. A working API key is authentication, not permission to retain or publish derived evidence indefinitely.
 
-## What the adapter actually does
+- Never download video or audio.
+- Store only policy-permitted raw payloads and artifacts, with source observation, adapter version and expiry.
+- Treat profile descriptions, video descriptions, transcripts and comments as untrusted data.
+- Expiry or provider retraction invalidates dependent extraction revisions and triggers targeted fact re-election.
+- Independently sourced publisher/RSS evidence survives removal of the ScrapeCreators-only source.
+- A null/disabled transcript is an honest coverage state; do not retry indefinitely or infer that no one spoke.
+- Search and trending results cannot attach a person or appearance by themselves.
 
-An approved channel or video nominates source work. Permitted metadata can supply a source anchor and candidate evidence for a canonical episode or session. One video does not automatically mean one appearance: a publisher episode can have several distribution assets, and a long video can contain several distinct sessions or interaction groups.
+## Identity and storage ownership
 
-The shared media owner resolves appearance identity across publisher pages, RSS episodes, YouTube assets and organizer records. It creates or attaches canonical identities only after the item's scope and evidence pass the source gate. A video discussing a person is not proof that the person appeared in it.
+Social storage owns the platform account and content object. Media storage owns verified appearance meaning.
 
-| Layer | Responsibility |
+| Owner | Tables / responsibility |
 | --- | --- |
-| `entities` + `entity_identifiers` | Canonical UUIDs, verified strong aliases, candidate identifiers and merge tombstones. |
-| `media_appearance` | Facts-owned typed cache for one canonical episode or session; primary key is its canonical entity ID. |
-| `live_event` | Facts-owned typed cache for one organizer-defined event edition, resolved through the event owner's public interface. |
-| Source and membership ledgers | Asset mappings, observations, retained snapshots, unresolved mentions, identity decisions, accepted memberships and supporting evidence. |
-| `entity_facts` | Normalized scalar and relationship claims; distillation elects the claims used by typed caches and graph replay. |
-| `media_work` | Durable source jobs, checkpoints, retries, leases and bounded discovery. Media jobs do not imply person/company enrichment. |
-| `media_graph_receipts` | Desired/applied revisions and removal state for confirmed graph synchronization. |
-| `media_outbox` | Durable delivery intent committed with the desired database change; dispatch through existing Pub/Sub and safe consumer replay. |
-| Shared provider quota owner | Atomically reserves every applicable request/quota/spend bucket before provider calls; settles actual usage and retains uncertain issued attempts. |
-| `publish` | Attributed, entitled consumer packages after the required revisions converge. |
+| Socials | `social_profiles`, `social_profile_streams`, `social_posts`, `social_post_artifacts`, collections and mentions. |
+| Raw payload owner | Existing `enrichment_payloads`, referenced by social rows and media source observations. |
+| Media work | `media_work`, observations/snapshots, appearance-source mappings and durable revision checkpoints. |
+| Media evidence | Interaction groups, appearance mentions, resolution attempts, memberships and evidence. |
+| Canonical entities/facts | `media_appearance`, `live_event` and chosen scalar/relationship facts. |
+| Delivery | `media_outbox` and `media_graph_receipts`. |
+| Shared budget | `provider_quota_buckets` and `provider_quota_reservations`; provider spend is issued by socials, not media. |
 
-## Dependencies
-
-### Source permission comes first
-
-Use the overview's [YouTube source contract](/guides/open-work/roadmap/media-co-occurrence#youtube-data-api-permission-gated-metadata-adapter). A valid API key proves authentication; it does not settle allowed extraction, LLM processing, aggregation, retention or redistribution. These operations stay disabled until their permitted use is established. Independently sourced publisher evidence can proceed under its own policy.
-
-This adapter handles metadata only. Captions, transcripts, audio/video downloads, unofficial scraping, audience analytics and embeddings are outside this initial scope. Snapshot expiry must remove affected raw content and derivatives as required; an immutable snapshot is immutable only while its retention policy permits storage.
-
-### Credentials and configuration
-
-| Setting | Contract |
-| --- | --- |
-| `YOUTUBE_API_KEY` | YouTube Data API credential; absent credentials disable the adapter. Runtime secret delivery is configured during deployment. |
-| `OPENROUTER_API_KEY` | Existing shared credential for permitted extraction and adjudication. Select actual models through the call-site evaluations below. |
-| `EXA_API_KEY`, `PARALLEL_API_KEY` | Existing search candidates for evidence discovery and corroboration; provider selection follows measured evaluation. |
-| GCS configuration and workload identity | Use the existing private storage client and runtime identity for policy-bounded snapshots. A locally authenticated developer does not establish worker permissions. |
-| Source switches and limits | Follow the overview's separate fetch, graph, scoring and new-person controls. Start disabled. Validate batch sizes, source permissions, retry limits and budgets in versioned configuration. |
-| Quota policy | Use the [accepted shared quota tables and Go owner](/guides/open-work/roadmap/media-co-occurrence#provider-quotas-accepted-decision-3). Separate the actual project's buckets and reserve before every attempted provider call. Exact setting names and budget amounts remain Phase 0 configuration choices. |
-
-Use the quota contract in the overview and verify the project's current limits before enablement. Do not implement the superseded assumption that `search.list` necessarily consumes 100 units from the roster-polling bucket. No fixed backfill completion time follows from the number of channels alone.
-
-## Storage model
-
-**Accepted decision 1: `media_appearance` and `live_event` are canonical entity types.** Their typed caches are rebuilt from chosen facts. A source adapter never authors those caches directly, stores raw provider bodies in them, or owns a second canonical ID outside `entities`.
-
-Use the [overview's AlloyDB ledgers and applied migration record](/guides/open-work/roadmap/media-co-occurrence#alloydb-ledgers-and-transaction-boundaries):
-
-| Shared table | YouTube responsibility |
-| --- | --- |
-| `media_source_roster` | Approved channel identity, source policy, adapter configuration and polling cadence. Known hosts are identity context only. |
-| `media_work` | Enumeration, hydration, refresh, verification and reconciliation jobs; retain outcomes and checkpoints after completion. |
-| `media_source_observations` | Every fetch outcome, including unchanged, unavailable and failed responses. |
-| `media_source_snapshots` | Permitted content hash, storage key/version, parser metadata and expiry/purge state. |
-| `media_appearance_sources` | Verified asset-to-appearance mappings and segment scope. |
-| `media_interaction_groups` | Evidence-defined encounters within an appearance, with occurrence and completeness state. |
-| `media_appearance_mentions` | Source-located names, roles and identity points, including unresolved mentions. |
-| `media_resolution_attempts` | Append-only candidate, adjudication and review history. |
-| `media_memberships` + `media_membership_evidence` | Accepted person/appearance memberships and independently retractable supporting claims. |
-| `media_event_associations` | Verified links to an exact event edition when organizer evidence supports them. |
-| `media_appearance` + `live_event` | Canonical typed caches through the facts owner. |
-| `media_graph_receipts` | Revisioned graph application and retraction receipts. |
-| `media_outbox` | Atomic delivery intent for work, graph and publish consumers, shared with the news workflow. |
-| `provider_quota_buckets` + `provider_quota_reservations` | Shared account/project limits and per-attempt reservations; separate search calls, endpoint units and applicable spend ceilings. |
-
-News ledgers remain owned by the overview's separate closed-world news phase. The existing Fundable tables remain in Universe and are not recreated for media.
-
-The old names `media_video_queue`, `media_appearance_mention`, `media_resolution_attempt` and `media_appearance_edge` are not additional parallel stores. Their required responsibilities are represented by the shared tables above. The old `media_youtube_quota` DDL is replaced by the two accepted shared quota tables; it is not an additional table. Quota reservation remains required before live calls.
-
-### Appearance identity and aliases
-
-Resolve a known source through verified aliases and the shared owner before admitting a new appearance. Strong aliases require exact item scope: case-sensitive YouTube video IDs, feed-scoped exact RSS GUIDs, verified publisher episode URLs and organizer/edition/session identifiers. A multi-session video is an asset mapping with explicit segment scope, not a globally unique appearance alias for every session in it.
-
-Titles, dates, channel names, handles and a host's name are candidate evidence. They do not silently merge episodes, clips or editions. Preserve historical aliases after a reviewed merge and repoint memberships, claims and pending work through canonical IDs.
-
-Graph node identity follows the canonical entity owner. Do not restore the old lowercased `youtube::<video_id>` appearance key. Exact key normalization, uniqueness and graph upsert contracts are Phase 0 review items; accepting canonical entities is not approval of an unreviewed key algorithm.
-
-### Graph contracts
-
-Use [Node Types](/guides/ontology/nodes#media-appearances), [Edge Types](/guides/ontology/edges#media-edges) and the overview's [facts and replay contract](/guides/open-work/roadmap/media-co-occurrence#facts-graph-contract-and-correction-replay).
-
-Only chosen relationship facts authorize `APPEARED_IN` and, where verified, `SESSION_OF`. Membership and source ledgers hold the supporting evidence; receipts track whether the elected revision reached the graph. New evidence, role corrections, expiry and retractions must change desired state and replay. A first-write timestamp alone cannot represent that state.
-
-Preserve explicit roles and interaction scope: host/guest use 15; panelist/moderator use 20; a verified speaker follows the overview's event-size rule. Do not infer a panel from participant count or infer that everyone in one video encountered everyone else. Required edge properties include `description` and `description_generated_at`, alongside identity, provenance, occurrence, policy and revision fields in the master schema.
-
-Graph node and edge writes remain under the shared graph gate. Reader enforcement and source permission are prerequisites for publication or scoring. The old rule that nodes write regardless of the gate is withdrawn.
+A YouTube video ID is a case-sensitive source asset key, not always the canonical appearance ID. A publisher episode may have RSS, webpage and YouTube assets; one long video may contain several scoped appearances. Similar titles, dates, handles or hosts nominate a deduplication review but never silently merge items.
 
 ## Pipeline
 
-1. **Admit bounded source work.** Resolve an approved roster/source policy and durable request key. Use `media_work` with its own claim/lease contract and the overview's admitted priorities. An appearance's entity type does not route it into the generic company dispatcher.
-2. **Reserve, enumerate and hydrate.** Reserve all applicable capacity through the shared budget owner before each request attempt, including retries. Use channel content details to find the uploads playlist, persist each enumeration page before advancing, and hydrate bounded batches through `videos.list`. Settle known usage and retain uncertain issued reservations for reconciliation. Asset IDs retain case. Classify unavailable, upcoming and failed items separately.
-3. **Persist permitted evidence.** Store an observation and a policy-bounded snapshot pointer before parsing. Reconcile uploaded objects after partial failures. An unchanged response does not erase prior evidence; a changed source yields a new revision.
-4. **Extract source-located mentions.** Treat provider text as untrusted data. Require locatable participant evidence and preserve ambiguous or unknown roles. A roster host is not an automatic participant; a topic subject, sponsor or description footer is not an appearance.
-5. **Resolve identity and item scope.** Strong identifiers and reviewed matches can resolve a person; prior appearances, channel history and employer/title similarities nominate candidates. Each occurrence still needs its own evidence. Record negative and inconclusive decisions. Do not create a person from a bare name.
-6. **Resolve canonical appearances and groups.** Attach verified source anchors to an existing entity or admit a new canonical identity through the shared owner. Keep disjoint sessions and clips distinguishable. Create memberships only for accepted participant/occurrence claims.
-7. **Normalize, elect and replay.** Submit normalized claims through the facts owner. Typed caches come from chosen facts. Persist desired state and `media_outbox` intent atomically under the [accepted outbox contract](/guides/open-work/roadmap/media-co-occurrence#transactional-outbox-accepted-decision-2). Broker acceptance stamps dispatch only; graph receipts and publish readiness establish consumer completion.
-8. **Refresh and repair.** Revisit an overlap and reconcile inventory. Do not stop permanently at the first previously seen video or interpret a truncated feed/playlist as deletion. Expiry, retraction and receipt repair continue when new fetching is paused.
+1. **Receive a durable social revision.** A new or materially changed owner-verified YouTube post emits a compact event after its normalized transaction commits. Media deduplicates by post ID, content revision and extraction-policy version.
+2. **Admit bounded media work.** Resolve the canonical entity/profile/post and verify current source policy. A social post never enters the generic person/company enrichment dispatcher.
+3. **Assess evidence sufficiency.** Structured post/detail fields are inspected first. When the policy permits and evidence is missing, request a detail or transcript artifact through `socialspub`; do not call the provider.
+4. **Persist the source observation.** Reference the social payload/artifact and its retention policy before extraction. A missing/expired reference blocks or invalidates dependent work.
+5. **Extract source-located mentions and groups.** Require explicit evidence that a person appeared in this item/segment. Preserve role, locator, segment, occurrence state and ambiguity. Sponsors, topic subjects, quoted absent people and comment authors are not participants.
+6. **Resolve people.** Use verified source-person aliases and strong identifiers first, then bounded canonical candidates and adjudication. Names alone never create a Person.
+7. **Resolve appearance identity.** Attach the YouTube asset/segment to an existing publisher/RSS appearance when verified, or create a new canonical appearance through the shared owner. Split disjoint sessions; keep clips scoped.
+8. **Write memberships and desired facts.** Persist evidence and normalized claims atomically with outbox intent. Only chosen relationship facts authorize graph work.
+9. **Repair revisions.** A corrected transcript, changed description, entity merge, source expiry or owner mismatch re-runs the affected revision and emits targeted retraction/re-election work. Prior accepted data is not blindly deleted on a transient fetch failure.
 
-New-person admission defaults off. If separately enabled, it uses the overview's validated identity, cap and bounded-leaf rules. Source work never implicitly dispatches recursive person or company enrichment.
+## Extraction rules
 
-## Package layout
+Use deterministic parsing for structured collaborators, chapters and linked profiles. Evaluate an LLM only for unstructured descriptions/transcripts and ambiguous identity adjudication.
 
-Follow the overview's owner: orchestration under proposed `internal/features/enrichment/media`, parent enrichment adapters for SQL and public dependencies, a YouTube client under `internal/clients`, facts-owned mappings/distillation, graph synchronization and publish-owned projection. Wire narrow public interfaces in `internal/app`.
+The shared extraction schema must return:
 
-The earlier separate `internal/features/media` ownership and competing `mediapub.AppearanceWriter` are withdrawn. Publisher, Deep Bio and organizer candidates enter the same media identity/evidence gate through the chosen public owner interface. Deep Bio show-level URLs do not bypass episode verification.
+- appearance kind: `interview|panel|solo_talk|compilation|other|unknown`;
+- interaction groups with segment/time bounds and completeness;
+- literal participant name and raw role;
+- source locator into the exact description field or transcript segment;
+- occurrence evidence and uncertainty;
+- explicit abstention when evidence is insufficient.
 
-## Build plan for the agent
+A known channel host is context only. Interview scoring is host↔guest within the same verified group; panel scoring is moderator/panelist or panelist/panelist within the same verified complete group. Guest↔guest, roster-wide, cross-segment and comment-derived pairs never score.
 
 <BakeOffRules />
 
+## Package layout
+
+```text
+internal/features/appearances/   # top-level feature; name pending Mark (unified plan decision register), never enrichment/media
+  youtube_gate.go
+  youtube_consumer.go
+  youtube_extract.go
+  youtube_reconcile.go
+  youtube_types.go
+  youtube_test.go
+```
+
+The consumer depends on a local `YouTubeEvidenceReader` interface. SQL repositories remain in the enrichment parent package; graph/facts/publication use their public owner seams. No private import from `socials` is allowed.
+
+## Delivery steps
+
 | Step | Required result |
 | --- | --- |
-| Source and identity proof | Permitted real fixtures, source-use policy, exact episode/asset/session keys, cross-source merge cases and source-specific retention. |
-| Shared schema contract | Accepted canonical model, dedicated outbox and shared quota storage from decisions 1, 2 and 3. Reuse the overview's 23-table inventory; do not apply the withdrawn seven-table DDL. |
-| Schema and repository work | Two Goose migrations, the schema guide and FK merge classification are complete; the 23 tables are created in development AlloyDB. Queries, owner interfaces, canonical Go registrations and media-specific merge/replay repair remain future work. |
-| Provider and model evaluation | Exa and Parallel on held-out discovery tasks; at least five distinct OpenRouter models per actual LLM call site. Record precision, yield, latency and actual spend. Authentication checks are not these evaluations. |
-| Adapter and worker implementation | Durable enumeration, policy-bounded snapshots, source-located extraction, reviewed identity and cross-source canonicalization, with fake providers first. |
-| Facts and consumer integration | Chosen claims, correction/retraction replay, revision-fenced graph receipts, reader enforcement and attributed publication. |
-| Bounded canary | Enable only the permitted source operations, at most 500 admitted source items initially, measured against frozen expected results. Increase scope only after acceptance and budget checks. |
+| Contract fixtures | Freeze one interview, panel, solo item, Short/clip, compilation, owner mismatch, null transcript, correction and expiry fixture using social DTOs. |
+| Social event seam | New/changed post and artifact-ready events are compact, revisioned, idempotent and replayable. |
+| Reader/hydration adapter | Media can read posts/artifacts and request bounded hydration without provider or cursor access. |
+| Extraction and resolution | Source-located mentions, roles, groups and abstentions pass deterministic and held-out model evaluations. |
+| Appearance identity | Cross-source RSS/publisher/YouTube aliases deduplicate verified same items while clips and multi-session videos stay scoped. |
+| Facts handoff | Memberships and desired facts are transactional, revisioned and correctable; no graph call occurs inside provider/extraction transactions. |
+| Bounded canary | Enable on an approved small channel/item set after Social S2 gates pass; compare provider credits, artifact yield, precision, latency and review volume. |
 
-## Smoke tests
+## Acceptance tests
 
-Expected counts come from labeled fixtures, not assumptions about the number of videos or the popularity of a channel.
+- Social S2 writes channel videos and Shorts once; the media phase sends zero provider requests.
+- A simultaneous detail request from social insights and media results in one leased hydration attempt.
+- One video with verified host and guest yields one appearance, one group and two memberships.
+- A sponsor or topic subject in the description yields no membership.
+- A null transcript records unavailable coverage and does not retry forever.
+- Comment authors never become participants.
+- A Short excerpt does not inherit the full episode's participants.
+- RSS, publisher page and YouTube distribution of the same verified episode resolve to one canonical appearance with separate source anchors.
+- Same title/date on different items remains separate without stronger evidence.
+- One video containing two disjoint interviews creates scoped groups and no cross-group pair.
+- A corrected guest or expired sole evidence produces a targeted membership/fact retraction; surviving publisher evidence remains.
+- Duplicate and out-of-order post/artifact events are idempotent.
+- Entity merge repair preserves source history, deduplicates memberships and prevents self-pairs.
+- No graph or consumer state is marked complete until the corresponding desired revision is applied.
+- Provider credits are charged only by socials and reconcile through the shared quota owner.
 
-| Case | Required assertion |
-| --- | --- |
-| RSS episode, publisher page and verified YouTube distribution of the same item | One canonical appearance, multiple independently traceable source anchors and no duplicate membership. |
-| Same title/date on two different episodes | Separate canonical appearances unless stronger verified evidence proves equivalence. |
-| One video containing two disjoint sessions | Explicit appearance/group scope; no cross-session pair eligibility. |
-| Case-distinct YouTube IDs or RSS GUIDs | Remain distinct through lookup, storage and replay. |
-| Known host absent from episode evidence | No default host membership. |
-| Several guests with no panel evidence | No automatic panel classification. |
-| Topic subject or sponsor mention | No accepted appearance membership from that mention alone. |
-| Same name on a prior episode, conflicting current identity evidence | No inherited automatic match; preserve the conflict for resolution. |
-| New person disallowed, but the appearance is verified | Preserve unresolved/reviewable mention evidence without creating a person. |
-| Duplicate work delivery or repeated snapshot revision | No duplicate accepted claim, membership, logical delivery intent or graph relationship. |
-| Role correction, source expiry, or one of several sources withdrawn | Re-elect affected claims and apply only the current desired revision; surviving permitted evidence remains usable. |
-| Graph gate closed | No graph node or edge writes. |
-| Provider budget exhausted | Defer before the call; release source work without consuming a failure attempt. All applicable bucket reservations succeed atomically or none does. |
-| Request times out, its worker lease expires, or the quota window resets | Retain uncertain issued usage; reconcile once against the charged window. A retry needs its own accounted attempt; a reset or key rotation does not erase unsettled usage. |
-| Publisher evidence survives removal of a YouTube source | Canonical appearance and independently supported claims survive; affected YouTube content and derivatives follow their deletion policy. |
+## Not in this phase
 
-Schema integration tests now cover subtype identity, source/membership dedup, retained evidence, frozen-index consistency, ordered article pairs, quota lifecycle constraints and outbox/revision uniqueness. Transaction races, stale-worker behavior and consumer replay still need their future Go implementations and tests. Graph assertions must use the finalized canonical identity and revision contract. The previous queries against withdrawn table names are not acceptance tests for this model.
-
-## Decisions and readiness
-
-| Decision | Status |
-| --- | --- |
-| 1 — Canonical appearance/event entities, facts-owned caches, cross-source aliases and shared source work | **Accepted by Mark, 2026-09-07.** This page and the overview now use that model. |
-| 2 — Physical transactional outbox and delivery lifecycle | **Accepted by Mark, 2026-09-07:** dedicated `universe.media_outbox`, atomic with desired state, stable event identity, bounded leased dispatch and separate consumer receipts. |
-| 3 — Provider quota and reservation persistence | **Accepted by Mark, 2026-09-07:** shared `universe.provider_quota_buckets` and `universe.provider_quota_reservations`, atomic admission, per-attempt accounting, settlement and reconciliation through one Go budget owner. |
-| Exact identity/upsert keys, source permissions and measured provider/model choices | Required Phase 0 outputs; acceptance of decision 1 does not settle them. |
-
-The initial 2026-09-07 read-only audit found the tables absent. After Mark requested creation, migrations `20260907090213` and `20260907090253` created all **23 shared tables in development Universe AlloyDB**. Verification confirmed empty tables, valid indexes, migration records and API/worker permissions. Existing identity, facts, enrichment, curation and Fundable tables were preserved. A disposable local database validated rollback/reapply; the existing local application database was not migrated. See the overview for remaining older migrations and the implementation gates.
+- A second official YouTube Data API client.
+- Direct ScrapeCreators calls from media.
+- Audio/video downloads or computer-vision speaker identification.
+- Treating comments, watch-next recommendations or search results as appearances.
+- Channel-wide community/live feeds that ScrapeCreators does not expose.
+- Graph reader/scoring implementation or consumer routes.
 
 ## References
 
-- [Speaking & Media Co-Occurrence](/guides/open-work/roadmap/media-co-occurrence)
-- [Node Types: Media appearances](/guides/ontology/nodes#media-appearances)
-- [Edge Types: Media edges](/guides/ontology/edges#media-edges)
-- [Edge weights](/guides/ontology/edge-weights#media-weights)
-- [YouTube Data API documentation](https://developers.google.com/youtube/v3)
-- [Go Developer Notes](/guides/enrichment/waterfall/go-developer-notes)
+- [Unified Social Media & Media Co-Occurrence plan](/guides/open-work/orbiter-univers-standalone/social-media-enrichment)
+- [Social Ingestion Contract — YouTube capability plan](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#youtube-capability-plan)
+- [Media Phase 0: Shared Go Foundations](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations)
+- [Media Phase 5: Facts & Graph Replay](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay)
+- [Media Phase 6: Consumer Publication](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication)
