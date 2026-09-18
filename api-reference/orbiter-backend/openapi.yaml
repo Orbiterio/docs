@@ -123,6 +123,10 @@ tags:
     description: |
       Outbound webhook subscriptions, delivery inspection, and
       manual retry of dead deliveries.
+  - name: X Connect
+    description: |
+      Store the caller's X grant (from the command palette) and sync their
+      X followers and DMs.
 paths:
   /sign-up:
     post:
@@ -4012,6 +4016,176 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /x-connect:
+    get:
+      tags:
+        - X Connect
+      summary: Read the caller's X connection
+      description: |
+        `connected` is false when the caller has no stored grant; the other
+        fields are then defaults. `current_run` is the most recent sync.
+      operationId: getXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The caller's X connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XConnectionEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    patch:
+      tags:
+        - X Connect
+      summary: Turn DM sync on or off
+      description: Applies from the next sync. 404 when X is not connected.
+      operationId: updateXConnection
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateXConnectionRequest'
+      responses:
+        '200':
+          description: The updated connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XConnectionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      tags:
+        - X Connect
+      summary: Disconnect X
+      description: |
+        Revokes the grant at X (best effort) and deletes it. 404 when X is
+        not connected.
+      operationId: deleteXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Disconnected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/sync:
+    post:
+      tags:
+        - X Connect
+      summary: Sync X followers and DMs
+      description: |
+        Queues a sync on the worker. A sync already in flight is returned
+        as-is instead of stacking another. 400 when X is not connected or the
+        user must reconnect.
+      operationId: syncXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: The queued (or already running) sync.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XSyncRunEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/oauth/start:
+    post:
+      tags:
+        - X Connect
+      summary: Start connecting X
+      description: |
+        Mints a single-use OAuth transaction bound to the authenticated user
+        and returns X's consent URL, requesting followers, DMs, and a refresh
+        token. `return_to` must exactly match an allowlisted frontend path.
+        Answers 400 once the per-user limit (10 starts per trailing hour)
+        trips, and 404 when X connect is not configured on the server.
+      operationId: startXConnect
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartXConnectRequest'
+      responses:
+        '200':
+          description: X consent URL, to open in a popup.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartXConnectEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/oauth/callback:
+    get:
+      tags:
+        - X Connect
+      summary: X authorization-code callback
+      description: |
+        Public endpoint X redirects the browser to. Consumes the single-use
+        transaction, exchanges the code, stores the sealed grant, and queues
+        the first sync. ALWAYS answers with a 302 to the frontend return path
+        carrying only `?result=connected|cancelled|error`; no token or X
+        error detail appears in the redirect.
+      operationId: xConnectCallback
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to the frontend with a safe result code.
   /nylas-grants/token-exchange:
     post:
       tags:
@@ -14913,6 +15087,142 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    XSyncRun:
+      type: object
+      required:
+        - id
+        - status
+        - include_dms
+        - followers_synced
+        - dm_events_synced
+        - error
+        - started_at
+        - completed_at
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: pending, running, completed, or failed.
+        include_dms:
+          type: boolean
+        followers_synced:
+          type: integer
+        dm_events_synced:
+          type: integer
+        error:
+          type:
+            - string
+            - 'null'
+          description: Failure reason; `reauth_required` when the user must reconnect.
+        started_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    XConnection:
+      type: object
+      required:
+        - connected
+        - reauth_required
+        - x_username
+        - dms_enabled
+        - last_synced_at
+        - current_run
+      properties:
+        connected:
+          type: boolean
+        reauth_required:
+          type: boolean
+          description: X rejected the stored grant; the user must reconnect.
+        x_username:
+          type:
+            - string
+            - 'null'
+        dms_enabled:
+          type: boolean
+        last_synced_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        current_run:
+          oneOf:
+            - $ref: '#/components/schemas/XSyncRun'
+            - type: 'null'
+    XConnectionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/XConnection'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateXConnectionRequest:
+      type: object
+      required:
+        - dms_enabled
+      properties:
+        dms_enabled:
+          type: boolean
+    XSyncRunEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/XSyncRun'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    StartXConnectRequest:
+      type: object
+      required:
+        - return_to
+      properties:
+        return_to:
+          type: string
+          description: Allowlisted frontend path the popup lands on after X.
+    StartXConnectResponse:
+      type: object
+      required:
+        - authorization_url
+        - expires_at
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+    StartXConnectEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/StartXConnectResponse'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     TokenExchangeRequest:
       type: object
       required:
@@ -21959,6 +22269,8 @@ components:
         - batch_id
         - batch_seq
         - batch_status
+        - suggestion_request_id
+        - request_panel_title
         - generated_at
         - source_ref
         - rank
@@ -21992,6 +22304,15 @@ components:
         batch_status:
           type: string
           description: 'The owning batch''s status: `complete`, `partial` or `failed`. The feed only lists `complete`.'
+        suggestion_request_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The request the batch answers; null for a batch delivered without one.
+        request_panel_title:
+          type: string
+          description: The request's user-editable title, shown as the row title in the outcomes panel. Empty when never set; edit it with `PATCH /v1/leverage-loops/{loop_id}` (`request_panel_title`).
         generated_at:
           type: string
           format: date-time
@@ -22089,6 +22410,7 @@ components:
       required:
         - id
         - request_suggestion_id
+        - request_panel_title
         - organization_id
         - requested_by
         - suggestion_type
@@ -22111,6 +22433,9 @@ components:
             - string
             - 'null'
           format: uuid
+        request_panel_title:
+          type: string
+          description: The request's user-editable title; empty for a batch with no request or an unset title.
         organization_id:
           type: string
           format: uuid
