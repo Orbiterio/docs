@@ -1,0 +1,125 @@
+---
+title: "Projects & Tasks API Design"
+sidebarTitle: "Projects & Tasks API Design"
+description: "API routes, authentication, authorization, command rules, stage criteria, agent actions, pagination, and Kanban responses for the Go/AlloyDB build."
+icon: "code"
+---
+
+<Note>
+**Go + 100% AlloyDB build design.** This is the API-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). It owns the API and command contracts for projects, tasks, pipelines, deals, and agent work. Storage fields and constraints live in [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design).
+</Note>
+
+## Transport and response conventions
+
+All routes are under `/v1`, authenticated at module registration. Use the existing `{data,error,meta}` envelope and typed middleware errors. Return nullable fields as null and arrays as empty arrays. A list's `data` carries `items`, `total`, and `next_cursor`; do not use offset pagination. Create/execute/adopt operations require an idempotency key; edits/transitions require expected versions. A 202 response means queued, not completed.
+
+Use `pmw.RequireWorkOS` and `pmw.OrbiterUserID` for authenticated routes. Wire DTOs and domain types remain separate, with explicit mappers. Use decimal strings for monetary values at the API boundary and exact decimal arithmetic.
+
+## Routes
+
+| Routes | Purpose |
+|---|---|
+| `GET/POST /projects`, `GET/PATCH /projects/{id}` | Read/create/edit projects; response includes effective rights and inherited root settings. |
+| `POST /projects/{id}/move`, `/archive`, `/reopen`, `/complete` | Explicit lifecycle/hierarchy commands. |
+| `PUT/DELETE /projects/{root_id}/organization-access/{org_id}` | Root admin grants/revocations. |
+| `PUT /projects/{root_id}/team`, `/owner`, `/agent-settings` | Root admin configuration; permission changes increment access version. Enabling background delegation requires the root owner. |
+| `GET/POST /projects/{id}/tasks`, `GET/PATCH /tasks/{id}` | Project tasks; `/tasks?assigned_to=me` provides the permission-filtered My Tasks view. |
+| `PUT /tasks/{id}/assignees`, `PUT/DELETE /tasks/{id}/dependencies/{prerequisite_id}` | Versioned assignment and dependency changes. |
+| `POST /tasks/{id}/complete`, `/reopen`, `/archive`, `/progress` | Explicit work commands and delivery evidence. |
+| `GET/POST /projects/{root_id}/pipelines`, `GET/PATCH /pipelines/{id}` | Configure root-owned pipelines. |
+| `POST /pipelines/{id}/copy`, `/archive`; `POST /pipelines/{id}/stages`; `PATCH /pipelines/{id}/stages/{stage_id}` | Explicit copied configuration and stage creation/editing. |
+| `POST /pipelines/{id}/stages/{stage_id}/archive`, `/reorder` | Replacement-aware retirement and column order. |
+| `GET/POST /projects/{id}/deals`, `GET/PATCH /deals/{id}` | CRUD without generic writable stage/outcome fields. |
+| `POST /deals/{id}/move`, `/reorder`, `/reopen`, `/archive`, `/attest`, `/progress` | Shared validated board and agent commands. |
+| `GET/POST /deals/{id}/stakeholders`, `PATCH/DELETE /deals/{id}/stakeholders/{link_id}` | Attributed stakeholder roles; delete is soft removal. |
+| `GET /pipelines/{id}/board`, `GET /pipelines/{id}/stages/{stage_id}/deals` | Stage metadata, counts, and separately paginated cards. |
+| `GET /projects/{id}/activity`, `/suggestions` | Safe activity and personalized suggestion visibility; optional task/deal filters. |
+| `POST /project-suggestions/{id}/adopt`, `/resolve`, `/withdraw` | Make/link task, apply change, or queue an authorized action. Typed adoption payload; no ambiguous generic acceptance. |
+| `PUT /project-suggestions/{id}/my-state` | Save/snooze/dismiss/clear personal disposition only. |
+| `POST /projects/{id}/agent-runs`, `GET /project-agent-runs/{id}` | Request/read bounded research, with optional task/deal target. |
+| `POST /project-actions`, `GET /project-actions/{id}`, `POST /project-actions/{id}/cancel`, `/retry`, `/resolve-unknown` | Authorized execution and controlled recovery. Resolve-unknown requires evidence or a user-reported result and records the distinction. |
+| `GET/PUT /projects/{root_id}/my-preferences` | Private notification controls. |
+
+## Authorization and shared-content rules
+
+Effective access is the union of valid routes, ordered admin, editor, viewer:
+
+- An active root owner who is still an active member of the owning organization is an admin.
+- Active owners/admins of the non-deleted owning organization have recovery/admin access. Ordinary members require an explicit grant.
+- Accepted linked-team members are editors; accepted team admins are admins, independently of organization membership.
+- Active members of explicitly granted non-deleted organizations receive the grant's viewer/editor role.
+
+All routes require an active account. Pending/rejected/inactive membership confers nothing. Creator attribution, deal ownership, task assignment, stakeholder links, preferences, and suggestion targeting never grant visibility. Revoking one route removes it immediately for subsequent authorization checks, while other intentional routes remain valid.
+
+Admins configure pipelines, sharing, hierarchy, root ownership, and archive. Editors create/edit work, attest criteria, assign eligible users, adopt suggestions, and move deals under the same transition rules. Viewers read and manage their own suggestion responses. Explicitly withdrawing a suggestion for everyone is an admin operation.
+
+Apply ACL before filtering, counts, search, pagination, exports, board summaries, agent inputs, and sends. Return 404 for inaccessible resources, 403 for a forbidden operation on a readable resource, 409 for version/idempotency conflicts, and typed validation errors for invalid input.
+
+`nodespub.Hydrate` can contain the caller's personal contact details and paths. Use it for that caller's response; do not persist the entire hydrated object into shared deal content or agent evidence. Use shared-safe entity facts for root-wide reasoning. Private email, attachments, relationship paths, or imported suggestion content require both source access and permission to disclose to the root audience. Personal feedback stays private.
+
+Organization/team deletion removes that route and nullable ownership/configuration references without deleting the work or making it public. If no admin remains, preserve content for explicit administrative recovery. Parent archive suppresses descendants without overwriting their independent archive state. Cross-root moves are not supported; a deliberate pipeline copy is configuration reuse, not a work transfer.
+
+## Commands, concurrency, and invariants
+
+For a state-changing command:
+
+1. Verify the caller and normalize the typed request. Begin a transaction, resolve idempotency, and acquire the root row lock.
+2. Recheck the live ACL. Hold shared locks on the authorizing user/org/membership rows for the short mutation so a concurrent revocation has a defined ordering.
+3. Lock affected project/pipeline/deal/task/suggestion rows in stable ID order. Compare expected resource versions and pipeline configuration version where relevant.
+4. Validate hierarchy, dependencies, assignment eligibility, stage criteria, references, and action scope.
+5. Write state, activity, command receipt, and any durable run/follow-up intents atomically. Increment domain versions and relevant board/configuration versions.
+6. Commit. Optional Pub/Sub publication wakes the worker; the durable sweep also finds the work if publication fails.
+
+V1 serializes domain mutations within one root for clear hierarchy, permission, and transition guarantees. Worker claims are separate short transactions; never hold a job lock while waiting for a root lock or a provider. Contention is measured before introducing narrower lock partitions.
+
+`last_progress_at` moves only on an explicit progress update, actual delivery, or evidenced advancement. Research scans, reminders, drafts, suggestions, priority/deadline changes, sharing, assignment, and rank changes do not reset it. Operational leases/schedules do not increment domain versions or `updated_at`.
+
+## Stage criteria and suggested actions
+
+Each stage has a stable ID, editable display fields, and a semantic category: `backlog`, `unstarted`, `started`, `done`, or `canceled`. Nonterminal categories derive `open`; `done` derives `won`; `canceled` derives `lost`. The category cannot be changed after the stage has been used; create a replacement stage and explicitly move affected deals instead.
+
+Store a bounded, versioned criteria document on the destination stage. V1 supports an `all` list of at most 20 typed checks, each with a stable criterion UUID:
+
+| Check | Deterministic evidence |
+|---|---|
+| `has_target` | The deal's canonical target resolves. |
+| `has_stakeholder` | An active stakeholder with the required role exists. |
+| `field_present` | An allowlisted deal field is populated, such as owner or expected close date. |
+| `task_done` | The active task matching the criterion's stable `work_key` in this project/deal is done. Pipeline criteria do not embed one deal's task UUID. |
+| `action_succeeded` | A matching action run has an acknowledged result for this deal, action type, and target. |
+| `user_confirmed` | An authorized user has explicitly attested the criterion, with timestamp and optional permitted evidence. |
+
+No arbitrary code, SQL, model-written predicates, or unrestricted expression language. Criteria evaluate to met/unmet/unknown; unknown blocks advancement. The model explains gaps and prepares work but cannot manufacture evidence or attest on behalf of a user.
+
+A move validates destination criteria, the deal's expected version, and the pipeline's expected configuration version. A manual drag uses the same rules. There is no silent bypass. A user can explicitly attest a configured human-confirmation criterion or an admin can edit criteria; both create history. A move to an unsuccessful terminal stage requires a reason, and reopening requires an explicit command and the destination's criteria.
+
+Stage action guidance is a bounded list of stable rule IDs, titles, rationale templates, registered action types, and validated default parameters. It is guidance, not an executable authorization. Editing criteria or action guidance increments the pipeline configuration version and invalidates stale prepared commands.
+
+## Registered actions
+
+| Action family | Execution rule |
+|---|---|
+| Resolve people/companies, inspect permitted context, prepare a next-step explanation or draft text | Allowed by the run's bounded research delegation; produces suggestions/artifacts, not accepted work state. |
+| Create/link a task, edit work, add/remove a stakeholder, attest a criterion, move/archive/reopen a deal | An explicit typed human command or exact authorized action run calls the same projects service methods as the UI. Agents cannot self-attest human-confirmation criteria. |
+| Create/update a mailbox draft | Requires the mailbox owner's explicit action and a verified grant; uses the new `emailspub` service contract. Agent-prepared text can exist before mailbox creation. |
+| Send email | Exact sender/grant, recipients, subject, body, and related versions are authorized. Provider outcome is persisted; no automatic resend after uncertainty. |
+| Introduction | Prepare a double-opt-in sequence. Each person's consent is retained before the final introduction; one approved request is not approval for all later messages. |
+| Draft SMS or meeting brief | Produce a user-visible artifact. No SMS send or calendar mutation capability is advertised until an owned, tested adapter exists. |
+
+The action registry lives in reviewed Go code. Pipeline JSON selects from that registry and cannot introduce arbitrary tools, URLs, SQL, or shell commands. Agents may propose multi-step work, but each executable side effect has its own authorized action run and receipt. Model prose never authorizes an action.
+
+## Pagination
+
+Standard lists use existing creation-time/ID keyset pagination, default 50 and max 200. Board columns use a projects cursor carrying pipeline/stage, rank/ID, filters, and board order version. A move/reorder/archive invalidates old column cursors with 409; the UI refetches rather than silently skipping or duplicating cards. Counts remain permission-filtered.
+
+Rank storage, rebalance rules, and the board version counter are defined in [Table Design](/guides/open-work/roadmap/projects-tasks/table-design#board-storage-and-ordering).
+
+## Kanban response and interaction contract
+
+The board response includes stage IDs/categories/order, pipeline configuration/board versions, permission-filtered counts, and the first page per requested column. Cards show owner, canonical target, optional value/currency, dates, stage age, meaningful progress, blockers, and a small set of ready next steps. Detailed private artifacts are fetched separately with their owner's permissions.
+
+Drag/drop shows the resulting operation. On unmet criteria, display the gaps and prepared actions; on 409 refetch without overwriting newer work. Reordering never changes stage. A card can remain visible after a failed or unknown action, with its actual state. Every action has clear prepared/queued/running/succeeded/failed/unknown labels; avoid displaying queued work as finished.
+
+## Implementation and verification
+
+Maintain `api/projects.openapi.yaml` and its root OpenAPI references alongside handlers, DTOs, SQL, and tests. The [main build plan](/guides/open-work/roadmap/projects-tasks#implementation-layout-and-build-slices) defines delivery order; its [acceptance gates](/guides/open-work/roadmap/projects-tasks#acceptance-gates-and-operational-checks) cover access, concurrency, agent execution, provider outcomes, and UI behavior.
