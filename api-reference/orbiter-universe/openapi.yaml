@@ -69,9 +69,9 @@ paths:
       operationId: getEntityProjection
       tags:
         - Projections
-      summary: Get the versioned projection for a company, person or stage production
+      summary: Get the versioned projection for a company, person, stage production or video game
       description: |
-        Returns `company_projection.v1`, `person_projection.v1` or `stage_production_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. Requires scope `projections:pull`.
+        Returns `company_projection.v1`, `person_projection.v1`, `stage_production_projection.v1` or `video_game_projection.v1` depending on the entity type — the versioned envelope consumers apply idempotently to their own storage. Check `schema_version` to tell them apart. The id resolves through the merge chain first; the `universe_*_uuid` in the body is always the canonical id, and it is also the graph node id. `run_id` is deterministic per (entity, source state): re-pulling unchanged data yields the same run_id, so consumer re-applies are natural no-ops. Returns 404 until a company has been distilled, and — for a person — until enrichment has completed SUCCESSFULLY: a person whose run is still pending or settled-failed is deliberately not emitted. Once a run HAS satisfied, a later run in flight no longer hides the package: the last satisfied one is served with `meta.projection_status: stale` until the new run settles. A stage production answers 404 until its profile is distilled, and in a deployment whose `STAGE_PUBLISH_ENABLED` gate is closed. A video game (including a legacy `film_tv` row the game waterfall owns) answers 404 until its publication is promoted; the body served is the one frozen at promotion, so a refresh in flight never leaks. Requires scope `projections:pull`.
       security:
         - bearerAuth: []
       parameters:
@@ -91,6 +91,7 @@ paths:
                   - $ref: '#/components/schemas/CompanyProjectionEnvelope'
                   - $ref: '#/components/schemas/PersonProjectionEnvelope'
                   - $ref: '#/components/schemas/StageProductionProjectionEnvelope'
+                  - $ref: '#/components/schemas/VideoGameProjectionEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -110,7 +111,7 @@ paths:
       description: |
         Returns the entity plus everything one hop away, as nodes and edges copied verbatim from the graph, for a consumer to write into its own graph unchanged.
         This projection is derived from the graph, not from Postgres rows. The row-derived projections carry only what has rows; several edge types have none, FOUNDED among them, so a consumer that rebuilds relationships from those loses them with no error.
-        Geography, expertise and tombstoned nodes are excluded, and a node reached by several edges is returned once. Exclusions are policy, not a caller option: they depend on the ontology, and two consumers copying one entity must get the same graph.
+        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
         Only edges incident to the anchor are returned. An edge between two neighbours belongs to their own neighbourhoods.
         Node and edge properties are returned verbatim and are deliberately untyped: the same key carries different types across labels, so updated_at is a string on Person and an integer on Company.
         Embeddings are returned as arrays of numbers. A consumer must re-wrap them as vectors on write, or its vector index will not see them and search will silently return nothing.
@@ -144,6 +145,24 @@ paths:
           schema:
             type: boolean
             default: true
+        - name: include_reference_nodes
+          in: query
+          description: Include direct geography and expertise neighbors for answer context. Defaults to false for graph-copy consumers.
+          schema:
+            type: boolean
+            default: false
+        - name: paginate
+          in: query
+          description: Use bounded pages ordered by neighbor UUID. Follow next_cursor until absent.
+          schema:
+            type: boolean
+            default: false
+        - name: after
+          in: query
+          description: Previous next_cursor. Requires paginate=true; omit for the first page.
+          schema:
+            type: string
+            format: uuid
       responses:
         '200':
           description: The entity and its one-hop neighbourhood.
@@ -171,7 +190,7 @@ paths:
         Returns the nodes nearest the query, each with its one-hop edges, in the same node/edge shape as the subgraph projection.
         The counterpart to the subgraph read: that one needs an id you already hold, this one is how you find an id you do not. The query is embedded server-side with the same model that wrote the node vectors — vectors from two models are not comparable, so a consumer cannot supply its own vector.
         score is a DISTANCE: lower is closer, and 0 would be identical. Matched nodes carry it and sort first; a node pulled in by expansion has score null and is_match false. Relevance is cut both absolutely and relative to the best hit, so a query with one good answer returns one node no matter what limit says — limit is an upper bound, not a page size, and there is no pagination.
-        Geography, expertise and tombstoned nodes are excluded, as in the subgraph read: both are hubs that connect everyone to everyone.
+        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Tombstoned nodes are always excluded.
         A client with entity-type entitlements is narrowed to those types automatically; asking only for types it may not read is a 403, not an empty result. Neighbours are not filtered by entity type — a match's surroundings describe it, and cutting them would misdescribe it.
         Requires scope `graph:search`.
       security:
@@ -1276,8 +1295,9 @@ paths:
                     - film_tv
                     - music
                     - stage_production
+                    - video_game
                   description: |
-                    Optional scope; omit to wipe every non-reference node. `music` is the one umbrella — it covers all five music entity types (music_group, music_release_group, music_recording, music_work, music_event) plus the music_release / music_place support rows and the artist / label satellite profiles, because they are one pipeline.
+                    Optional scope; omit to wipe every non-reference node. `music` is an umbrella — it covers all five music entity types (music_group, music_release_group, music_recording, music_work, music_event) plus the music_release / music_place support rows and the artist / label satellite profiles, because they are one pipeline. `video_game` is the other: the six game-family types (video_game, game_series, game_platform, game_engine, game_release, game_award) and their nodes, plus the lane's own rows — every root with its jobs, demands, retained source records, the negative cache — so the next person run rebuilds the games from scratch. People and companies the games link to are never touched.
                 target:
                   type: string
                   enum:
@@ -1314,6 +1334,279 @@ paths:
                       issue: oneof
                 meta:
                   requestId: 6f1c2f7e-2b21-4a0b-9c3a-9a1f2d3e4b55
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/backfill/graph/purge-entity:
+    post:
+      operationId: purgeEntity
+      tags:
+        - Graph
+      summary: Purge ONE entity's rows and graph nodes
+      description: |
+        Operator-only, DESTRUCTIVE. The targeted counterpart of `/graph/wipe`: that one selects by label or entity_type and runs in bounded batches, this one names a single `entity_id` and runs to completion. `target` reuses the same vocabulary — `nodes` (default), `tables`, `all`.
+
+        **The id set is the target plus its merge tombstones.** Every entity whose `merged_into` chain reaches the target is purged with it (transitively): that FK is NO ACTION and would otherwise block the delete. Their merge history is gone permanently, and they are listed in `tombstones_purged`.
+
+        **Graph teardown is ledger-driven, not label-driven.** The entity's own node is DETACH DELETEd; then every satellite node the write-back ledgers name (funding_rounds, film_tv_awards, and the person certification / honor / project / publication nodes) is deleted ONLY if it has no edge left. That degree test is what keeps a shared node alive: a certification is one node for everyone who holds it, and an award node is shared by the film and the winner. Survivors are counted in `satellites_kept`. The investor's `InvestmentThesis` node is keyed by the thesis id, which no ledger names, so it is taken by `investor_uuid` and counted in `thesis_nodes_deleted`.
+
+        **The purge edits OTHER entities.** `entity_facts.value_entity_id` CASCADEs, so a surviving entity's relation fact to the target dies; sixteen FKs SET NULL, so surviving rows keep their raw provider string but lose the resolved id (a colleague's `person_work_experience.company_entity_id`, a `master_persons.current_company_entity_id`, a round investor). Both are counted in `collateral` — run with `dry_run: true` first to see them without deleting.
+
+        Seeded reference rows and nodes always survive, and the music support tables (release, place) are never touched: they belong to no entity. Requires `confirm: true` unless `dry_run` is set, and an authenticated admin user (role `admin`); consumer API keys are rejected.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entity_id:
+                  type: string
+                  format: uuid
+                  description: The entity to purge. Not resolved through merged_into — the id given is the id purged.
+                confirm:
+                  type: boolean
+                  const: true
+                  description: |
+                    Must be true, and is REQUIRED unless `dry_run` is set — a dry run writes nothing, so demanding confirmation there would only train reflexive `confirm: true`.
+                target:
+                  type: string
+                  enum:
+                    - nodes
+                    - tables
+                    - all
+                  description: |
+                    What dies. REQUIRED — unlike `/graph/wipe`, where an omitted scope means "everything non-reference", this call names one live row, so what it deletes must be stated rather than defaulted. Required on a dry run too: a dry run reports what WOULD die, so it must say what.
+                dry_run:
+                  type: boolean
+                  description: Compute and return every count without deleting anything.
+              required:
+                - entity_id
+                - target
+              if:
+                properties:
+                  dry_run:
+                    const: true
+                required:
+                  - dry_run
+              else:
+                properties:
+                  confirm:
+                    const: true
+                required:
+                  - confirm
+      responses:
+        '200':
+          description: Purge summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurgeResultEnvelope'
+              examples:
+                selfContainedPerson:
+                  summary: A person nobody else referenced — collateral all zero
+                  description: |
+                    The normal result. Every collateral counter is zero because no surviving entity pointed at this person. Zeros are the answer, not a missing feature.
+                  value:
+                    data:
+                      entity_id: 01a05d26-8e8f-7e6c-bf82-7721c5ddd45d
+                      entity_type: person
+                      target: all
+                      dry_run: false
+                      tombstones_purged: []
+                      nodes_deleted: 1
+                      edges_deleted: 0
+                      satellites_deleted: 0
+                      satellites_kept: 0
+                      thesis_nodes_deleted: 0
+                      entity_links_cleared: 1
+                      address_links_cleared: 0
+                      round_links_cleared: 0
+                      music_links_cleared: 0
+                      rows_deleted: 1
+                      entities_deleted: 1
+                      game_entities_purged: []
+                      game_roots_deleted: 0
+                      collateral:
+                        relation_facts_deleted: 0
+                        shared_awards_deleted: 0
+                        references_nulled: 0
+                        by_table:
+                          person_work_experience: 0
+                          person_education: 0
+                          master_persons: 0
+                          funding_round_investors: 0
+                          funding_round_partners: 0
+                          person_certification: 0
+                          person_honor: 0
+                          person_publication: 0
+                          person_volunteering: 0
+                    error: null
+                    meta:
+                      requestId: 1efc7bc3-cb52-4095-9a20-06d9029dbc36
+                companyWithCollateral:
+                  summary: A company 12 people worked at — collateral populated
+                  description: |
+                    Those 12 job rows SURVIVE with their company_name string intact; only the resolved company_entity_id is nulled. The 12 works_at relation facts are deleted outright. Two employees also had this company as their current employer on the typed cache. One certification issued by the company loses its issuer id.
+                  value:
+                    data:
+                      entity_id: 01a05d37-e20f-7675-9c28-43057b77a5b8
+                      entity_type: company
+                      target: all
+                      dry_run: true
+                      tombstones_purged:
+                        - 01a05d31-1111-7000-8000-000000000001
+                      nodes_deleted: 3
+                      edges_deleted: 14
+                      satellites_deleted: 2
+                      satellites_kept: 1
+                      thesis_nodes_deleted: 1
+                      entity_links_cleared: 2
+                      address_links_cleared: 1
+                      round_links_cleared: 2
+                      music_links_cleared: 0
+                      rows_deleted: 4
+                      entities_deleted: 2
+                      game_entities_purged: []
+                      game_roots_deleted: 0
+                      collateral:
+                        relation_facts_deleted: 12
+                        shared_awards_deleted: 0
+                        references_nulled: 15
+                        by_table:
+                          person_work_experience: 12
+                          person_education: 0
+                          master_persons: 2
+                          funding_round_investors: 0
+                          funding_round_partners: 0
+                          person_certification: 1
+                          person_honor: 0
+                          person_publication: 0
+                          person_volunteering: 0
+                    error: null
+                    meta:
+                      requestId: 2afc7bc3-cb52-4095-9a20-06d9029dbc37
+        '400':
+          description: |
+            The body failed validation. `error.details` lists EVERY failing field in one response, keyed by the JSON name you sent, so a caller fixes all of them in one round trip rather than one per attempt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                data: null
+                error:
+                  code: VALIDATION_FAILED
+                  message: validation failed
+                  details:
+                    - field: entity_id
+                      issue: uuid
+                    - field: target
+                      issue: oneof
+                    - field: confirm
+                      issue: required_without
+                meta:
+                  requestId: 3c7a1d90-5f44-4e18-8a02-1b6d8e2f4c31
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/backfill/graph/reconcile:
+    post:
+      operationId: reconcileGraph
+      tags:
+        - Graph
+      summary: Re-run graph syncs for entities whose ledger says the graph is behind
+      description: |
+        Operator-only, non-destructive. Drains one bounded batch per selected `target` queue by re-running the same idempotent syncs the pipeline events trigger — the recovery path for sync events lost for good (worker booted without a graph client, redelivery past retention, dead-lettered messages). `companies`: entities with a master_companies row and graph_written_at null or older than last_enriched_at get a full node property sync. `locations`: companies with pending master_addresses rows and an existing company node get the address drain; node-less companies are reported as `awaiting_node` (sync companies first). `funding_rounds`: funding_rounds rows with a null graph link (never written, or node-wiped) get their round node + RAISED edge re-merged from row state under the row's own id — the original deal-id MERGE key died with the wiped node — with deals left stamped processed, so this replaces the wipe's table-side-reset caveat without duplicate rows; INVESTED_IN edges are NOT rebuilt (those need a deal reprocess). `all` (default) runs every queue. Successful rows stamp their ledger and leave the queue; re-run while `has_more` is true. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target:
+                  type: string
+                  enum:
+                    - companies
+                    - locations
+                    - funding_rounds
+                    - all
+                  description: Queue to drain; omitted = all.
+                limit:
+                  type: integer
+                  description: Entities per queue batch (default 15, max 500).
+      responses:
+        '200':
+          description: Per-queue batch summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileResultEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/backfill/graph/drift:
+    post:
+      operationId: graphDrift
+      tags:
+        - Graph
+      summary: Audit the graph against every SQL write-back ledger; optionally sweep orphans
+      description: |
+        Operator-only. Inventories every node and edge in the graph and diffs it against the union of every `*_node_uuid` / `*_edge_uuid` ledger column in Postgres. A graph object no ledger claims is an orphan; a ledgered uuid the graph lacks is lost. With `sweep` false (default) the call only reports. With `sweep: true` it DETACH-DELETEs the orphans — destructive, so `confirm: true` is then required, the same guard as the wipe. Seeded reference nodes are never deleted. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sweep:
+                  type: boolean
+                  description: Delete the orphans the audit finds; false = report only.
+                confirm:
+                  type: boolean
+                  description: Required (true) when sweep is true — guards against stray POSTs.
+              if:
+                properties:
+                  sweep:
+                    const: true
+                required:
+                  - sweep
+              then:
+                properties:
+                  confirm:
+                    const: true
+                required:
+                  - confirm
+      responses:
+        '200':
+          description: The audit report; counts everywhere, bounded samples for review.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriftResultEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1815,6 +2108,1103 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/caps:
+    get:
+      operationId: enrichmentCapStatus
+      tags:
+        - Enrichment
+      summary: Entity-cap headroom audit (management plane)
+      description: |
+        Answers "how many entities do we hold, and how many may we still add" for each of the three ceilings — `company`, `person` and `music`. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key: caps are operations config. There is no scope that grants this. Strictly read-only, and it counts live rather than reporting a stored number, so it can never disagree with the brake that blocks enrichment. It resolves each ceiling through the same scope map the brake uses: `film_tv` rides the person ceiling and is not counted, and the five music catalog types share one ceiling measured against their summed population. Merge tombstones are excluded from every bucket — a merge loser holds no cap budget. `limit` 0 means no row is configured for that key, which the brake itself treats as fail-closed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: basis
+          in: query
+          required: false
+          description: |
+            Which bucket drives `used`, `remaining` and `pct_used`. Defaults to `all`, which is what the brake counts. The `counts` breakdown is always complete regardless.
+          schema:
+            type: string
+            enum:
+              - all
+              - enriched
+              - not_enriched
+            default: all
+      responses:
+        '200':
+          description: One entry per ceiling, in the order company, person, music.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrichmentCapStatusEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/companies/person-handoff-backfill:
+    post:
+      operationId: backfillPersonHandoff
+      tags:
+        - Enrichment
+      summary: Replay people envelopes the person handoff never ran for (management plane)
+      description: |
+        Closes the gap left by fetch-once: a company whose `exa_c_suite` or `yc_data` envelope landed before the person handoff existed keeps the envelope and never calls the handoff again, so its executives and founders were never created. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants this, because the call creates entities and spends provider credit (up to three paid LinkedIn lookups per company). Only seed companies (cascade depth zero) are eligible. Set `company_id` for recovery of one company. One bounded batch per call, so an operator watches the counts rather than starting an unbounded sweep. Idempotent: a company that succeeds gets a marker attempt row and drops out of the next batch, and the person entry gate dedupes anyone already created. `remaining` is true when the batch filled — call again until it is false, since a full batch is not a cleared backlog.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: |
+            Companies to process in this batch. Omitted uses the server default (25); values above the server ceiling (200) are clamped.
+          schema:
+            type: integer
+            minimum: 1
+        - name: company_id
+          in: query
+          required: false
+          description: |
+            Limit recovery to this seed company. Leaf companies and completed handoffs are excluded. Invalid or empty IDs never start a batch.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The batch result, with every count beside its denominator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonHandoffBackfillEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/music/seed:
+    post:
+      operationId: seedMusicEntity
+      tags:
+        - Enrichment
+      summary: Seed one MusicBrainz entity (management plane)
+      description: |
+        Drives the music entry gate for one MusicBrainz reference. This is the pipeline's only deterministic trigger and it replaces Xano's six separate seed endpoints with a single `kind` field. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants it: the call creates entities and spends provider credit. **There is deliberately no consumer route.** The publish contract serves packages for companies and persons only, so a client able to trigger a music run could not read the result back — a door into a room with no lights. The route and the music projection are one contract addition and ship together. `mbid` accepts a bare MusicBrainz id or a full musicbrainz.org URL; a query string or fragment is stripped, so a pasted address-bar URL works. A reference that is not MusicBrainz, or that names a different kind than `kind` claims, is refused before anything is created. `kind: artist` splits on MusicBrainz's own artist type: a Person or Character becomes a **person** and its music fields land in a satellite, while a Group, Orchestra or Choir becomes a **music_group**. Pass `artist_type` when you already know it to save a lookup; omitted, the gate spends one paced request to find out, and refuses rather than guessing if it cannot. `kind: label` becomes a **company** — a record label is a company, and it enters through the company gate like any other. Omitting `queue` parks the row for the drain, which is the normal choice. `queue: false` runs the orchestrator inline and is for smoke testing one entity at a time. Every outcome is a 200 with an `action`: a refusal is an action, not an error. Read `action` first — `queued`, `enriched_direct`, `delegated`, `dedup_fresh`, `cap_blocked`, `skipped_gone`, `skipped_not_musicbrainz`, `skipped_unknown_artist_type`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeedMusicRequest'
+      responses:
+        '200':
+          description: |
+            What the gate did. A refusal is a 200 carrying its `action`, because the gate reached a decision — only a broken dependency is a 5xx.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SeedMusicEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/avatar-backfill:
+    post:
+      operationId: backfillPersonAvatars
+      tags:
+        - Enrichment
+      summary: Give every person with no real avatar the initials placeholder (management plane)
+      description: |
+        A person node carries an avatar from enrichment or a url to the initials placeholder (ui-avatars.com, as Xano #1832). People enriched before 2026-09-10 have neither, and some carry LinkedIn's stock grey silhouette that Fundable mirrors for a member with no photo. This writes the placeholder row, deletes any silhouette row, requests the re-host and re-distills, so the node and projection pick the placeholder up. Every person qualifies, whatever their enrichment state; only a provisional (temp_) name is skipped. The paid image search is never run here — that is the run's step. **Management plane, staff only** — a WorkOS session with role `admin`. No provider credit is spent. One bounded batch per call; a person leaves the backlog once the placeholder row exists. `remaining` is true when the batch filled — call again until it is false.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: |
+            People to process in this batch. Omitted uses the server default (25); values above the server ceiling (200) are clamped.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The batch result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonAvatarBackfillEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/co-investors/derive:
+    post:
+      operationId: deriveCoInvestors
+      tags:
+        - Enrichment
+      summary: Derive CO_INVESTORS structurally from the Fundable mirror (management plane)
+      description: |
+        Two people who each hold an angel investment or a partner seat on an institutional investment into the same organization are co-investors. This walks one page of mirror-linked persons, files one relation row per pair per company with `provider = fundable` (weight 20 when the two investments are the same deal, 25 otherwise), and lands the claims so the edge follows through distill and the replay. Runs on its own at the end of every person's angel step; this is the backfill. Idempotent. No provider spend. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Persons per page; default 50, clamped to 500.
+          schema:
+            type: integer
+            minimum: 1
+        - name: offset
+          in: query
+          required: false
+          description: Persons to skip, for paging; `remaining` says whether to call again.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: The batch tally.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoInvestorSweepEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/relations/pending:
+    get:
+      operationId: listPendingPersonRelations
+      tags:
+        - Enrichment
+      summary: The gap tracker — people Deep Bio payloads name that no enrichment has produced (management plane)
+      description: |
+        Pending relation rows grouped by counterpart name and via company, ordered by how many subjects name them. A line with a strong ref is a person the ordinary create-person call can enrich by hand; once their run settles, every pending row naming them resolves on its own. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Lines to return; default 100, clamped to 500.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The tracker lines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingRelationsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/relations/resolve:
+    post:
+      operationId: resolvePendingPersonRelations
+      tags:
+        - Enrichment
+      summary: Retry pending Deep Bio relation rows against the entities that exist now (management plane)
+      description: |
+        A Deep Bio names people; a counterpart the filer could not resolve is kept as a PENDING relation row (name, via company, any strong ref). Every person distill already retries the rows that person may satisfy; this sweep is the backfill for missed events. Each row is judged by the same rule as filing: a strong ref resolves outright, a bare name only through exactly one live role at the via company. A resolved row files its relationship claim, so the edge follows through distill and the replay. No provider spend. Rows past the attempt cap (5) are skipped but stay listed on the pending endpoint. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows to retry in this batch; default 100, clamped to 1000.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The pass tally.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationResolveEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/{id}/status:
+    get:
+      operationId: personEnrichmentStatus
+      tags:
+        - Enrichment
+      summary: Read one person's enrichment receipts (management plane)
+      description: |
+        Answers "why is this person not done" from the stage ledger. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key: attempt counts, error codes and lease deadlines are operations data. There is no scope that grants this. Strictly read-only: it never claims, releases or heartbeats a receipt, so diagnosing a stalled run cannot alter it. Per run it reports the seven completion counts (each with its denominator), the terminal predicate with its pending and failed clauses, the visibility verdict based on a nonblank basic `bio_500`, independent identity diagnostics, and the company dependency. Per stage it reports status, attempts, the failure code, `will_retry` (whether the sweeper is coming back), `parked`, `duration_ms`, and — for a running stage — `running_for_seconds` beside `heartbeat_age_seconds`, whose combination is the only way to see a step that is wedged but still alive. The identity (Exa Fiber) lane appears as its own run: it carries a separate run id by design, so it is never scored by the predicate.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The person's receipts, newest run first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonEnrichmentStatusEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/queue/{id}/drain:
+    post:
+      operationId: drainQueueRow
+      tags:
+        - Enrichment
+      summary: Run one queue row now, with no timer involved (management plane)
+      description: |
+        Drives a single queue row through its orchestrator immediately. This exists because a timed drain cannot be smoke-tested — it picks its own row and its own moment, and the requirement before enabling the crons is one run at a time with the cascade ledger checked after each. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants it: the call spends provider credit and can create entities. Three deliberate differences from the timed drain. The **priority tier is ignored**, because the timed drain takes tier <= 1 and most discovered titles land at 2-4, so a tier-gated smoke test would drain nothing and read as convergence. The **lane flags are ignored**, since driving a row by hand is what those flags shipping false is for. The **entity cap is NOT ignored** — it is the outermost brake, and a blocked row is released rather than left locked so it stays drivable once the cap clears. Depth and cascade root always come from the ROW, never from the caller: a row that ran as a fresh root would get its own full fanout allowance. `outcome` is the one word to read: `drained`, `failed`, `over_depth`, `cap_blocked`, `not_wired`, or `not_eligible` (missing, already locked, or dead-lettered — the three are deliberately not distinguished, since telling them apart would mean claiming a row we never held). `over_depth` is the one outcome that DELETES the row: a row past the cascade ceiling is not work waiting for a better moment, and running it would cascade further from a level that already escaped its bound. An operator cannot wave it through.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The enrichment_queue row id, not the entity id.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: |
+            What the drive did. A failed run is a 200 with `outcome: failed`, not a 5xx — the row was reached and released, which is an outcome.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualDrainEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/adaptations:
+    post:
+      operationId: runStageAdaptations
+      tags:
+        - Enrichment
+      summary: Run one whole adaptation pass — both discoveries, the BASED_ON replay and the re-describe (management plane)
+      description: |
+        The adaptation lane (stage D51, D52). Wikidata decides the edge. Stage side: each unchecked production is matched to its work item (a stage-work class, the same title, a first performance in the production's opening year, so only an ORIGINAL production matches), then the films that item lists as derivative works or that name it as their source (P4969 / P144) with an IMDb id are minted through the film gate, and the films the work is itself based on (its P144) are minted and filed production → film (D53). Film side: each unchecked film's own item names the works it is based on; a screen source is minted through the film gate and filed film → film, a stage source is matched to the original production we hold, else admitted from the registry page a grounded model call locates (behind `STAGE_LLM_ENABLED`), else kept as a lead — never invented. Every Wikidata read is ledgered verbatim and one `based_on` claim lands on each DERIVATIVE. The replay draws `BASED_ON` (derivative → source, weight 55, evidence layer, excluded from scoring) for a claim the derivative's distill has ELECTED whose two nodes exist, with the description contract's sentence; the re-describe upgrades a deterministic sentence to the model's, three tries each. The replay rides the credit-edge tick; the whole pass answers the `enrichment.stage_adaptations_requested` event. **Management plane, staff only.** Discovery needs `STAGE_ADAPTATION_ENABLED`; the replay fails closed without `STAGE_EDGE_WRITES_ENABLED`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: What the pass did.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      discovery:
+                        type: object
+                        properties:
+                          productions:
+                            type: integer
+                          works:
+                            type: integer
+                          derivatives:
+                            type: integer
+                          sources:
+                            type: integer
+                          leads:
+                            type: integer
+                          skipped:
+                            type: integer
+                          failed:
+                            type: integer
+                        required:
+                          - productions
+                          - works
+                          - derivatives
+                          - sources
+                          - leads
+                          - skipped
+                          - failed
+                      films:
+                        type: object
+                        properties:
+                          films:
+                            type: integer
+                          sources:
+                            type: integer
+                          minted:
+                            type: integer
+                          leads:
+                            type: integer
+                          skipped:
+                            type: integer
+                          failed:
+                            type: integer
+                        required:
+                          - films
+                          - sources
+                          - minted
+                          - leads
+                          - skipped
+                          - failed
+                      replay:
+                        type: object
+                        properties:
+                          claimed:
+                            type: integer
+                          drawn:
+                            type: integer
+                          pending:
+                            type: integer
+                          failed:
+                            type: integer
+                        required:
+                          - claimed
+                          - drawn
+                          - pending
+                          - failed
+                      redescribe:
+                        type: object
+                        properties:
+                          claimed:
+                            type: integer
+                          rewritten:
+                            type: integer
+                          pending:
+                            type: integer
+                          failed:
+                            type: integer
+                        required:
+                          - claimed
+                          - rewritten
+                          - pending
+                          - failed
+                    required:
+                      - discovery
+                      - films
+                      - replay
+                      - redescribe
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/awards:
+    post:
+      operationId: replayStageAwards
+      tags:
+        - Enrichment
+      summary: Draw one batch of pending stage award entries (management plane)
+      description: |
+        Stage award entries (stage awards slice, nodes.mdx `Stage_Award`): discovery files one `stage_awards` row per award row on a person's credit, keyed `award_entry_key` — body, year, category and scope with outcome excluded, so a nomination becoming a win keeps one node. This replay MERGEs the `Stage_Award` node on the entry key, draws `HAS_AWARD` from the production and `WON_AWARD`/`NOMINATED_FOR` from the person, and writes a deterministic description (the Game_Award contract's sentence, never a model call). A row whose person or production node is missing waits for a later pass. Rides the credit-edge tick too. A row whose person→production credit distill has not elected stays pending (stage D65). **Management plane, staff only** — a WorkOS session with role `admin`. Fails closed without `STAGE_EDGE_WRITES_ENABLED`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: What the replay did.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      claimed:
+                        type: integer
+                      drawn:
+                        type: integer
+                      pending:
+                        type: integer
+                      failed:
+                        type: integer
+                    required:
+                      - claimed
+                      - drawn
+                      - pending
+                      - failed
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/credits:
+    post:
+      operationId: replayStagePersonCredits
+      tags:
+        - Enrichment
+      summary: Draw one batch of notable person stage credits (management plane)
+      description: |
+        A person's own stage credits (stage D44), the film waterfall's rule on stage: the discovery pass files every role on the person's source page, ranks them (award wins, then nominations, then original principal parts newest first, then replacements; gala and ceremony appearances never rank) and claims the top `STAGE_MAX_PERSON_CREDITS` on the person as `stage_worked_on` relationship facts. This replay draws `WORKED_ON` (person → production, one edge per part) for a claim the person's distill has ELECTED whose two nodes exist; the edge carries role, character_name, billing, award counts and a deterministic sentence. Rides the credit-edge tick too. **Management plane, staff only.** Fails closed without `STAGE_EDGE_WRITES_ENABLED`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: What the replay did.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      claimed:
+                        type: integer
+                      drawn:
+                        type: integer
+                      pending:
+                        type: integer
+                      failed:
+                        type: integer
+                    required:
+                      - claimed
+                      - drawn
+                      - pending
+                      - failed
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/discovery:
+    post:
+      operationId: discoverStageRoots
+      tags:
+        - Enrichment
+      summary: Run one bounded discovery pass over parked person roots (management plane)
+      description: |
+        Drains the person-seeded discovery roots the theatre trigger parks (stage D32/D34): for each root blocked `awaiting_adapter` it finds the person's Playbill page from a held `playbill_party` key, a filed link or one search that mints the key (else recodes the root `awaiting_identity`), re-queues the root, reads the page's roles and admits every production on it through the stage gate at depth 1, class p1, under the root's ceiling. The person's own role is context, never a credit. **Management plane, staff only.** Needs the Playbill adapter (`STAGE_SOURCES` includes `playbill`, a Firecrawl key) and `STAGE_DISCOVERY_ENABLED` for the tick; this route runs regardless.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_productions:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  description: Roots per pass, capped by the tick size.
+      responses:
+        '200':
+          description: What the pass did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageDiscoveryEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/drain:
+    post:
+      operationId: drainStage
+      tags:
+        - Enrichment
+      summary: Drive one stage queue row or a bounded stage batch (management plane)
+      description: |
+        With `queue_id`, runs that one row now through the shared manual drive (tier and lane flags ignored, the cap and the depth ceiling not). Without it, drains a bounded batch of the `stage_production` partition; `max_rows` is capped by the validator and again by the configured tick size, so there is no uncapped sweep. A missing stage runner leaves rows queued and reports zero picks. **Management plane, staff only.** Stage rows have two outcomes the other lanes do not: `poisoned` (the row's canonical entity is not a stage production — deleted, never run through another lane) and `deferred` (the run made no progress by design, such as an exhausted budget — the row is released without spending an attempt).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StageDrainRequest'
+      responses:
+        '200':
+          description: What the drive did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageDrainEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/facts:
+    post:
+      operationId: publishStageFacts
+      tags:
+        - Enrichment
+      summary: Run one bounded facts publication now (management plane)
+      description: |
+        Drains due `facts` obligations: for each production it lands one `stage_credit` envelope per accepted mention of the active extraction on that mention's PRODUCER, and one `stage_production_profile` envelope on the production, in the shared payload ledger — the facts feature then normalizes, elects and distills them like any provider's. An unclassified producing role earns no credit envelope. Completes each obligation and raises the `graph` obligation. Envelopes are keyed by mention and input revision, so a repeated pass lands the same bytes under the same keys. Nothing here writes `entity_facts` or the graph. **Management plane, staff only.** Like the resolve pass, the tick gate is not consulted; without `STAGE_ENABLED` the sink is unwired and the pass reports zero claims.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_productions:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+      responses:
+        '200':
+          description: What the publication did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageFactsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/graph:
+    post:
+      operationId: publishStageGraph
+      tags:
+        - Enrichment
+      summary: Run one bounded graph publication now (management plane)
+      description: |
+        Two passes. The reconcile drains due `graph` obligations into desired `stage_credit` rows: one per producer/production pair the active extraction accepted on an earning tier, `ready` when the producer's distill elected the production and `awaiting_fact` until it has, and every pair the ledger holds that the roster no longer names flipped `retract_pending`. It completes each obligation and raises `publish`. The replay then leases due rows and projects each onto ONE `PRODUCED` edge (MERGE on the endpoint pair; tier, weight, `active` and `stage_credit_version` as properties, never a delete), acknowledging exactly the version it wrote; a row whose fact is unelected or whose endpoint has no node yet is released pending and heals on a later tick. **Management plane, staff only.** The replay fails closed without `STAGE_EDGE_WRITES_ENABLED` on every path, this one included: rows are desired but no edge is written.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_productions:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+      responses:
+        '200':
+          description: What the publication did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageGraphEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/mentions:
+    get:
+      operationId: listStageMentions
+      tags:
+        - Enrichment
+      summary: List one production's credit mentions (management plane)
+      description: |
+        The stage review queue (ORBIT-1863, slice 4). Every mention Stage A extracted for one production, with its group's billing context and its current resolution state, keyset paginated on id. Filter with `state` to see what the ladder left for a human: `needs_review` (one name-only candidate capped at 0.59, or several candidates), `unresolved` (no candidate at all), `disputed`. Read-only. **Management plane, staff only.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: production_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - unresolved
+              - auto_linked
+              - needs_review
+              - review_linked
+              - rejected
+              - disputed
+        - name: after
+          in: query
+          required: false
+          description: The last id of the previous page.
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: One page; `next` is the id to pass as `after`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageMentionsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/mentions/{id}/review:
+    post:
+      operationId: reviewStageMention
+      tags:
+        - Enrichment
+      summary: Accept, reject or revoke one credit mention's identity (management plane)
+      description: |
+        The reviewer's half of Stage B. `accept` names the canonical person or company and links the mention as `review_linked` with confidence 1; the entity must be a person or company and must match the billed candidate type. `reject` closes the mention without an entity. `revoke` withdraws an accepted link back to `unresolved`, so the ladder may run again on new evidence. Every decision is fenced on `expected_identity_revision`, the revision the reviewer saw: a stale review is a 409, never a silent overwrite. The decision is appended to the mention's attempt history under step `review` with the reviewer as actor, and an accept raises the production's facts obligation. **Management plane, staff only.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StageReviewRequest'
+      responses:
+        '200':
+          description: The mention after the decision.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageMentionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The mention is no longer at `expected_identity_revision`.
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/music:
+    post:
+      operationId: drainStageMusic
+      tags:
+        - Enrichment
+      summary: Settle one batch of cast-recording observations from Music runs (management plane)
+      description: |
+        The music → stage trigger (stage D55). Every Music run that reads a release-group page (an artist's catalogue, a label's releases, a release-group's own lookup) runs a deterministic cast-recording detector over the text it already holds — cast wording in the title or disambiguation, exclusions (off-Broadway, tour, concert, film, demo) decided before any positive match — and files one observation per candidate beneath one accounting root per Music seed; a run files at most five eligible candidates and a seed holds at most ten. This drain settles eligible observations: a production already held with the same title, market and cast year completes it; otherwise, behind `STAGE_LLM_ENABLED`, a grounded model call locates the engagement's Playbill or Theatricalia page, the page is fetched and checked against the evidence (show, market, cast year), and only then is it admitted through the stage gate with the Music lineage and depth. No page, or a page that disagrees: held for a week. MusicBrainz is provenance only; the production's key is the registry's. Answers the `enrichment.stage_music_requested` event too. **Management plane, staff only.** Needs `STAGE_MUSIC_DISCOVERY_ENABLED`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: What the drain did.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      observations:
+                        type: integer
+                      matched:
+                        type: integer
+                      located:
+                        type: integer
+                      admitted:
+                        type: integer
+                      held:
+                        type: integer
+                      failed:
+                        type: integer
+                    required:
+                      - observations
+                      - matched
+                      - located
+                      - admitted
+                      - held
+                      - failed
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/posters:
+    post:
+      operationId: rehostStagePosters
+      tags:
+        - Enrichment
+      summary: Re-host one batch of stage covers into our bucket now (management plane)
+      description: |
+        The stage cover re-host drain (stage D43): the same drain the media tick runs for avatars and title posters. Each un-rehosted profile with a `poster_source_url` is fetched, converted aspect-preserving to WebP and stored under `<media prefix>/playbill/<production id>`; the profile's `poster_url` and `poster_storage_key` are stamped and the node re-synced. A dead source is retired after `MEDIA_REHOST_MAX_ATTEMPTS`; `poster_url` stays null so the package serves the source cover. **Management plane, staff only.** Fails closed without a bucket.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The batch was drained.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - drained
+                    required:
+                      - status
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                required:
+                  - data
+                  - error
+                  - meta
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/productions:
+    post:
+      operationId: admitStageProduction
+      tags:
+        - Enrichment
+      summary: Admit one Broadway / West End production (management plane)
+      description: |
+        Runs one typed source production reference through the stage admission gate — the same gate automated discovery uses — and reports what it decided. ORBIT-1863, slice 2. **Management plane, staff only** — a WorkOS session with role `admin`, never a consumer API key. There is no scope that grants it: an admission can create a canonical `stage_production` entity and queue paid work. The gate records a durable admission (a `stage_source_job` row), resolves the canonical production through the entities feature (an `ibdb`, `theatricalia` or registry-keyed source mints or finds the hub; a directory id such as `broadwayworld` only nominates and is `refused` until a reviewer maps it), ensures the control row, then decides the queue: `p0`/`p1` queue at drain tiers 0/1, `p2` is `parked` in the historical inventory, `if_due` keeps a fresh production `fresh_existing`, and a production already on the queue is `already_pending`. **202 only after a durable admission** (`queued` or `parked`). Every other decision is a 200 carrying its `action` and `reason` — `awaiting_dependency` when intake, the market or the source is disabled, `refused` when the cap, the per-root budget or the depth ceiling says no. A contradictory existing mapping (the record already names a person or a compound credit) is a 409. `dry_run: true` predicts the action and performs no write, provider call, entity creation or queue mutation.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StageAdmitRequest'
+      responses:
+        '200':
+          description: A decision that recorded nothing new, or a dry run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageAdmitEnvelope'
+        '202':
+          description: A durable admission — the production is queued or parked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageAdmitEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |
+            The source record already maps to a different kind of entity, or is a compound credit that cannot be one production.
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/productions/{id}:
+    get:
+      operationId: stageProductionStatus
+      tags:
+        - Enrichment
+      summary: Inspect one production's pipeline state (management plane)
+      description: |
+        Reads a production's control row, its typed source records, and independent counts of snapshots, mentions by resolution state, credits by reconciliation status and obligations by phase and state, plus its queue row when one exists. Independent on purpose: partial resolution is neither failure nor done, and no single flag says otherwise. **Management plane, staff only.** Strictly read-only: it never claims, releases or reconciles anything. A merged id resolves to its survivor.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The canonical or merged `stage_production` entity id.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The production's state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageProductionStatusEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/publish:
+    post:
+      operationId: publishStagePackages
+      tags:
+        - Enrichment
+      summary: Settle due stage publish obligations now (management plane)
+      description: |
+        Claims due `publish` obligations (raised by the graph reconcile) and completes each whose package is consumable: the profile is distilled and every active credit's edge is written at its desired version. An obligation short of that is held `retry_wait` with the reason (`profile_pending`, `graph_pending`) and the pending-credit count. The package itself is served on demand by `GET /v1/entities/{id}/projection`; nothing is materialised here. **Management plane, staff only.** Fails closed without `STAGE_PUBLISH_ENABLED`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_productions:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+      responses:
+        '200':
+          description: What the pass did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StagePublishEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/resolve:
+    post:
+      operationId: resolveStage
+      tags:
+        - Enrichment
+      summary: Run one bounded resolve pass now (management plane)
+      description: |
+        Drives Stage B over due `resolve` obligations: claims up to `max_productions` (capped by the tick size), runs the deterministic ladder once per open mention — an approved party alias or a reviewer-supplied strong key is a deterministic reuse; a name alone nominates candidates and is filed `needs_review`, capped at the name-only confidence; search and adjudication are recorded as deferred while their gates are closed — writes the decision history, completes or continues each obligation under the per-tick group budget, and raises the facts obligation for accepted identities. Nothing here creates an entity or writes an edge. **Management plane, staff only.** Like the manual drain, the lane's resolution flag is not consulted; the pass still needs the ladder constructed, which `STAGE_ENABLED` and `STAGE_RESOLUTION_ENABLED` together provide — without them the pass reports zero claims.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_productions:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+      responses:
+        '200':
+          description: What the pass did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageResolveEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/stage/submissions:
+    post:
+      operationId: submitStageProduction
+      tags:
+        - Enrichment
+      summary: Store one reviewed pilot credit list and admit its production (management plane)
+      description: |
+        The private-pilot intake (ORBIT-1863, slice 3). A participant-supplied, reviewed credit list for one engagement enters the same source record, snapshot, group, mention and checkpoint path a web adapter would, with an explicit import acquisition and no fabricated fetch metadata. **Management plane, staff only.** The body is the versioned submission contract (`schema_version: 1`). The production is admitted through the stage gate under the submission's `registry_id` (a `stage_registry` strong key), with `refresh_mode: force` so a new revision re-runs a production the gate would otherwise call fresh; then the revision is stored verbatim in the payload ledger under `pilot_submission`. The same `submission_id` + `revision` with the same bytes is idempotent (200, `stored: false`); the same revision with different bytes is a 409 — a correction is a new revision, and a partial submission never deletes earlier accepted support. A submission whose review decision is `rejected` is refused at the door and stores nothing. Extraction happens when the queued production drains: the stage orchestrator loads the newest stored revision, records an `imported` snapshot keyed by that revision, runs the deterministic Stage A parser (tiers from the stated role, members split only on commas, slashes and a lone first name before "and"; an ampersand never splits) and commits groups, mentions, the production's revision advance and the resolve obligation in one transaction. Nothing resolves an identity or writes an edge in this slice.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StageSubmissionRequest'
+      responses:
+        '200':
+          description: The revision was already stored, or the production was not admitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageSubmissionEnvelope'
+        '202':
+          description: The revision is stored and the production admitted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageSubmissionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |
+            This submission revision is already stored with different content, or the registry key already maps to something that is not a stage production.
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/entities/{id}/investor-narrative:
+    get:
+      operationId: getInvestorNarrative
+      tags:
+        - Projections
+      summary: Get an investor's evidence narrative on its own
+      description: |
+        Returns the same evidence-stage narrative the company projection carries in its `evidence_narrative` section, for a consumer that holds an entity id and wants the narrative without pulling the whole distilled package.
+        Text and aggregates only. Embeddings and thesis fingerprints are never returned by this route — they are internal to the thesis feature and absent from the shape, not filtered out of it.
+        The id resolves through the merge chain first, and the response carries both the canonical `id` and the `requested_id` so a consumer holding a merged id can heal its stored reference.
+        404 when the entity has no narrative, which is the case for most entities: a narrative is generated only for investors with enough classified evidence. A fault reading the narrative is a 500, never a 404 — a consumer must be able to tell "has none" from "could not look".
+        Requires scope `investor_narrative:read`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Entity id. Resolved through the merge chain first.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The investor's evidence narrative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestorNarrativeEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /v1/admin/agents/deep-bio/sweep:
     post:
       operationId: sweepDeepBioJobs
@@ -2191,6 +3581,16 @@ components:
           type:
             - string
             - 'null'
+        acquired_ticker:
+          type:
+            - string
+            - 'null'
+          description: The acquirer stock symbol, including exchange when known (e.g. NASDAQ:ADBE).
+        acquired_date:
+          type:
+            - string
+            - 'null'
+          description: Acquisition date at source precision (YYYY, YYYY-MM, or YYYY-MM-DD).
         stock_label:
           type:
             - string
@@ -2211,7 +3611,7 @@ components:
             - string
             - 'null'
           format: uuid
-          description: No source yet — always null. Would be a universe entity id.
+          description: Canonical company id resolved during enrichment; null until the acquirer is identified.
         acquisition_price:
           oneOf:
             - $ref: '#/components/schemas/ProjectionMoney'
@@ -2241,6 +3641,8 @@ components:
         - revenue
         - acquired
         - acquired_by
+        - acquired_ticker
+        - acquired_date
         - stock_label
         - acquired_by_permalink
         - crunchbase_acquirer_id
@@ -2272,7 +3674,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -2462,6 +3864,16 @@ components:
           type:
             - string
             - 'null'
+        investor_domain:
+          type:
+            - string
+            - 'null'
+          description: Reported company domain, available even before its master profile is distilled.
+        investor_logo:
+          type:
+            - string
+            - 'null'
+          description: Logo.dev image URL for the reported company domain; null for people or missing domains.
         is_lead_investor:
           type: boolean
         graph_edge_uuid:
@@ -3112,6 +4524,7 @@ components:
               - evidence
         visibility:
           type: boolean
+          description: True when the basic bio_500 is nonblank, independently of enrichment completion and Deep Bio.
         is_angel:
           type: boolean
         is_c_suite:
@@ -3209,7 +4622,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -4316,6 +5729,166 @@ components:
         - data
         - error
         - meta
+    ProjectionVideoGameDisplay:
+      type: object
+      description: |
+        The `film_tv_display` row for a game. `image_url` is the shared media renderer's serving URL for the stored `game-thumbnail/` WebP (a 2:3 portrait); provider URLs and IMDb artwork are never served. `first_release_year` renders separately, which is why the tagline never repeats it. `tags` is the frozen top-ten Steam facet, `[]` with a `coverage.tags` reason when absent.
+      properties:
+        type:
+          type: string
+          enum:
+            - video_game
+        title:
+          type: string
+        description:
+          type: string
+          description: ≤127 Unicode code points, generated from elected facts.
+        tagline:
+          type: string
+          description: ≤112 characters, no release year.
+        tags:
+          type: array
+          items:
+            type: string
+        genres:
+          type: array
+          description: Elected Wikidata P136 genre labels, sorted; `[]` when none is elected. A property, never a node.
+          items:
+            type: string
+        game_kind:
+          type: string
+        first_release_date:
+          type:
+            - string
+            - 'null'
+        date_precision:
+          type:
+            - string
+            - 'null'
+          enum:
+            - day
+            - month
+            - year
+            - null
+        first_release_year:
+          type:
+            - integer
+            - 'null'
+        developer:
+          type:
+            - string
+            - 'null'
+        image_url:
+          type: string
+        image_storage_key:
+          type: string
+        wikidata_qid:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        mobygames_id:
+          type:
+            - string
+            - 'null'
+        igdb_slug:
+          type:
+            - string
+            - 'null'
+        igdb_numeric_id:
+          type:
+            - string
+            - 'null'
+        steam_app_ids:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: boolean
+      required:
+        - type
+        - title
+        - description
+        - tagline
+        - tags
+        - genres
+        - game_kind
+        - image_url
+        - image_storage_key
+        - steam_app_ids
+        - visibility
+    ProjectionVideoGameCoverage:
+      type: object
+      description: What the card is missing and why; never inferred.
+      properties:
+        tags:
+          type: string
+          enum:
+            - pending
+            - complete
+            - empty
+            - no_steam_app
+            - source_unavailable
+            - not_entitled
+        credits:
+          type: string
+          enum:
+            - pending
+            - partial
+            - complete
+      required:
+        - tags
+        - credits
+    VideoGameProjection:
+      type: object
+      description: |
+        `video_game_projection.v1` — one published game card (ORBIT-1879). The `display` block is the `film_tv_display` physical card contract with `type: video_game` as the discriminator: every element the card renders maps to one locked node property, nothing is derived at render time. `publication_revision` is the promoted revision this body was frozen at; a consumer applies bodies monotonically by it. Breaking changes require a new schema_version, never an edit.
+      properties:
+        schema_version:
+          type: string
+          enum:
+            - video_game_projection.v1
+        run_id:
+          type: string
+          description: Deterministic per (game, profile state).
+        universe_entity_uuid:
+          type: string
+          format: uuid
+          description: Canonical id; also the graph node id.
+        publication_revision:
+          type: integer
+          format: int64
+        projection_generated_at:
+          type: string
+          format: date-time
+        display:
+          $ref: '#/components/schemas/ProjectionVideoGameDisplay'
+        coverage:
+          $ref: '#/components/schemas/ProjectionVideoGameCoverage'
+      required:
+        - schema_version
+        - run_id
+        - universe_entity_uuid
+        - publication_revision
+        - projection_generated_at
+        - display
+        - coverage
+    VideoGameProjectionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/VideoGameProjection'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
     SubgraphNode:
       type: object
       required:
@@ -4427,6 +6000,10 @@ components:
           type: boolean
           description: |
             True when limit dropped neighbours. Edges to a dropped node are omitted, so a partial neighbourhood never reads as complete.
+        next_cursor:
+          type: string
+          format: uuid
+          description: Present when a paginated read has more neighbors. Pages keep the same anchor and never expand neighbors.
     SubgraphEnvelope:
       type: object
       required:
@@ -4460,6 +6037,10 @@ components:
           default: true
           description: |
             Vectors dominate the payload at roughly 107KB per node. Turn them off for structure only; keep them if the consumer intends to search its own copy, since they are never regenerated downstream.
+        include_reference_nodes:
+          type: boolean
+          default: false
+          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards.
         entity_types:
           type: array
           items:
@@ -4811,7 +6392,7 @@ components:
         Whether the consumer package rode along on this get-add and, when it did not, which gate stopped it. Always present, including when `projection` is null.
         The response status is always 200 — a resolved entity is not an error. `class` is an HTTP-SHAPED CLASS for the projection field alone, so a client can branch without knowing every slug: 200 you have it, 202 it is coming, 4xx this call will not give it to you.
         `poll` is DERIVED from `code`; a client that reads only `poll` is never wrong about whether to come back.
-        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `202:enriching`; `409:unsatisfied` is reserved for a run that settled with a failed clause.
+        A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `200:stale` with the package from the last satisfied run, or `202:enriching` when no run has ever satisfied; `409:unsatisfied` is reserved for a run that settled with a failed clause.
         The two `disputed` codes are the pair to handle deliberately. They mean a provider resolved an IDENTITY that contradicts the name we hold, so we no longer know for certain who the record describes. `200:disputed` still carries the package — most of it is likely correct, only the identity is in doubt, so hold the record rather than discard it and do not act on its identity; `409:disputed` means there is no package to send. Both are `poll: false`: the record is frozen on our side and no further run will revisit it until a human reconciles it, so re-reading never changes the answer. Tell us instead.
       properties:
         code:
@@ -5330,6 +6911,350 @@ components:
           items:
             type: string
       additionalProperties: false
+    LeverageLoopPackageWhy:
+      type: object
+      required:
+        - headline
+        - body
+      properties:
+        headline:
+          type: string
+        body:
+          type: array
+          description: The WHY's paragraphs, in order.
+          items:
+            type: string
+      additionalProperties: false
+    LeverageLoopPackageHook:
+      type: object
+      required:
+        - entity_id
+        - entity_type
+        - angle
+        - text
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        angle:
+          type: string
+          enum:
+            - mechanism
+            - rationale
+        text:
+          type: string
+      additionalProperties: false
+    LeverageLoopPackageEntity:
+      type: object
+      required:
+        - entity_id
+        - entity_type
+        - role
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        role:
+          type: string
+          enum:
+            - suggested
+            - beneficiary
+      additionalProperties: false
+    LeverageLoopPackageActionGroup:
+      type: object
+      required:
+        - ref
+        - rank
+        - trajectory_ref
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        trajectory_ref:
+          type:
+            - 'null'
+      additionalProperties: false
+    LeverageLoopPackageEmailDraft:
+      type: object
+      required:
+        - subject
+        - message
+      properties:
+        subject:
+          type: string
+        message:
+          type: string
+      additionalProperties: false
+    LeverageLoopPackageDraftEmail:
+      type: object
+      required:
+        - emails
+        - draft
+      properties:
+        emails:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        draft:
+          $ref: '#/components/schemas/LeverageLoopPackageEmailDraft'
+      additionalProperties: false
+    LeverageLoopPackageDraftSMS:
+      type: object
+      required:
+        - mobile_phones
+        - draft
+      properties:
+        mobile_phones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        draft:
+          type: object
+          required:
+            - message
+          properties:
+            message:
+              type: string
+          additionalProperties: false
+      additionalProperties: false
+    LeverageLoopPackageMakeIntro:
+      type: object
+      required:
+        - workflow
+        - recipients
+        - steps
+      properties:
+        workflow:
+          type: string
+          enum:
+            - double_opt_in
+        recipients:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            required:
+              - entity_id
+              - entity_type
+              - emails
+            properties:
+              entity_id:
+                type: string
+                format: uuid
+              entity_type:
+                type: string
+              emails:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+            additionalProperties: false
+        steps:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+            required:
+              - rank
+              - step
+              - label
+              - recipient_entity_ids
+              - draft
+            properties:
+              rank:
+                type: integer
+              step:
+                type: string
+                enum:
+                  - ask_beneficiary
+                  - ask_suggested_person
+                  - introduce
+              label:
+                type: string
+              recipient_entity_ids:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+              draft:
+                $ref: '#/components/schemas/LeverageLoopPackageEmailDraft'
+            additionalProperties: false
+      additionalProperties: false
+    LeverageLoopPackageAction:
+      type: object
+      description: |
+        `make_intro` when both parties have an email, `draft_email` when the candidate has one, `draft_sms` when the candidate has an E.164 phone. `params` is typed by `action_type`.
+      required:
+        - ref
+        - action_type
+        - rank
+        - label
+        - target_entity_id
+        - group_ref
+        - params
+      properties:
+        ref:
+          type: string
+        action_type:
+          type: string
+          enum:
+            - make_intro
+            - draft_email
+            - draft_sms
+        rank:
+          type: integer
+        label:
+          type: string
+        target_entity_id:
+          type: string
+          format: uuid
+          description: The beneficiary for `make_intro`, the candidate otherwise.
+        group_ref:
+          type: string
+        params:
+          oneOf:
+            - $ref: '#/components/schemas/LeverageLoopPackageDraftEmail'
+            - $ref: '#/components/schemas/LeverageLoopPackageDraftSMS'
+            - $ref: '#/components/schemas/LeverageLoopPackageMakeIntro'
+      additionalProperties: false
+    LeverageLoopPackageSuggestion:
+      type: object
+      description: |
+        One candidate. A `placeholder` sends `why`, `badge` and `hooks` as null, `score` as `{}` and every array empty. Fields the loop never fills (`trajectories`, `suggested_sequencing`, `paths`, `evidence`, `key_people`, `suggestion_mode`) are always empty or null.
+      required:
+        - source_ref
+        - rank
+        - entity_id
+        - entity_type
+        - content_status
+        - suggestion_mode
+        - badge
+        - why
+        - score
+        - trajectories
+        - suggested_sequencing
+        - key_people
+        - hooks
+        - paths
+        - evidence
+        - entities
+        - action_groups
+        - actions
+      properties:
+        source_ref:
+          type: string
+          description: The suggestion id for a ready pick, `candidate:<entity id>` for a placeholder.
+        rank:
+          type: integer
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          enum:
+            - persons
+        content_status:
+          type: string
+          enum:
+            - ready
+            - placeholder
+        suggestion_mode:
+          type:
+            - 'null'
+        badge:
+          type:
+            - string
+            - 'null'
+        why:
+          oneOf:
+            - $ref: '#/components/schemas/LeverageLoopPackageWhy'
+            - type: 'null'
+        score:
+          type: object
+          description: '`lane` and `verifier_flags` for a ready pick; `{}` for a placeholder.'
+          additionalProperties: true
+        trajectories:
+          type: array
+          maxItems: 0
+          items: {}
+        suggested_sequencing:
+          type: array
+          maxItems: 0
+          items: {}
+        key_people:
+          type:
+            - 'null'
+        hooks:
+          type:
+            - array
+            - 'null'
+          description: The judge's `mechanism` and `rationale` as approach angles on the candidate.
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageHook'
+        paths:
+          type: array
+          maxItems: 0
+          items: {}
+        evidence:
+          type: array
+          maxItems: 0
+          items: {}
+        entities:
+          type: array
+          description: The candidate as `suggested` and the target as `beneficiary`.
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageEntity'
+        action_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageActionGroup'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageAction'
+      additionalProperties: false
+    LeverageLoopPackage:
+      type: object
+      description: |
+        The v2 suggestion package, present once `status` is `delivered` or `failed`. It is what the App backend stores: the selected picks as `ready` suggestions with their WHY, and the judge's rewrite requests as `placeholder` suggestions. Tenant scope (organisation, requester, beneficiary) is absent; the App holds it on the request it filed. `entity_type` values are the App's node taxonomy (`persons`). Email and phone alternatives come from the entity's identifiers, in stored order; an action is omitted when its party has none. Drafts are derived from the headline and WHY until the generator writes them.
+      required:
+        - schema_version
+        - suggestion_request_id
+        - status
+        - generated_at
+        - suggestions
+      properties:
+        schema_version:
+          type: integer
+          description: Always 2.
+        suggestion_request_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: |
+            `complete` for a delivered loop, `partial` when the judge called the results thin, `failed` when the pipeline failed (with `suggestions: []`).
+          enum:
+            - complete
+            - partial
+            - failed
+        generated_at:
+          type: string
+          format: date-time
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeverageLoopPackageSuggestion'
+      additionalProperties: false
     LeverageLoop:
       type: object
       required:
@@ -5387,6 +7312,8 @@ components:
           description: Present only once `status` is `delivered`.
           items:
             $ref: '#/components/schemas/LeverageLoopSuggestion'
+        package:
+          $ref: '#/components/schemas/LeverageLoopPackage'
       additionalProperties: false
     LeverageLoopEnvelope:
       type: object
@@ -6831,6 +8758,339 @@ components:
         - data
         - error
         - meta
+    PurgeCollateralByTable:
+      type: object
+      description: |
+        `references_nulled` broken down by the table that was edited. The key set is FIXED — every key is always present, zero when nothing in that table pointed at the purged entity — so a client can read a field without checking for it.
+      properties:
+        person_work_experience:
+          type: integer
+          description: Colleagues' job rows that named the purged COMPANY as employer.
+        person_education:
+          type: integer
+          description: Alumni rows that named the purged SCHOOL.
+        master_persons:
+          type: integer
+          description: People whose typed cache had the purged company as current employer.
+        funding_round_investors:
+          type: integer
+          description: Round investor rows resolved to the purged entity.
+        funding_round_partners:
+          type: integer
+          description: Round partner rows naming the purged person or their firm.
+        person_certification:
+          type: integer
+          description: Certifications issued BY the purged organization.
+        person_honor:
+          type: integer
+          description: Honors issued BY the purged organization.
+        person_publication:
+          type: integer
+          description: Publications published BY the purged organization.
+        person_volunteering:
+          type: integer
+          description: Volunteering rows whose organization was the purged entity.
+      required:
+        - person_work_experience
+        - person_education
+        - master_persons
+        - funding_round_investors
+        - funding_round_partners
+        - person_certification
+        - person_honor
+        - person_publication
+        - person_volunteering
+    PurgeCollateral:
+      type: object
+      description: |
+        **What the purge costs entities that are NOT being purged.** A purge is never limited to its target: the target is referenced by other entities' rows, and those references have to resolve to something once it is gone. Two database mechanisms do that automatically, and this object is the receipt for both.
+
+        **Worked example.** Purging the company *Resend* also touches every person who worked there. Their `person_work_experience` rows are NOT deleted — `company_entity_id` is ON DELETE SET NULL, so each row survives with its `company_name` string ("Resend") intact but its resolved id nulled. Meanwhile each of those people had a `works_at → Resend` relation fact in `entity_facts`, and `value_entity_id` is ON DELETE CASCADE, so those facts are deleted outright. So one company purge might report `relation_facts_deleted: 12`, `references_nulled: 15`, with `by_table.person_work_experience: 12` and `by_table.master_persons: 3`.
+
+        **All zeros means the purge was self-contained** — nothing outside the target referenced it, which is the normal result for a person nobody else points at. It is not an error and not a missing feature.
+
+        Counted BEFORE the delete runs, and returned identically for `dry_run: true` — which is the point: run the dry run first and read this object to see who else gets edited.
+      properties:
+        relation_facts_deleted:
+          type: integer
+          description: |
+            entity_facts rows on SURVIVING entities whose value_entity_id pointed at the purged set. These are DELETED (ON DELETE CASCADE) — a relation fact pointing at nothing is not a fact. Re-enriching the surviving entity rebuilds them.
+        shared_awards_deleted:
+          type: integer
+          description: |
+            film_tv_awards rows anchored on the purged set that also carry a SURVIVING anchor — deleted rather than nulled because an award with both anchors null violates the at-least-one CHECK. The surviving side loses the award record too.
+        references_nulled:
+          type: integer
+          description: |
+            Total rows on surviving entities whose resolved FK to the purged set was SET NULL. The rows SURVIVE and keep the raw provider string beside the FK, so nothing is lost outright — but they now read as unresolved and will re-resolve on their next enrichment run. Equals the sum of by_table.
+        by_table:
+          $ref: '#/components/schemas/PurgeCollateralByTable'
+      required:
+        - relation_facts_deleted
+        - shared_awards_deleted
+        - references_nulled
+        - by_table
+    PurgeResult:
+      type: object
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        target:
+          type: string
+          enum:
+            - nodes
+            - tables
+            - all
+        dry_run:
+          type: boolean
+          description: True when nothing was written — every count is a projection.
+        tombstones_purged:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: |
+            Merge losers whose merged_into chain reached the target and were purged with it. Their merge history is gone.
+        nodes_deleted:
+          type: integer
+          description: Entity nodes plus the satellites the sweep took.
+        edges_deleted:
+          type: integer
+        satellites_deleted:
+          type: integer
+          description: Ledger-named nodes left with no edge once their owner went.
+        satellites_kept:
+          type: integer
+          description: |
+            Shared nodes (a certification someone else holds, an award the film still points at) that survived because they still had an edge.
+        thesis_nodes_deleted:
+          type: integer
+          description: The investor's InvestmentThesis nodes, matched by investor_uuid.
+        entity_links_cleared:
+          type: integer
+        address_links_cleared:
+          type: integer
+        round_links_cleared:
+          type: integer
+        music_links_cleared:
+          type: integer
+        rows_deleted:
+          type: integer
+          description: Blocker rows explicitly deleted; cascade victims are not countable.
+        entities_deleted:
+          type: integer
+          description: The target plus its tombstones.
+        game_entities_purged:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: |
+            Game-family entities taken with the target: a game's releases and award entries. The games a person's runs admitted stay (wipe the `video_game` scope to take those), and shared series, platform and engine nodes are never taken.
+        game_roots_deleted:
+          type: integer
+          description: |
+            Game roots (demand, plan, jobs, outbox, reservations) the target seeded or that admitted it as a game; targets tables/all, a projection on a dry run.
+        collateral:
+          $ref: '#/components/schemas/PurgeCollateral'
+      required:
+        - entity_id
+        - entity_type
+        - target
+        - dry_run
+        - tombstones_purged
+        - nodes_deleted
+        - edges_deleted
+        - satellites_deleted
+        - satellites_kept
+        - thesis_nodes_deleted
+        - entity_links_cleared
+        - address_links_cleared
+        - round_links_cleared
+        - music_links_cleared
+        - rows_deleted
+        - entities_deleted
+        - game_entities_purged
+        - game_roots_deleted
+        - collateral
+    PurgeResultEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PurgeResult'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    ReconcileQueue:
+      type: object
+      properties:
+        remaining_before:
+          type: integer
+          description: Queue depth before this batch ran.
+        processed:
+          type: integer
+        synced:
+          type: integer
+        awaiting_node:
+          type: integer
+          description: |
+            Rows held back until node sync backfills their company node (locations and rounds queues; 0 otherwise).
+        failed:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeedFailure'
+        has_more:
+          type: boolean
+          description: True when entities remain — run another batch.
+      required:
+        - remaining_before
+        - processed
+        - synced
+        - awaiting_node
+        - failed
+        - has_more
+    ReconcileResult:
+      type: object
+      description: One queue block per swept target; unswept are null.
+      properties:
+        companies:
+          oneOf:
+            - $ref: '#/components/schemas/ReconcileQueue'
+            - type: 'null'
+        locations:
+          oneOf:
+            - $ref: '#/components/schemas/ReconcileQueue'
+            - type: 'null'
+        rounds:
+          oneOf:
+            - $ref: '#/components/schemas/ReconcileQueue'
+            - type: 'null'
+      required:
+        - companies
+        - locations
+        - rounds
+    ReconcileResultEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/ReconcileResult'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    DriftObject:
+      type: object
+      description: One orphan or lost object in a sample.
+      properties:
+        uuid:
+          type: string
+          description: Absent when the object carries no uuid property.
+        labels:
+          type: array
+          items:
+            type: string
+          description: Node labels; the edge type for an edge.
+        ledgers:
+          type: array
+          items:
+            type: string
+          description: The ledger columns that claim a lost uuid.
+    DriftResult:
+      type: object
+      properties:
+        graph_nodes:
+          type: integer
+        graph_edges:
+          type: integer
+        ledger_nodes:
+          type: integer
+        ledger_edges:
+          type: integer
+        unledgered_nodes:
+          type: integer
+        unledgered_edges:
+          type: integer
+        orphan_nodes:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Orphan node counts by label.
+        orphan_edges:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Orphan edge counts by type.
+        unclaimed_edges:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Edge types no ledger column claims at all.
+        lost_nodes:
+          type: integer
+        lost_edges:
+          type: integer
+        orphan_node_sample:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriftObject'
+        orphan_edge_sample:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriftObject'
+        lost_node_sample:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriftObject'
+        lost_edge_sample:
+          type: array
+          items:
+            $ref: '#/components/schemas/DriftObject'
+        swept:
+          type: boolean
+        nodes_deleted:
+          type: integer
+        edges_deleted:
+          type: integer
+      required:
+        - graph_nodes
+        - graph_edges
+        - ledger_nodes
+        - ledger_edges
+        - unledgered_nodes
+        - unledgered_edges
+        - orphan_nodes
+        - orphan_edges
+        - unclaimed_edges
+        - lost_nodes
+        - lost_edges
+        - swept
+        - nodes_deleted
+        - edges_deleted
+    DriftResultEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/DriftResult'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
     Instance:
       type: object
       description: |
@@ -7121,6 +9381,1668 @@ components:
         - data
         - error
         - meta
+    EnrichmentCapCounts:
+      type: object
+      description: |
+        The population split by lifecycle, excluding merge tombstones. enriched + not_enriched + gone == all.
+      properties:
+        enriched:
+          type: integer
+          format: int64
+        not_enriched:
+          type: integer
+          format: int64
+          description: Pending work — new, queued, enriching, failed or parked.
+        gone:
+          type: integer
+          format: int64
+          description: |
+            Provider tombstones (an upstream 404). Split out because gates never re-queue them, so they are not pending work.
+        all:
+          type: integer
+          format: int64
+      required:
+        - enriched
+        - not_enriched
+        - gone
+        - all
+    EnrichmentCapStatus:
+      type: object
+      properties:
+        key:
+          type: string
+          enum:
+            - company
+            - person
+            - music
+            - stage_production
+            - video_game
+          description: The consumers.environment_variables row, minus the kill_switch_ prefix.
+        limit:
+          type: integer
+          format: int32
+          description: The configured ceiling. 0 means no row exists, which fails closed.
+        basis:
+          type: string
+          enum:
+            - all
+            - enriched
+            - not_enriched
+          description: Which bucket used, remaining and pct_used were measured from.
+        used:
+          type: integer
+          format: int64
+        remaining:
+          type: integer
+          format: int64
+          description: Never negative; a population past the limit reports 0.
+        pct_used:
+          type: number
+          format: double
+          description: One decimal place. Exceeds 100 when the population is past the limit.
+        counted_types:
+          type: array
+          items:
+            type: string
+          description: |
+            The entity types summed into this ceiling. Music lists all five catalog types; person lists only person, because film_tv rides the ceiling without being counted.
+        counts:
+          $ref: '#/components/schemas/EnrichmentCapCounts'
+      required:
+        - key
+        - limit
+        - basis
+        - used
+        - remaining
+        - pct_used
+        - counted_types
+        - counts
+    EnrichmentCapStatusEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnrichmentCapStatus'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    PersonHandoffBackfill:
+      type: object
+      properties:
+        found:
+          type: integer
+          description: Companies in this batch's backlog.
+        succeeded:
+          type: integer
+          description: Companies whose handoff replayed and was marked done.
+        failed:
+          type: integer
+          description: |
+            Companies left in the backlog for the next call. No marker is written on failure, so they are retried rather than lost.
+        remaining:
+          type: boolean
+          description: |
+            The batch filled to the limit, so more may be waiting. False is the only signal that the backlog is clear.
+      required:
+        - found
+        - succeeded
+        - failed
+        - remaining
+    PersonHandoffBackfillEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PersonHandoffBackfill'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    SeedMusicRequest:
+      type: object
+      properties:
+        kind:
+          type: string
+          description: |
+            Which MusicBrainz entity `mbid` addresses. Note `release_group` uses an underscore here while MusicBrainz's own path segment is `release-group`.
+          enum:
+            - artist
+            - label
+            - release_group
+            - recording
+            - work
+            - event
+        mbid:
+          type: string
+          description: A bare MusicBrainz id, or a musicbrainz.org URL.
+        name:
+          type: string
+          description: |
+            A label for the row until the run repairs it from the payload. Omitted, the mbid is used — a poor label but far better than none.
+        artist_type:
+          type: string
+          description: |
+            MusicBrainz's own artist type, when you already know it. Saves the gate one paced lookup on an `artist` seed and is ignored otherwise.
+          enum:
+            - Person
+            - Character
+            - Group
+            - Orchestra
+            - Choir
+        queue:
+          type:
+            - boolean
+            - 'null'
+          description: |
+            Omit to park the row for the drain (normal). `false` runs the orchestrator inline, for driving one entity at a time.
+        priority_tier:
+          type:
+            - integer
+            - 'null'
+          description: Passed through as given; an explicit 0 survives as 0.
+      required:
+        - kind
+        - mbid
+    SeedMusic:
+      type: object
+      properties:
+        action:
+          type: string
+          description: |
+            What the gate did. Refusals are actions, not errors.
+          enum:
+            - queued
+            - refresh_queued
+            - enriched_direct
+            - refresh_enriched
+            - delegated
+            - dedup_fresh
+            - cap_blocked
+            - cap_existing
+            - skipped_gone
+            - skipped_no_ref
+            - skipped_not_musicbrainz
+            - skipped_unknown_artist_type
+        entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: |
+            The CANONICAL id — a merged loser resolves to its winner first. Null on a refusal that resolved nothing.
+        entity_type:
+          type: string
+          description: |
+            What the reference resolved TO, which `kind` alone does not say: an artist becomes `person` or `music_group`, and a label becomes `company`.
+        mbid:
+          type: string
+          description: The canonical bare lowercased id.
+        name:
+          type: string
+        node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: Null until the graph node write lands.
+        created:
+          type: boolean
+          description: True only on a fresh entity.
+        enriched:
+          type: boolean
+          description: True once a run has completed for this entity.
+      required:
+        - action
+        - entity_type
+        - mbid
+        - name
+        - created
+        - enriched
+    SeedMusicEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SeedMusic'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    PersonAvatarBackfill:
+      type: object
+      properties:
+        found:
+          type: integer
+          description: People in this batch's backlog.
+        succeeded:
+          type: integer
+          description: People whose placeholder landed and whose re-distill was requested.
+        failed:
+          type: integer
+          description: People skipped (no usable name) or whose write failed; retried next call.
+        stock_rows_removed:
+          type: integer
+          description: LinkedIn silhouette rows deleted.
+        remaining:
+          type: boolean
+          description: The batch filled to the limit; false is the only signal that the backlog is clear.
+      required:
+        - found
+        - succeeded
+        - failed
+        - stock_rows_removed
+        - remaining
+    PersonAvatarBackfillEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PersonAvatarBackfill'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    CoInvestorSweep:
+      type: object
+      properties:
+        persons:
+          type: integer
+        pairs:
+          type: integer
+          description: Shared backings found in the mirror.
+        filed:
+          type: integer
+          description: Pairs whose both people and company are entities.
+        claims:
+          type: integer
+        errors:
+          type: integer
+        remaining:
+          type: boolean
+          description: The page filled; call again with a larger offset.
+      required:
+        - persons
+        - pairs
+        - filed
+        - claims
+        - errors
+        - remaining
+    CoInvestorSweepEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CoInvestorSweep'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    PendingRelation:
+      type: object
+      properties:
+        counterpart_name:
+          type: string
+        via_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        via_organization:
+          type:
+            - string
+            - 'null'
+        counterpart_ref_kind:
+          type:
+            - string
+            - 'null'
+          description: The strong identifier kind one row carried (linkedin, imdb, mbid), if any.
+        counterpart_ref:
+          type:
+            - string
+            - 'null'
+        subjects:
+          type: integer
+          description: Distinct subjects naming this person through this company.
+        rows_pending:
+          type: integer
+        resolve_attempts:
+          type: integer
+          description: The most attempts any of the rows has spent.
+        last_resolve_outcome:
+          type:
+            - string
+            - 'null'
+          enum:
+            - resolved
+            - unresolved
+            - ambiguous
+            - self
+            - null
+        first_seen_at:
+          type: string
+          format: date-time
+      required:
+        - counterpart_name
+        - via_entity_id
+        - via_organization
+        - counterpart_ref_kind
+        - counterpart_ref
+        - subjects
+        - rows_pending
+        - resolve_attempts
+        - last_resolve_outcome
+        - first_seen_at
+    PendingRelationsEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingRelation'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    RelationResolve:
+      type: object
+      properties:
+        rows:
+          type: integer
+          description: Pending rows judged in this pass.
+        resolved:
+          type: integer
+          description: Rows that gained a counterpart and filed a claim.
+        duplicate:
+          type: integer
+          description: Rows dropped because a resolved twin already existed.
+        unresolved:
+          type: integer
+          description: Rows still without a match (attempt counted).
+        ambiguous:
+          type: integer
+          description: Rows whose name matched more than one person (attempt counted).
+        errors:
+          type: integer
+        claims:
+          type: integer
+          description: Relationship claims filed.
+        subjects:
+          type: integer
+          description: Subjects that received a claims envelope.
+      required:
+        - rows
+        - resolved
+        - duplicate
+        - unresolved
+        - ambiguous
+        - errors
+        - claims
+        - subjects
+    RelationResolveEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/RelationResolve'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    PersonRunCompletion:
+      type: object
+      description: |
+        Every count with its denominator: a success total is never readable without the required total it came from.
+      properties:
+        total:
+          type: integer
+          format: int64
+        required:
+          type: integer
+          format: int64
+        required_success:
+          type: integer
+          format: int64
+        required_exhausted:
+          type: integer
+          format: int64
+          description: |
+            Required receipts that spent every attempt. These are terminal, which is what lets a doomed run report done-and-unsuccessful instead of pending forever.
+        errored:
+          type: integer
+          format: int64
+        running:
+          type: integer
+          format: int64
+        deferred:
+          type: integer
+          format: int64
+      required:
+        - total
+        - required
+        - required_success
+        - required_exhausted
+        - errored
+        - running
+        - deferred
+    PersonTerminalState:
+      type: object
+      properties:
+        settled:
+          type: boolean
+          description: Nothing outstanding — done, successfully or not.
+        satisfied:
+          type: boolean
+          description: Settled with nothing failed. The projection emit gate.
+        vacuous:
+          type: boolean
+          description: Evaluated over zero required receipts; never a pass.
+        pending_clauses:
+          type: array
+          items:
+            type: string
+        failed_clauses:
+          type: array
+          items:
+            type: string
+        visibility:
+          type: boolean
+          description: True when the distilled basic bio_500 is nonblank; independent of stage completion and Deep Bio.
+        has_bio_500:
+          type: boolean
+          description: Whether a nonblank basic bio_500 is available.
+        has_strong_identity:
+          type: boolean
+          description: |
+            Whether a strong identity was resolved. Diagnostic only; this does not gate visibility.
+      required:
+        - settled
+        - satisfied
+        - vacuous
+        - pending_clauses
+        - failed_clauses
+        - visibility
+        - has_bio_500
+        - has_strong_identity
+    PersonCompanyDependency:
+      type: object
+      description: The selected current employer this run waits on.
+      properties:
+        company_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        status:
+          type: string
+          enum:
+            - pending
+            - success
+            - error
+            - superseded
+        required_after:
+          type: string
+          format: date-time
+          description: |
+            Watermark: the company's enrichment must land at or after this, so an older enrichment cannot satisfy the dependency.
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        error:
+          type:
+            - string
+            - 'null'
+      required:
+        - company_entity_id
+        - status
+        - required_after
+        - completed_at
+        - error
+    PersonEnrichmentStage:
+      type: object
+      properties:
+        stage:
+          type: string
+        stage_order:
+          type: integer
+          format: int32
+        is_required:
+          type: boolean
+          description: Whether the completion predicate needs this to succeed.
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - success
+            - error
+            - deferred
+            - superseded
+        attempt_count:
+          type: integer
+          format: int32
+        max_attempts:
+          type: integer
+          format: int32
+        error_code:
+          type: string
+        error_message:
+          type: string
+        will_retry:
+          type: boolean
+          description: |
+            Attempts remain AND the code is retryable — the sweeper is coming back. False on an errored stage means final.
+        parked:
+          type: boolean
+          description: Errored with the attempt budget spent; needs a human.
+        next_attempt_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        started_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        duration_ms:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        running_for_seconds:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        heartbeat_age_seconds:
+          type:
+            - integer
+            - 'null'
+          format: int64
+          description: |
+            Since the lease holder last checked in. It proves the holder is alive, not that the step progresses.
+        lease_expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        stalled:
+          type: boolean
+          description: |
+            Live lease, fresh heartbeat, yet running far too long — wedged but alive. Needs both signals: a fresh heartbeat alone looks healthy.
+      required:
+        - stage
+        - stage_order
+        - is_required
+        - status
+        - attempt_count
+        - max_attempts
+        - error_code
+        - error_message
+        - will_retry
+        - parked
+        - next_attempt_at
+        - started_at
+        - completed_at
+        - duration_ms
+        - running_for_seconds
+        - heartbeat_age_seconds
+        - lease_expires_at
+        - stalled
+    PersonEnrichmentRun:
+      type: object
+      description: |
+        One run's receipts. The identity (Fiber) lane appears as its own run and is deliberately unscored — completion and terminal are null there.
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        pipeline:
+          type: string
+          enum:
+            - orchestrator
+            - callback
+        started_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        completion:
+          oneOf:
+            - $ref: '#/components/schemas/PersonRunCompletion'
+            - type: 'null'
+        terminal:
+          oneOf:
+            - $ref: '#/components/schemas/PersonTerminalState'
+            - type: 'null'
+        company_dependency:
+          oneOf:
+            - $ref: '#/components/schemas/PersonCompanyDependency'
+            - type: 'null'
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonEnrichmentStage'
+      required:
+        - run_id
+        - pipeline
+        - started_at
+        - completion
+        - terminal
+        - company_dependency
+        - stages
+    PersonEnrichmentStatus:
+      type: object
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        placeholder_name:
+          type: boolean
+          description: |
+            The closeout has not repaired the temp_ placeholder, which is also why the person is unpublishable.
+        stage_discovery:
+          type: array
+          description: |
+            Theatre discovery roots this person seeded (stage lane D32): one per person, admitted blocked with `awaiting_adapter` until a person-page adapter can serve it.
+          items:
+            type: object
+            properties:
+              job_id:
+                type: string
+                format: uuid
+              state:
+                type: string
+              error_code:
+                type:
+                  - string
+                  - 'null'
+              created_at:
+                type: string
+                format: date-time
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonEnrichmentRun'
+      required:
+        - entity_id
+        - display_name
+        - placeholder_name
+        - runs
+    PersonEnrichmentStatusEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PersonEnrichmentStatus'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    ManualDrain:
+      type: object
+      properties:
+        queue_id:
+          type: string
+          format: uuid
+        entity_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          description: company | person | film_tv
+        priority_tier:
+          type: integer
+          description: |
+            The row's tier, reported so an operator sees what the timed drain would have skipped. Not used to decide whether to run.
+        cascade_depth:
+          type: integer
+          description: The depth the run used, which is the row's own.
+        ran:
+          type: boolean
+          description: |
+            False when the row was skipped rather than executed — a cap block, an unwired pipeline, or a row that was not eligible.
+        outcome:
+          type: string
+          description: drained | failed | over_depth | cap_blocked | not_wired | not_eligible
+        error:
+          type: string
+          description: Present on failed and cap_blocked.
+        attempts:
+          type: integer
+          description: |
+            The row's attempt count AFTER a failure, so the dead-letter ceiling is visible as it is approached.
+      required:
+        - queue_id
+        - entity_id
+        - entity_type
+        - priority_tier
+        - cascade_depth
+        - ran
+        - outcome
+    ManualDrainEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/ManualDrain'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageDiscoveryEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            blocked:
+              type: integer
+            unblocked:
+              type: integer
+            awaiting_identity:
+              type: integer
+            claimed:
+              type: integer
+            completed:
+              type: integer
+            deferred:
+              type: integer
+            failed:
+              type: integer
+            admitted:
+              type: integer
+            refused:
+              type: integer
+            skipped:
+              type: integer
+    StageDrainRequest:
+      type: object
+      description: One of `queue_id` or `max_rows`; an empty object drains one tick-sized batch.
+      properties:
+        queue_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The enrichment_queue row id to drive, not the entity id.
+        max_rows:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Batch ceiling; also capped by the configured tick size.
+      not:
+        properties:
+          queue_id:
+            type: string
+          max_rows:
+            type: integer
+        required:
+          - queue_id
+          - max_rows
+    StageDrain:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            - row
+            - batch
+        row:
+          $ref: '#/components/schemas/ManualDrain'
+        batch:
+          type: object
+          properties:
+            picked:
+              type: integer
+            drained:
+              type: integer
+            kept:
+              type: integer
+            released:
+              type: integer
+            dead_lettered:
+              type: integer
+            deferred:
+              type: integer
+            poisoned:
+              type: integer
+            over_depth:
+              type: integer
+          required:
+            - picked
+            - drained
+            - kept
+            - released
+            - dead_lettered
+            - deferred
+            - poisoned
+            - over_depth
+      required:
+        - mode
+    StageDrainEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageDrain'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageFactsEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            claimed:
+              type: integer
+            completed:
+              type: integer
+            failed:
+              type: integer
+            credits:
+              type: integer
+              description: Credit envelopes landed on producers.
+            profiles:
+              type: integer
+              description: Profile envelopes landed on productions.
+            unresolved:
+              type: integer
+              description: Open mentions counted into the profile.
+    StageGraphEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            claimed:
+              type: integer
+            completed:
+              type: integer
+            failed:
+              type: integer
+            desired:
+              type: integer
+              description: Pairs whose desired state changed.
+            withdrawn:
+              type: integer
+              description: Pairs flipped inactive.
+            leased:
+              type: integer
+            drawn:
+              type: integer
+              description: Active edges written.
+            retracted:
+              type: integer
+              description: Withdrawn credits projected or settled.
+            pending:
+              type: integer
+              description: Rows released to heal on a later tick.
+            errors:
+              type: integer
+    StageMention:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        group_id:
+          type: string
+          format: uuid
+        member_ordinal:
+          type: integer
+        block_ordinal:
+          type: integer
+        group_ordinal:
+          type: integer
+        raw_role:
+          type:
+            - string
+            - 'null'
+        raw_text:
+          type:
+            - string
+            - 'null'
+        input_revision:
+          type: string
+        literal_name:
+          type:
+            - string
+            - 'null'
+        candidate_name:
+          type:
+            - string
+            - 'null'
+        candidate_type:
+          type:
+            - string
+            - 'null'
+          enum:
+            - person
+            - company
+            - unknown
+            - null
+        evidence_quote:
+          type:
+            - string
+            - 'null'
+        resolution_state:
+          type: string
+          enum:
+            - unresolved
+            - auto_linked
+            - needs_review
+            - review_linked
+            - rejected
+            - disputed
+        accepted_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        accepted_entity_type:
+          type:
+            - string
+            - 'null'
+        confidence:
+          type:
+            - number
+            - 'null'
+        identity_revision:
+          type: integer
+          description: Pass this back as `expected_identity_revision` on a review.
+      required:
+        - id
+        - group_id
+        - member_ordinal
+        - literal_name
+        - candidate_name
+        - candidate_type
+        - evidence_quote
+        - resolution_state
+        - accepted_entity_id
+        - accepted_entity_type
+        - confidence
+        - identity_revision
+    StageMentionsEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/StageMention'
+            next:
+              type:
+                - string
+                - 'null'
+              format: uuid
+          required:
+            - items
+            - next
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageReviewRequest:
+      type: object
+      properties:
+        decision:
+          type: string
+          enum:
+            - accept
+            - reject
+            - revoke
+        entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: Required for `accept`; must be absent for `reject` and `revoke`.
+        expected_identity_revision:
+          type: integer
+          minimum: 0
+          description: The `identity_revision` the reviewer saw; a mismatch is a 409.
+        reason:
+          type: string
+          maxLength: 1024
+      required:
+        - decision
+      if:
+        properties:
+          decision:
+            const: accept
+      then:
+        properties:
+          entity_id:
+            type: string
+            format: uuid
+        required:
+          - entity_id
+    StageMentionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageMention'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageAdmitRequest:
+      type: object
+      properties:
+        source:
+          type: string
+          description: The raw source name of the production reference.
+          enum:
+            - broadwayworld
+            - wikidata
+            - wikipedia
+            - tony
+            - olivier
+            - pilot_submission
+            - programme
+            - official
+            - ibdb
+            - playbill
+            - theatricalia
+            - solt
+        object_kind:
+          type: string
+          description: Only a production can be admitted; a party or work is refused.
+          enum:
+            - production
+        source_id:
+          type: string
+          maxLength: 512
+          description: |
+            The source's own id for the engagement, exact and case-sensitive — an IBDB production number, a Theatricalia production slug, or the reviewed registry key for a submission. Never a URL to parse.
+        source_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+        display_name:
+          type:
+            - string
+            - 'null'
+          maxLength: 512
+          description: The billed title, when known; omitted, the hub carries a provisional label.
+        market:
+          type: string
+          enum:
+            - broadway
+            - west_end
+        scheduling_class:
+          type: string
+          description: |
+            Intake class, not a queue tier. `p0`/`p1` queue at drain tiers 0/1; `p2` is parked in the historical inventory. Defaults to `p1`.
+          enum:
+            - p0
+            - p1
+            - p2
+            - P0
+            - P1
+            - P2
+        refresh_mode:
+          type: string
+          description: '`if_due` (default) leaves a fresh production alone; `force` queues it regardless.'
+          enum:
+            - if_due
+            - force
+        dry_run:
+          type: boolean
+          description: Predict the action with no write, provider call, entity creation or queue mutation.
+      required:
+        - source
+        - object_kind
+        - source_id
+        - market
+    StageAdmit:
+      type: object
+      properties:
+        action:
+          type: string
+          enum:
+            - queued
+            - parked
+            - already_pending
+            - fresh_existing
+            - awaiting_dependency
+            - refused
+        reason:
+          type: string
+          description: |
+            Why a non-queued action: `intake_disabled`, `market_disabled`, `source_disabled`, `source_has_no_production_key`, `root_budget_exhausted`, `cap_blocked`, `depth_exceeded`, `historical_inventory`, `fresh`, `pending`.
+        job_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The durable admission row; null on a dry run or a disabled lane.
+        production_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The canonical `stage_production`; null when none could be identified.
+        source_record_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        created_entity:
+          type: boolean
+          description: A new canonical production was minted (predicted on a dry run).
+        dry_run:
+          type: boolean
+      required:
+        - action
+        - job_id
+        - production_entity_id
+        - source_record_id
+        - created_entity
+        - dry_run
+    StageAdmitEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageAdmit'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageProductionStatus:
+      type: object
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        lifecycle_state:
+          type: string
+          enum:
+            - discovered
+            - admitted
+            - extracted
+            - resolved
+            - projected
+            - retired
+        credit_finality:
+          type: string
+          enum:
+            - unknown
+            - provisional
+            - final
+        active_input_revision:
+          type:
+            - string
+            - 'null'
+        active_extraction_revision:
+          type:
+            - string
+            - 'null'
+        next_refresh_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        last_complete_snapshot_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        primary_source_record_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source_records:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              source:
+                type: string
+              object_kind:
+                type: string
+              source_id:
+                type: string
+              mapping_status:
+                type: string
+                enum:
+                  - unresolved
+                  - auto_linked
+                  - needs_review
+                  - review_linked
+                  - rejected
+                  - disputed
+            required:
+              - id
+              - source
+              - object_kind
+              - source_id
+              - mapping_status
+        snapshots:
+          type: integer
+          format: int64
+        mentions_by_state:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        credits_by_status:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        checkpoints:
+          type: array
+          items:
+            type: object
+            properties:
+              phase:
+                type: string
+              state:
+                type: string
+              count:
+                type: integer
+                format: int64
+            required:
+              - phase
+              - state
+              - count
+        queue:
+          type:
+            - object
+            - 'null'
+          description: The shared queue row, when the production is pending.
+          properties:
+            priority_tier:
+              type: integer
+            attempts:
+              type: integer
+            locked_since:
+              type:
+                - string
+                - 'null'
+              format: date-time
+          required:
+            - priority_tier
+            - attempts
+            - locked_since
+      required:
+        - entity_id
+        - lifecycle_state
+        - credit_finality
+        - source_records
+        - snapshots
+        - mentions_by_state
+        - credits_by_status
+        - checkpoints
+        - queue
+    StageProductionStatusEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageProductionStatus'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StagePublishEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            claimed:
+              type: integer
+            completed:
+              type: integer
+            waiting:
+              type: integer
+            failed:
+              type: integer
+          required:
+            - claimed
+            - completed
+            - waiting
+            - failed
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageResolveEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            claimed:
+              type: integer
+            completed:
+              type: integer
+            continued:
+              type: integer
+            failed:
+              type: integer
+            mentions:
+              type: integer
+            accepted:
+              type: integer
+            needs_review:
+              type: integer
+            unresolved:
+              type: integer
+            deferred:
+              type: integer
+          required:
+            - claimed
+            - completed
+            - continued
+            - failed
+            - mentions
+            - accepted
+            - needs_review
+            - unresolved
+            - deferred
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    StageSubmissionRequest:
+      type: object
+      description: The versioned pilot submission contract.
+      properties:
+        schema_version:
+          type: integer
+          enum:
+            - 1
+        submission_id:
+          type: string
+          maxLength: 128
+        record_id:
+          type: string
+          maxLength: 128
+        revision:
+          type: integer
+          minimum: 1
+          description: A correction is a new revision; the same revision must carry the same bytes.
+        received_at:
+          type: string
+          format: date-time
+        submitter:
+          type: string
+          maxLength: 256
+        reference:
+          type: string
+          maxLength: 512
+        basis:
+          type: string
+          maxLength: 512
+          description: The recorded basis for pilot use of this list.
+        production:
+          type: object
+          properties:
+            registry_id:
+              type: string
+              maxLength: 128
+              description: The reviewed production registry key, one token; the production's strong identity.
+            title:
+              type: string
+              maxLength: 512
+            market:
+              type: string
+              enum:
+                - broadway
+                - west_end
+            venue:
+              type: string
+              maxLength: 256
+            first_preview_date:
+              type: string
+              format: date
+            opening_date:
+              type: string
+              format: date
+            closing_date:
+              type: string
+              format: date
+          required:
+            - registry_id
+            - title
+            - market
+        credit_blocks:
+          type: array
+          description: Producing sections as printed. May be empty; partial evidence never retracts.
+          items:
+            type: object
+            properties:
+              heading:
+                type: string
+                maxLength: 256
+              groups:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  properties:
+                    role_raw:
+                      type: string
+                      maxLength: 256
+                      description: The group's own stated role; omitted, the block heading is the role.
+                    billed_text:
+                      type: string
+                      maxLength: 1024
+                    source_party_ref:
+                      type: string
+                      maxLength: 256
+                    evidence_locator:
+                      type: string
+                      maxLength: 512
+                    credit_start:
+                      type: string
+                      format: date
+                    credit_end:
+                      type: string
+                      format: date
+                  required:
+                    - billed_text
+            required:
+              - heading
+              - groups
+        completeness:
+          type: string
+          enum:
+            - unknown
+            - partial
+            - provisional
+            - complete
+            - empty_confirmed
+          description: A source's unfinished-credit notice prevents `complete`.
+        notices:
+          type: array
+          items:
+            type: string
+            maxLength: 1024
+        review:
+          type: object
+          properties:
+            reviewer:
+              type: string
+              maxLength: 256
+            reviewed_at:
+              type: string
+              format: date-time
+            decision:
+              type: string
+              enum:
+                - approved
+                - rejected
+          required:
+            - reviewer
+            - reviewed_at
+            - decision
+      required:
+        - schema_version
+        - submission_id
+        - record_id
+        - revision
+        - received_at
+        - submitter
+        - basis
+        - production
+        - completeness
+        - review
+    StageSubmission:
+      type: object
+      properties:
+        admission:
+          $ref: '#/components/schemas/StageAdmit'
+        input_revision:
+          type: string
+          description: '`<submission_id>@<revision>`, the requested input revision the queue and checkpoints key on.'
+        payload_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The stored verbatim revision; null when the production was not admitted.
+        stored:
+          type: boolean
+          description: True when this call stored the revision; false for a repeat of the same bytes.
+      required:
+        - admission
+        - input_revision
+        - payload_id
+        - stored
+    StageSubmissionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/StageSubmission'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    InvestorNarrative:
+      type: object
+      required:
+        - schema_version
+        - id
+        - requested_id
+        - entity_type
+        - narrative
+      properties:
+        schema_version:
+          type: string
+          description: Wire contract version. A breaking change gets a new version, not an edit.
+          example: investor_narrative.v1
+        id:
+          type: string
+          format: uuid
+          description: The canonical entity id, after the merge chain is resolved.
+        requested_id:
+          type: string
+          format: uuid
+          description: |
+            The id as asked for. Differs from `id` when the requested entity was merged away; a consumer should heal its stored reference.
+        entity_type:
+          type: string
+          description: The canonical entity's type.
+          example: company
+        narrative:
+          $ref: '#/components/schemas/ProjectionEvidenceNarrative'
+          description: |
+            The same shape the company projection carries in its `evidence_narrative` section, so a consumer parses one type.
+    InvestorNarrativeEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/InvestorNarrative'
+        error:
+          type: 'null'
     DeepBioSweep:
       type: object
       required:
