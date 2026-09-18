@@ -86,6 +86,8 @@ tags:
       Contact imports from external sources (LinkedIn CSV, Apple Contacts
       vCard, Nylas address books). Signed-URL upload, async processing,
       per-row report. Requires a verified WorkOS access token.
+  - name: Suggestions
+    description: The v2 suggestion feed and batch inspection for Leverage Loops and Outcomes, scoped to an organisation the caller is a member of. Requires a verified WorkOS access token.
   - name: Leverage Loops
     description: Copilot suggestion requests in loop mode with their suggestions, actions, trajectories and follow-up questions. Requires a verified WorkOS access token.
   - name: Links
@@ -121,6 +123,10 @@ tags:
     description: |
       Outbound webhook subscriptions, delivery inspection, and
       manual retry of dead deliveries.
+  - name: X Connect
+    description: |
+      Store the caller's X grant (from the command palette) and sync their
+      X followers and DMs.
 paths:
   /sign-up:
     post:
@@ -4010,6 +4016,176 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /x-connect:
+    get:
+      tags:
+        - X Connect
+      summary: Read the caller's X connection
+      description: |
+        `connected` is false when the caller has no stored grant; the other
+        fields are then defaults. `current_run` is the most recent sync.
+      operationId: getXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The caller's X connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XConnectionEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    patch:
+      tags:
+        - X Connect
+      summary: Turn DM sync on or off
+      description: Applies from the next sync. 404 when X is not connected.
+      operationId: updateXConnection
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateXConnectionRequest'
+      responses:
+        '200':
+          description: The updated connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XConnectionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      tags:
+        - X Connect
+      summary: Disconnect X
+      description: |
+        Revokes the grant at X (best effort) and deletes it. 404 when X is
+        not connected.
+      operationId: deleteXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Disconnected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/sync:
+    post:
+      tags:
+        - X Connect
+      summary: Sync X followers and DMs
+      description: |
+        Queues a sync on the worker. A sync already in flight is returned
+        as-is instead of stacking another. 400 when X is not connected or the
+        user must reconnect.
+      operationId: syncXConnection
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: The queued (or already running) sync.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XSyncRunEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/oauth/start:
+    post:
+      tags:
+        - X Connect
+      summary: Start connecting X
+      description: |
+        Mints a single-use OAuth transaction bound to the authenticated user
+        and returns X's consent URL, requesting followers, DMs, and a refresh
+        token. `return_to` must exactly match an allowlisted frontend path.
+        Answers 400 once the per-user limit (10 starts per trailing hour)
+        trips, and 404 when X connect is not configured on the server.
+      operationId: startXConnect
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartXConnectRequest'
+      responses:
+        '200':
+          description: X consent URL, to open in a popup.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartXConnectEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /x-connect/oauth/callback:
+    get:
+      tags:
+        - X Connect
+      summary: X authorization-code callback
+      description: |
+        Public endpoint X redirects the browser to. Consumes the single-use
+        transaction, exchanges the code, stores the sealed grant, and queues
+        the first sync. ALWAYS answers with a 302 to the frontend return path
+        carrying only `?result=connected|cancelled|error`; no token or X
+        error detail appears in the redirect.
+      operationId: xConnectCallback
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to the frontend with a safe result code.
   /nylas-grants/token-exchange:
     post:
       tags:
@@ -5072,6 +5248,21 @@ paths:
           schema:
             type: string
             default: now
+        - in: query
+          name: timezone
+          required: false
+          description: |
+            IANA timezone the feed is computed in: the YYYY-MM-DD day keys, the
+            parsing of a YYYY-MM-DD time_range, and the 9-day window floor are
+            all resolved in this zone. Send the zone the client draws its day
+            rings in. When absent, or when the name does not resolve to a
+            zone, the user's stored timezone applies (working timezone unless
+            they opted into their primary timezone, then primary, then working,
+            then UTC). "Local" and names over 64 characters are rejected
+            with 400.
+          schema:
+            type: string
+          example: Africa/Nairobi
       responses:
         '200':
           description: The day-grouped activity feed.
@@ -6807,10 +6998,11 @@ paths:
       summary: Get all collection nodes
       description: |
         Returns a page of the nodes pinned to a collection, newest first, each
-        enriched with the person or company it points at (graph-only entities —
-        funding_round, film_tv, film_tv_award, live_event — have no backing table
-        and surface as bare ids). The authenticated user must have access to the collection;
-        an unknown or inaccessible one returns 404.
+        in the shared node shape every feature serves: `entity_type` names the
+        pinned entity's table, `node_uuid` is its row id (the master graph's node
+        id), and exactly one entity object is non-null. The authenticated user
+        must have access to the collection; an unknown or inaccessible one
+        returns 404.
       operationId: listCollectionNodes
       security:
         - bearerAuth: []
@@ -6858,11 +7050,11 @@ paths:
         - Collections
       summary: Add nodes to a collection
       description: |
-        Bulk-pins entities to a collection as nodes. Each id in each list becomes
-        one node; an entity already pinned to the collection is skipped
-        (idempotent). Anyone with access to the collection (owner or member) may
-        add. master_* are UUIDs; the rest are bare graph ids. Returns the count
-        of nodes newly added.
+        Bulk-pins entities to a collection as nodes. Each `nodes` ref becomes one
+        node; an entity already pinned to the collection is skipped (idempotent).
+        A ref naming a kind or an entity the backend does not hold is a 400.
+        Anyone with access to the collection (owner or member) may add. Returns
+        the count of nodes newly added.
       operationId: addCollectionNodes
       security:
         - bearerAuth: []
@@ -8372,7 +8564,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - name: status
           in: query
-          description: Filter to one status (draft, submitted, processing, suggestion, archived). Empty excludes archived.
+          description: Filter to one status (draft, submitted, processing, suggestion, failed, archived). Empty excludes archived.
           schema:
             type: string
         - name: query
@@ -8444,7 +8636,7 @@ paths:
       tags:
         - Leverage Loops
       summary: Update a leverage loop
-      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`.'
+      description: 'Partial update; absent fields are unchanged. Archive with `status: archived`. A client may only move a loop to `archived`, or between `draft` and `submitted` while it is still a draft; the pull''s own states (`processing`, `suggestion`, `failed`) are written by dispatch and the worker, and a PATCH to one of them returns 400. A status change that loses a race with a dispatch returns 409.'
       security:
         - bearerAuth: []
       requestBody:
@@ -8468,11 +8660,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
     delete:
       operationId: deleteLeverageLoop
       tags:
         - Leverage Loops
       summary: Delete a leverage loop and everything under it
+      description: A loop whose suggestions were stored (status `suggestion`, `batch_id` set) cannot be deleted, since the batch keeps it; archive it instead.
       security:
         - bearerAuth: []
       responses:
@@ -8488,6 +8683,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /leverage-loops/{loop_id}/dispatch:
     parameters:
       - $ref: '#/components/parameters/LoopID'
@@ -8496,7 +8693,7 @@ paths:
       tags:
         - Leverage Loops
       summary: Submit a draft loop for suggestion generation
-      description: Moves the loop to `processing`, records usage and queues generation on the worker. A loop already past draft/submitted returns 409.
+      description: 'Moves the loop to `processing`, records usage and queues it for the worker, which files a Universe leverage loop over the caller''s contacts, polls it, stores the delivered package as a batch and walks the caller''s paths to each suggestion. The loop then reads `suggestion` with `batch_id` set (read it via `GET /suggestion-batches/{batch_id}`), or `failed` with a `failure_reason`. A failed loop may be dispatched again without a second usage charge. Universe keeps one job per loop, so this re-checks that job: it recovers a loop that timed out here but finished later in Universe, while one Universe itself failed stays failed (create a new loop instead). Any other loop past draft/submitted returns 409. A loop with no `person_id`, or a caller with no contacts, returns 400.'
       security:
         - bearerAuth: []
       responses:
@@ -8506,6 +8703,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LeverageLoopEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -8764,6 +8963,75 @@ paths:
                 $ref: '#/components/schemas/ListSuggestionNodesEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /suggestion-batches:
+    get:
+      operationId: listSuggestionFeed
+      tags:
+        - Suggestions
+      summary: List an organisation's live suggestions in one scope
+      description: 'The v2 suggestion feed: every suggestion from batches with status `complete` in the organisation, of one `suggestion_type` and optionally one beneficiary, newest batch first (`batch_seq` desc) and rank order inside a batch. Dismissed suggestions are hidden; ready and placeholder suggestions are returned alike, placeholders with a null `why` and empty arrays. The caller must be a current member of the organisation. Nodes on the page are hydrated for the caller. Keyset-paginated: pass `limit` and the previous page''s `meta.nextCursor`.'
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: organization_id
+          in: query
+          required: true
+          description: The local organisation whose suggestions to list.
+          schema:
+            type: string
+            format: uuid
+        - name: suggestion_type
+          in: query
+          required: true
+          description: One of `outcome`, `leverage_loop`, `leverage_outcome`, `serendipity`.
+          schema:
+            type: string
+        - name: beneficiary_contact_id
+          in: query
+          required: false
+          description: Narrow to one beneficiary's scope (a person entity id). Omit for every scope of the type.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSuggestionFeedEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /suggestion-batches/{batch_id}:
+    parameters:
+      - $ref: '#/components/parameters/BatchID'
+    get:
+      operationId: getSuggestionBatch
+      tags:
+        - Suggestions
+      summary: Inspect one stored batch of any status
+      description: One batch with every suggestion, dismissed ones included, for a member of its organisation. Partial and failed batches are served as stored and never presented as complete.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The batch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuggestionBatchEnvelope'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -10247,6 +10515,45 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /companies/brand-search:
+    get:
+      operationId: searchCompanyBrands
+      tags:
+        - Companies
+      summary: Search company names using Logo.dev
+      description: Returns name, domain and logo previews. Searching does not resolve IDs or create companies.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+            maxLength: 200
+          description: Company name. Fewer than two characters returns an empty list.
+      responses:
+        '200':
+          description: Ranked company candidates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CompanyBrand'
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
   /companies/url-lookup:
@@ -14780,6 +15087,142 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    XSyncRun:
+      type: object
+      required:
+        - id
+        - status
+        - include_dms
+        - followers_synced
+        - dm_events_synced
+        - error
+        - started_at
+        - completed_at
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: pending, running, completed, or failed.
+        include_dms:
+          type: boolean
+        followers_synced:
+          type: integer
+        dm_events_synced:
+          type: integer
+        error:
+          type:
+            - string
+            - 'null'
+          description: Failure reason; `reauth_required` when the user must reconnect.
+        started_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    XConnection:
+      type: object
+      required:
+        - connected
+        - reauth_required
+        - x_username
+        - dms_enabled
+        - last_synced_at
+        - current_run
+      properties:
+        connected:
+          type: boolean
+        reauth_required:
+          type: boolean
+          description: X rejected the stored grant; the user must reconnect.
+        x_username:
+          type:
+            - string
+            - 'null'
+        dms_enabled:
+          type: boolean
+        last_synced_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        current_run:
+          oneOf:
+            - $ref: '#/components/schemas/XSyncRun'
+            - type: 'null'
+    XConnectionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/XConnection'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateXConnectionRequest:
+      type: object
+      required:
+        - dms_enabled
+      properties:
+        dms_enabled:
+          type: boolean
+    XSyncRunEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/XSyncRun'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    StartXConnectRequest:
+      type: object
+      required:
+        - return_to
+      properties:
+        return_to:
+          type: string
+          description: Allowlisted frontend path the popup lands on after X.
+    StartXConnectResponse:
+      type: object
+      required:
+        - authorization_url
+        - expires_at
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+    StartXConnectEnvelope:
+      type: object
+      required:
+        - data
+        - error
+      properties:
+        data:
+          $ref: '#/components/schemas/StartXConnectResponse'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     TokenExchangeRequest:
       type: object
       required:
@@ -15566,7 +16009,7 @@ components:
         contacts_touched:
           type: integer
           format: int32
-          description: Contacts whose feed pointers were recomputed.
+          description: Contacts that gained a new activity in this run, summed across its attempts.
         contacts_created:
           type: integer
           format: int32
@@ -15574,9 +16017,11 @@ components:
         email_activities_written:
           type: integer
           format: int32
+          description: Email activities this run created, summed across its attempts and recorded when it parks or completes; ones already on record are not counted.
         calendar_activities_written:
           type: integer
           format: int32
+          description: Calendar activities this run created, summed across its attempts and recorded when it parks or completes; ones already on record are not counted.
         nylas_requests:
           type: integer
           format: int32
@@ -15971,9 +16416,15 @@ components:
           type: string
     Person:
       type: object
+      description: |
+        current_title, company and primary_location use the same names and
+        shapes as the person on GET /v1/contacts, and are null when unknown.
       required:
         - id
         - name
+        - current_title
+        - company
+        - primary_location
       properties:
         id:
           type: string
@@ -15984,6 +16435,18 @@ components:
           type:
             - string
             - 'null'
+        current_title:
+          type:
+            - string
+            - 'null'
+        company:
+          oneOf:
+            - $ref: '#/components/schemas/CompanyRef'
+            - type: 'null'
+        primary_location:
+          oneOf:
+            - $ref: '#/components/schemas/LocationRef'
+            - type: 'null'
         email_address:
           oneOf:
             - $ref: '#/components/schemas/EmailAddress'
@@ -16052,6 +16515,10 @@ components:
           type: array
           items:
             type: string
+          description: |
+            Message bodies, oldest-first. Each is the stored clean_message, else
+            the stored Nylas snippet; a message with neither is left out. Group
+            threads carry one entry per message_id.
     EmailFeedItem:
       allOf:
         - $ref: '#/components/schemas/FeedItemBase'
@@ -16070,6 +16537,8 @@ components:
       required:
         - event_id
         - status
+        - start_at
+        - end_at
       properties:
         event_id:
           type: string
@@ -16080,6 +16549,22 @@ components:
             - 'null'
         status:
           type: string
+        start_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: |
+            activities.event.start_at in UTC; null when the event record or the
+            value is missing. All-day events are stored at 00:00:00Z.
+        end_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: |
+            activities.event.end_at in UTC; null when the event record or the
+            value is missing. A single-day all-day event has end_at == start_at.
         event:
           description: Raw event record payload.
     EventFeedItem:
@@ -17102,6 +17587,11 @@ components:
         - funding_round
         - music_group
         - music_recording
+        - video_game
+        - game_series
+        - game_award
+        - stage_production
+        - stage_award
         - paths_to_person
         - paths_to_company
         - created_at
@@ -17168,6 +17658,31 @@ components:
             - 'null'
           additionalProperties: true
         music_recording:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        video_game:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_series:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_production:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_award:
           type:
             - object
             - 'null'
@@ -17648,6 +18163,22 @@ components:
           items:
             type: string
             format: uuid
+    NodeRef:
+      type: object
+      required:
+        - entity_type
+        - node_uuid
+      description: |
+        One graph entity to pin: the table it lives in (persons, companies,
+        film_tv, video_game, stage_production, ... — plain string, no enum) and
+        its row id, which is also the master graph's node id.
+      properties:
+        entity_type:
+          type: string
+          maxLength: 64
+        node_uuid:
+          type: string
+          format: uuid
     CreateCollectionRequest:
       type: object
       required:
@@ -17656,8 +18187,9 @@ components:
       description: |
         The owner comes from the session, not the body. team_id is optional:
         when present, the team's other members are added to the collection. The
-        node id lists are optional: any provided entities are pinned as nodes in
-        the same transaction (a bad id fails the whole create).
+        node lists are optional: any provided entities are pinned as nodes in
+        the same transaction (a bad ref fails the whole create). `nodes` is the
+        shape every kind uses; `person_ids` and `company_ids` remain as aliases.
       properties:
         title:
           type: string
@@ -17683,6 +18215,10 @@ components:
             - string
             - 'null'
           format: uuid
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeRef'
         person_ids:
           type: array
           items:
@@ -17693,26 +18229,6 @@ components:
           items:
             type: string
             format: uuid
-        company_funding_round_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        film_tv_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        film_tv_award_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        live_event_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
     CollectionResponse:
       type: object
       required:
@@ -17888,90 +18404,41 @@ components:
           format: uuid
         name:
           type: string
-    NodeCompany:
-      type: object
-      required:
-        - id
-      description: company enrichment of a company node (or a person's current company).
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type:
-            - string
-            - 'null'
-        logo:
-          type:
-            - string
-            - 'null'
-        domain:
-          type:
-            - string
-            - 'null'
-        tagline:
-          type:
-            - string
-            - 'null'
-        short_description:
-          type:
-            - string
-            - 'null'
-    NodeLocation:
-      type: object
-      required:
-        - id
-      description: A person's primary location.
-      properties:
-        id:
-          type: string
-          format: uuid
-        formatted_location:
-          type:
-            - string
-            - 'null'
-    NodePerson:
-      type: object
-      required:
-        - id
-        - name
-      description: person enrichment of a person node.
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        avatar:
-          type:
-            - string
-            - 'null'
-        current_title:
-          type:
-            - string
-            - 'null'
-        bio:
-          type:
-            - string
-            - 'null'
-        company:
-          $ref: '#/components/schemas/NodeCompany'
-        primary_location:
-          $ref: '#/components/schemas/NodeLocation'
     CollectionNode:
       type: object
       required:
         - id
         - collection_id
-        - label
         - rating
+        - added_by_user
         - assigned_to_me
+        - entity_type
+        - node_uuid
+        - node_targeted
+        - person
+        - company
+        - live_event
+        - film_tv
+        - film_tv_award
+        - funding_round
+        - music_group
+        - music_recording
+        - video_game
+        - game_series
+        - game_award
+        - stage_production
+        - stage_award
+        - paths_to_person
+        - paths_to_company
         - created_at
         - updated_at
       description: |
-        One node pinned to a collection. Exactly one entity is populated:
-        person / company carry a nested object; the graph-only
-        entities surface as bare ids (no backing table to enrich them).
+        One node pinned to a collection, in the shared node shape every feature
+        serves (the same objects a discover node carries) plus the row's own
+        fields. `node_uuid` is the entity's row id in the table `entity_type`
+        names, so exactly one entity object is non-null and the rest are null;
+        all of them are null for a pin whose entity no longer resolves. Paths
+        are the caller's stored relationship paths to the node.
       properties:
         id:
           type: string
@@ -17979,46 +18446,104 @@ components:
         collection_id:
           type: string
           format: uuid
-        label:
-          type: string
         rating:
           type: number
           format: double
         added_by_user:
-          $ref: '#/components/schemas/NodeUser'
+          oneOf:
+            - $ref: '#/components/schemas/NodeUser'
+            - type: 'null'
         assigned_to_me:
           type: boolean
           description: Whether this node is assigned to the authenticated user.
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+          format: uuid
+        node_targeted:
+          type: boolean
+        person:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        company:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        live_event:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        film_tv_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        funding_round:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_group:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        music_recording:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        video_game:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_series:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        game_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_production:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        stage_award:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+        paths_to_person:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        paths_to_company:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
         created_at:
           type: string
           format: date-time
         updated_at:
           type: string
           format: date-time
-        person:
-          $ref: '#/components/schemas/NodePerson'
-        company:
-          $ref: '#/components/schemas/NodeCompany'
-        funding_round_id:
-          type:
-            - integer
-            - 'null'
-          format: int32
-        film_tv_id:
-          type:
-            - integer
-            - 'null'
-          format: int32
-        film_tv_award_id:
-          type:
-            - integer
-            - 'null'
-          format: int32
-        live_event_id:
-          type:
-            - integer
-            - 'null'
-          format: int32
     ListCollectionNodesResponse:
       type: object
       required:
@@ -18058,12 +18583,17 @@ components:
       required:
         - collection_id
       description: |
-        Bulk-pin entities to a collection. Every list is optional; an empty
-        request is a no-op. master_* are UUIDs; the rest are bare graph ids.
+        Bulk-pin entities to a collection. `nodes` is the shape every kind uses;
+        `person_ids` and `company_ids` remain as aliases for the two kinds older
+        clients send. Every list is optional; an empty request is a no-op.
       properties:
         collection_id:
           type: string
           format: uuid
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeRef'
         person_ids:
           type: array
           items:
@@ -18074,26 +18604,6 @@ components:
           items:
             type: string
             format: uuid
-        company_funding_round_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        film_tv_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        film_tv_award_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
-        live_event_ids:
-          type: array
-          items:
-            type: integer
-            format: int32
     AddCollectionNodesResponse:
       type: object
       required:
@@ -19973,7 +20483,7 @@ components:
         id:
           type: string
           format: uuid
-    NodeCompany-2:
+    NodeCompany:
       type: object
       required:
         - id
@@ -20438,6 +20948,402 @@ components:
             - string
             - 'null'
           description: The MusicBrainz id.
+    VideoGame:
+      type: object
+      required:
+        - id
+        - name
+        - tags
+        - genres
+        - steam_app_ids
+      description: |
+        The video game a node points at, resolved via the node's permanent
+        games.video_game id UUID (the Universe Video_Game node). The card shows
+        image_url, name, first_release_year, description, the tags chips and
+        the developer. first_release_date is text with date_precision (day |
+        month | year) beside it, as the graph carries it.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        tags:
+          type: array
+          items:
+            type: string
+        genres:
+          type: array
+          items:
+            type: string
+        game_kind:
+          type:
+            - string
+            - 'null'
+          description: base_game, expansion, edition ... as the graph sends it.
+        first_release_date:
+          type:
+            - string
+            - 'null'
+        date_precision:
+          type:
+            - string
+            - 'null'
+        first_release_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        developer:
+          type:
+            - string
+            - 'null'
+        image_url:
+          type:
+            - string
+            - 'null'
+          description: The game's artwork on the Universe media host; null when the deployment has no media host configured.
+        wikidata_qid:
+          type:
+            - string
+            - 'null'
+        imdb_id:
+          type:
+            - string
+            - 'null'
+        mobygames_id:
+          type:
+            - string
+            - 'null'
+        igdb_slug:
+          type:
+            - string
+            - 'null'
+        steam_app_ids:
+          type: array
+          items:
+            type: string
+        source:
+          type:
+            - string
+            - 'null'
+    GameSeries:
+      type: object
+      required:
+        - id
+        - name
+        - developers
+      description: |
+        The game series a node points at, resolved via the node's permanent
+        games.game_series id UUID (the Universe Game_Series node). developers
+        is the graph's sorted developer-name projection, so the card needs no
+        join.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        series_kind:
+          type:
+            - string
+            - 'null'
+        wikidata_qid:
+          type:
+            - string
+            - 'null'
+        description:
+          type:
+            - string
+            - 'null'
+        developers:
+          type: array
+          items:
+            type: string
+        official_website:
+          type:
+            - string
+            - 'null'
+        image_url:
+          type:
+            - string
+            - 'null'
+        source:
+          type:
+            - string
+            - 'null'
+    GameAward:
+      type: object
+      required:
+        - id
+        - name
+      description: |
+        The game award entry a node points at (one nominee-entry result),
+        resolved via the node's permanent games.game_award id UUID. The card
+        shows game_image_url, category_label, award_body_label · award_year,
+        description, game_name and the result badge. game_name and
+        game_image_url are the awarded game's, read live from video_game.
+        award_body_label and category_label are the keys rendered as titles.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        award_body_key:
+          type:
+            - string
+            - 'null'
+        award_body_label:
+          type:
+            - string
+            - 'null'
+        ceremony_key:
+          type:
+            - string
+            - 'null'
+        category_key:
+          type:
+            - string
+            - 'null'
+        category_label:
+          type:
+            - string
+            - 'null'
+        award_entry_key:
+          type:
+            - string
+            - 'null'
+        award_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        subject_kind:
+          type:
+            - string
+            - 'null'
+        result:
+          type:
+            - string
+            - 'null'
+          description: winner or nominee; null while unresolved.
+        video_game_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        game_name:
+          type:
+            - string
+            - 'null'
+        game_image_url:
+          type:
+            - string
+            - 'null'
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        source:
+          type:
+            - string
+            - 'null'
+    StageProduction:
+      type: object
+      required:
+        - id
+        - title
+        - source_names
+        - source_urls
+      description: |
+        The stage production a node points at, resolved via the node's
+        permanent stage.stage_production id UUID (the Universe
+        Stage_Production node). The card shows poster_url, title, market,
+        description, the form and production_kind chips and opening_date.
+        Dates are ISO days (YYYY-MM-DD).
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        tagline:
+          type:
+            - string
+            - 'null'
+        form:
+          type:
+            - string
+            - 'null'
+          description: play, musical ...
+        production_kind:
+          type:
+            - string
+            - 'null'
+          description: original, revival ...
+        market:
+          type:
+            - string
+            - 'null'
+          description: broadway, west_end ...
+        season_label:
+          type:
+            - string
+            - 'null'
+        run_status:
+          type:
+            - string
+            - 'null'
+        official_website_url:
+          type:
+            - string
+            - 'null'
+        poster_url:
+          type:
+            - string
+            - 'null'
+        first_preview_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        opening_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        closing_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        accepted_credit_count:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        credit_coverage:
+          type:
+            - string
+            - 'null'
+        source_names:
+          type: array
+          items:
+            type: string
+        source_urls:
+          type: array
+          items:
+            type: string
+        source:
+          type:
+            - string
+            - 'null'
+    StageAward:
+      type: object
+      required:
+        - id
+        - name
+        - recipient_display_names
+        - production_titles
+      description: |
+        The stage award entry a node points at (one scoped award result on a
+        production), resolved via the node's permanent stage.stage_award id
+        UUID. The card shows poster_url, category_name, awarding_body ·
+        award_year, description, the recipient names and the outcome badge.
+        poster_url is the award's own copy, else the production's.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        awarding_body:
+          type:
+            - string
+            - 'null'
+        awarding_body_key:
+          type:
+            - string
+            - 'null'
+        award_year:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        category_name:
+          type:
+            - string
+            - 'null'
+        category_key:
+          type:
+            - string
+            - 'null'
+        outcome:
+          type:
+            - string
+            - 'null'
+          description: winner, nominee or honoree.
+        result_scope:
+          type:
+            - string
+            - 'null'
+        poster_url:
+          type:
+            - string
+            - 'null'
+        production_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        recipient_display_names:
+          type: array
+          items:
+            type: string
+        production_titles:
+          type: array
+          items:
+            type: string
+        source_url:
+          type:
+            - string
+            - 'null'
+        source:
+          type:
+            - string
+            - 'null'
     PathPerson:
       type: object
       required:
@@ -20577,8 +21483,9 @@ components:
       description: |
         One discover_node enriched with the entity it points at. entity_type
         names the joined table (persons | companies | film_tv | film_tv_award |
-        funding_rounds | music_group | music_recording |
-        live_events — plain string, no enum) and node_uuid is that table's row
+        funding_rounds | music_group | music_recording | live_events |
+        video_game | game_series | game_award | stage_production |
+        stage_award — plain string, no enum) and node_uuid is that table's row
         id; exactly one nested entity is present.
 
         node_uuid is also the node's id in the master graph — one value, so a
@@ -20602,7 +21509,7 @@ components:
         person:
           $ref: '#/components/schemas/ContextPerson'
         company:
-          $ref: '#/components/schemas/NodeCompany-2'
+          $ref: '#/components/schemas/NodeCompany'
         live_event:
           $ref: '#/components/schemas/LiveEvent'
         film_tv:
@@ -20615,6 +21522,16 @@ components:
           $ref: '#/components/schemas/MusicGroup'
         music_recording:
           $ref: '#/components/schemas/MusicRecording'
+        video_game:
+          $ref: '#/components/schemas/VideoGame'
+        game_series:
+          $ref: '#/components/schemas/GameSeries'
+        game_award:
+          $ref: '#/components/schemas/GameAward'
+        stage_production:
+          $ref: '#/components/schemas/StageProduction'
+        stage_award:
+          $ref: '#/components/schemas/StageAward'
         paths_to_person:
           type: array
           items:
@@ -20700,7 +21617,7 @@ components:
             - type: 'null'
         company:
           oneOf:
-            - $ref: '#/components/schemas/NodeCompany-2'
+            - $ref: '#/components/schemas/NodeCompany'
             - type: 'null'
         paths_to_person:
           type: array
@@ -20725,6 +21642,8 @@ components:
         - request_panel_title
         - request_header_title
         - modified
+        - batch_id
+        - failure_reason
         - leverage_loop_suggestions
         - leverage_loop_suggestion_count
         - created_at
@@ -20743,6 +21662,7 @@ components:
           description: Always `loop` on this surface.
         status:
           type: string
+          description: 'One of draft, submitted, processing, suggestion, failed, archived. `processing` means the worker is filing or polling the Universe loop; `suggestion` means the batch is stored; `failed` means the pull ended without suggestions: Universe failed it, it timed out here, or it could not be stored (see `failure_reason`). A failed loop can be dispatched again.'
         request_panel_title:
           type: string
         request_header_title:
@@ -20772,6 +21692,17 @@ components:
           description: Raw JSON (array of strings) or null.
         modified:
           type: boolean
+        batch_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The id Universe's package is stored under, reserved just before the store. Read the batch via `GET /suggestion-batches/{batch_id}` once `status` is `suggestion`; a `processing` or `failed` loop may carry an id whose batch was never stored. Null before delivery.
+        failure_reason:
+          type:
+            - string
+            - 'null'
+          description: Why the loop is `failed`, or what a `processing` loop is waiting on while it retries. Plain language, safe to show; technical causes stay in the server logs. Null otherwise.
         person:
           oneOf:
             - $ref: '#/components/schemas/ContextPerson'
@@ -20879,7 +21810,7 @@ components:
             - 'null'
         status:
           type: string
-          description: One of draft, submitted, processing, suggestion, archived.
+          description: '`archived` from any status, or `draft` / `submitted` while the loop is still a draft. Other values are rejected.'
         number_of_results:
           type: integer
           minimum: 1
@@ -20998,7 +21929,7 @@ components:
             - type: 'null'
         company:
           oneOf:
-            - $ref: '#/components/schemas/NodeCompany-2'
+            - $ref: '#/components/schemas/NodeCompany'
             - type: 'null'
         live_event:
           oneOf:
@@ -21023,6 +21954,26 @@ components:
         music_recording:
           oneOf:
             - $ref: '#/components/schemas/MusicRecording'
+            - type: 'null'
+        video_game:
+          oneOf:
+            - $ref: '#/components/schemas/VideoGame'
+            - type: 'null'
+        game_series:
+          oneOf:
+            - $ref: '#/components/schemas/GameSeries'
+            - type: 'null'
+        game_award:
+          oneOf:
+            - $ref: '#/components/schemas/GameAward'
+            - type: 'null'
+        stage_production:
+          oneOf:
+            - $ref: '#/components/schemas/StageProduction'
+            - type: 'null'
+        stage_award:
+          oneOf:
+            - $ref: '#/components/schemas/StageAward'
             - type: 'null'
         paths_to_person:
           type: array
@@ -21184,6 +22135,360 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/PageMeta'
+    SuggestionWhy:
+      type: object
+      required:
+        - headline
+        - body
+      properties:
+        headline:
+          type: string
+        body:
+          type: array
+          items:
+            type: string
+    SuggestionHook:
+      type: object
+      required:
+        - entity_type
+        - node_uuid
+        - angle
+        - text
+      properties:
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+          format: uuid
+        angle:
+          type: string
+        text:
+          type: string
+    SuggestionTrajectory:
+      type: object
+      required:
+        - ref
+        - rank
+        - connector_node_uuids
+        - body
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        connector_node_uuids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        body:
+          type: array
+          items:
+            type: string
+    SuggestionSequenceStep:
+      type: object
+      required:
+        - rank
+        - headline
+        - body
+        - trajectory_refs
+      properties:
+        rank:
+          type: integer
+        headline:
+          type: string
+        body:
+          type: array
+          items:
+            type: string
+        trajectory_refs:
+          type: array
+          items:
+            type: string
+    SuggestionEntity:
+      allOf:
+        - $ref: '#/components/schemas/Node'
+        - type: object
+          required:
+            - role
+          properties:
+            role:
+              type: string
+              description: The entity's role on this suggestion, e.g. `suggested`, `beneficiary`, `connector`, `target_org`.
+    SuggestionActionGroup:
+      type: object
+      required:
+        - ref
+        - rank
+        - trajectory_ref
+      properties:
+        ref:
+          type: string
+        rank:
+          type: integer
+        trajectory_ref:
+          type:
+            - string
+            - 'null'
+    SuggestionAction:
+      type: object
+      required:
+        - ref
+        - group_ref
+        - action_type
+        - rank
+        - label
+        - target_node_uuid
+        - params
+      properties:
+        ref:
+          type: string
+        group_ref:
+          type: string
+        action_type:
+          type: string
+          description: One of `make_intro`, `draft_email`, `draft_sms`, `create_task`, `leverage_loop`.
+        rank:
+          type: integer
+        label:
+          type: string
+        target_node_uuid:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        params:
+          type: object
+          additionalProperties: true
+          description: 'Typed by `action_type`, as delivered: `draft_email` has ordered `emails[]` and `draft.subject`/`draft.message`; `draft_sms` has ordered `mobile_phones[]` and `draft.message`; `make_intro` has `workflow`, `recipients[]` (each with `emails[]`) and `steps[]`; `create_task` has `due_in_days`; `leverage_loop` is `{}`.'
+    FeedSuggestion:
+      type: object
+      description: One stored suggestion with its batch context and hydrated nodes. `node` is the suggested entity's card in the shared node shape; `entities` are the registry entries in the same shape plus `role`. Nullable fields are present as null.
+      required:
+        - id
+        - batch_id
+        - batch_seq
+        - batch_status
+        - suggestion_request_id
+        - request_panel_title
+        - generated_at
+        - source_ref
+        - rank
+        - entity_type
+        - node_uuid
+        - content_status
+        - suggestion_mode
+        - badge
+        - why
+        - score
+        - key_people
+        - hooks
+        - trajectories
+        - suggested_sequencing
+        - entities
+        - action_groups
+        - actions
+        - paths_processing
+        - dismissed_at
+        - created_at
+        - node
+      properties:
+        id:
+          type: string
+          format: uuid
+        batch_id:
+          type: string
+          format: uuid
+        batch_seq:
+          type: integer
+        batch_status:
+          type: string
+          description: 'The owning batch''s status: `complete`, `partial` or `failed`. The feed only lists `complete`.'
+        suggestion_request_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: The request the batch answers; null for a batch delivered without one.
+        request_panel_title:
+          type: string
+          description: The request's user-editable title, shown as the row title in the outcomes panel. Empty when never set; edit it with `PATCH /v1/leverage-loops/{loop_id}` (`request_panel_title`).
+        generated_at:
+          type: string
+          format: date-time
+        source_ref:
+          type: string
+        rank:
+          type: integer
+        entity_type:
+          type: string
+          description: 'Table the suggested entity lives in: `persons`, `companies`, ...'
+        node_uuid:
+          type: string
+          format: uuid
+        content_status:
+          type: string
+          description: '`ready` or `placeholder`.'
+        suggestion_mode:
+          type:
+            - string
+            - 'null'
+        badge:
+          type:
+            - string
+            - 'null'
+        why:
+          oneOf:
+            - $ref: '#/components/schemas/SuggestionWhy'
+            - type: 'null'
+        score:
+          type: object
+          additionalProperties: true
+        key_people:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+            format: uuid
+        hooks:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: '#/components/schemas/SuggestionHook'
+        trajectories:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionTrajectory'
+        suggested_sequencing:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionSequenceStep'
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionEntity'
+        action_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionActionGroup'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestionAction'
+        paths_processing:
+          type: boolean
+          description: True while the caller's connection paths to the suggested entity are being built.
+        dismissed_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        node:
+          $ref: '#/components/schemas/Node'
+    ListSuggestionFeedEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedSuggestion'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SuggestionBatch:
+      type: object
+      required:
+        - id
+        - request_suggestion_id
+        - request_panel_title
+        - organization_id
+        - requested_by
+        - suggestion_type
+        - beneficiary_contact_id
+        - origin
+        - trigger_source
+        - batch_seq
+        - status
+        - schema_version
+        - suggestion_count
+        - generated_at
+        - ingested_at
+        - suggestions
+      properties:
+        id:
+          type: string
+          format: uuid
+        request_suggestion_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        request_panel_title:
+          type: string
+          description: The request's user-editable title; empty for a batch with no request or an unset title.
+        organization_id:
+          type: string
+          format: uuid
+        requested_by:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        suggestion_type:
+          type: string
+        beneficiary_contact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        origin:
+          type: string
+        trigger_source:
+          type:
+            - string
+            - 'null'
+        batch_seq:
+          type: integer
+        status:
+          type: string
+          description: '`complete`, `partial` or `failed`, as stored.'
+        schema_version:
+          type: integer
+        suggestion_count:
+          type: integer
+        generated_at:
+          type: string
+          format: date-time
+        ingested_at:
+          type: string
+          format: date-time
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedSuggestion'
+    SuggestionBatchEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/SuggestionBatch'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     Rebuild:
       type: object
       required:
@@ -22725,6 +24030,10 @@ components:
       properties:
         company_name:
           type: string
+        brand_selected:
+          type: boolean
+          default: false
+          description: Revalidate a selected Logo.dev brand and reject conflicting company identities before adding it.
         profile_urls:
           type: array
           maxItems: 10
@@ -22785,6 +24094,20 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    CompanyBrand:
+      type: object
+      required:
+        - name
+        - domain
+        - logo_url
+      properties:
+        name:
+          type: string
+        domain:
+          type: string
+        logo_url:
+          type: string
+          format: uri
     CompanyLookupRequest:
       type: object
       description: The signal for POST /companies/url-lookup.
@@ -22798,6 +24121,9 @@ components:
       type: object
       description: Company metadata; logo.dev and website previews have no canonical id until saved.
       properties:
+        brand_selected:
+          type: boolean
+          description: Logo.dev preview requiring brand validation on save.
         id:
           type:
             - string
@@ -23265,6 +24591,16 @@ components:
             - string
             - 'null'
           description: The acquirer as the enrichment provider names it.
+        acquired_ticker:
+          type:
+            - string
+            - 'null'
+          description: The acquirer stock symbol, including exchange when known (e.g. NASDAQ:ADBE).
+        acquired_date:
+          type:
+            - string
+            - 'null'
+          description: Acquisition date at source precision (YYYY, YYYY-MM, or YYYY-MM-DD).
         acquired_by_permalink:
           type:
             - string
@@ -23956,6 +25292,13 @@ components:
         format: uuid
     SuggestionID:
       name: suggestion_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BatchID:
+      name: batch_id
       in: path
       required: true
       schema:
