@@ -6,6 +6,10 @@ description: "Go implementation plan for deriving verified YouTube appearances f
 
 import BakeOffRules from '/snippets/bake-off-rules.mdx';
 
+<Danger>
+  **Updated for using JEV** — 2026-09-19. This phase includes the JEV decisions, prompts and synthetic response examples in the [unified build plan](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-integration-plan).
+</Danger>
+
 **Status: planned Go PR.** The 23 shared media/event/news/quota tables exist in development Universe AlloyDB; the social-ingestion tables and both runtime layers remain unimplemented. This phase runs in `orbiter-universe` after the YouTube slice of [Social S2](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#phase-s2) and [Media Phase 0](/guides/open-work/roadmap/media-co-occurrence/phase-0-foundations).
 
 <Note>
@@ -15,6 +19,14 @@ import BakeOffRules from '/snippets/bake-off-rules.mdx';
   evidence through `socialspub` and requests missing bounded hydration through
   that same seam.
 </Note>
+
+## JEV scope and acceptance
+
+Use [J03](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j03) for hostile-text screening; [J04](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j04)/[J05](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j05) for item/scope classification and extraction routing; [J06](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j06) for bounded hydration requests; and [J07](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j07) for optional passage selection. Use the generative extractor to produce candidates with locators, then [J08](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j08), [J09](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j09), [J10](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j10) and [J11](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j11) to judge participation, each role, occurrence and group membership separately.
+
+Evaluate [J12](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j12) person adjudication and [J13](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j13) episode/clip equivalence in shadow. [J15](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j15) selects an observed date field, [J16](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j16) assesses textual completeness, [J20](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j20) verifies individual source claims, and [J23](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j23) prioritizes material changes. Code still controls identity prerequisites, exact counts, date parsing and pair eligibility. Skip calls where structured source data already settles the decision.
+
+The appearances lane may call JEV through the shared Decisions client and its own quota reservation. It still sends **zero ScrapeCreators requests**; [J06](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-j06) can only ask socials to hydrate permitted details/transcripts. Add absent-host, sponsor, audience, dual-role, separate-segment, incomplete-inventory, clip/full-item and null-transcript-loop fixtures, plus invalid-response and baseline-fallback tests. Promote each decision only after the [per-call-site gates](/guides/open-work/orbiter-univers-standalone/social-media-enrichment#jev-evaluation-gates).
 
 ## PR boundary and handoff
 
@@ -29,7 +41,7 @@ This PR implements:
 - requests for missing detail/transcript artifacts through the social feature;
 - correction, expiry and retraction propagation into the existing media ledgers.
 
-It does not implement social URL classification, profile/feed refresh, provider cursors, raw provider storage, quota charging for provider calls, graph mutation or consumer publication. Those belong to Social S0–S2, [Media Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) and [Media Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication).
+It does not implement social URL classification, profile/feed refresh, provider cursors, raw social-provider storage, quota charging for social-provider calls, graph mutation or consumer publication. Those belong to Social S0–S2, [Media Phase 5](/guides/open-work/roadmap/media-co-occurrence/phase-5-graph-replay) and [Media Phase 6](/guides/open-work/roadmap/media-co-occurrence/phase-6-publication). JEV decisions are separately budgeted media calls under the contract above.
 
 ## Single-provider-owner contract
 
@@ -187,7 +199,7 @@ The consumer depends on a local `YouTubeEvidenceReader` interface. SQL repositor
 
 ## Acceptance tests
 
-- Social S2 writes channel videos and Shorts once; the media phase sends zero provider requests.
+- Social S2 writes channel videos and Shorts once; the media phase sends zero ScrapeCreators requests. Any enabled JEV decision has its own validated input, model-budget reservation and audit record.
 - A simultaneous detail request from social insights and media results in one leased hydration attempt.
 - One video with verified host and guest yields one appearance, one group and two memberships.
 - A sponsor or topic subject in the description yields no membership.
