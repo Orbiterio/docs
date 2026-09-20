@@ -1,0 +1,112 @@
+package calsync
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"time"
+)
+
+// Webhook is the Nylas v3 receiver. It does exactly two things synchronously:
+// verify the signature and write one queue row. Everything that talks to Nylas
+// happens in Drain, so the handler stays under Nylas's response deadline and a
+// Cloud Run scale-down can't lose work.
+//
+// Register with trigger_types:
+//   event.created, event.updated, event.deleted,
+//   calendar.created, calendar.updated, calendar.deleted,
+//   grant.expired, grant.updated
+type Webhook struct {
+	Secret string // webhook secret returned by POST /v3/webhooks
+	R      *Reconciler
+}
+
+type payload struct {
+	Type string `json:"type"`
+	Data struct {
+		Object struct {
+			ID            string   `json:"id"`
+			GrantID       string   `json:"grant_id"`
+			CalendarID    string   `json:"calendar_id"`
+			MasterEventID string   `json:"master_event_id"`
+			Recurrence    []string `json:"recurrence"`
+		} `json:"object"`
+	} `json:"data"`
+}
+
+func (w *Webhook) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// Registration challenge: Nylas GETs ?challenge=<token> and expects it echoed raw.
+	if req.Method == http.MethodGet {
+		_, _ = rw.Write([]byte(req.URL.Query().Get("challenge")))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+	if err != nil {
+		http.Error(rw, "read", http.StatusBadRequest)
+		return
+	}
+	if !w.verify(body, req.Header.Get("X-Nylas-Signature")) {
+		http.Error(rw, "bad signature", http.StatusUnauthorized)
+		return
+	}
+	var p payload
+	if err := json.Unmarshal(body, &p); err != nil {
+		http.Error(rw, "json", http.StatusBadRequest)
+		return
+	}
+	if err := w.route(req.Context(), p); err != nil {
+		// Non-2xx makes Nylas retry, which is what we want for a DB blip.
+		http.Error(rw, "queue", http.StatusInternalServerError)
+		return
+	}
+	rw.WriteHeader(http.StatusOK)
+}
+
+func (w *Webhook) verify(body []byte, sig string) bool {
+	mac := hmac.New(sha256.New, []byte(w.Secret))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(sig))
+}
+
+func (w *Webhook) route(ctx context.Context, p payload) error {
+	o := p.Data.Object
+	switch p.Type {
+	case "grant.expired":
+		// Drain skips expired grants; the UI reads status and shows a reconnect banner.
+		_, err := w.R.DB.Exec(ctx,
+			`update calendar_grant set status='expired', updated_at=now() where grant_id=$1`, o.GrantID)
+		return err
+
+	case "grant.updated":
+		// Re-auth. Flip back to valid and roll the horizon so the gap gets refilled.
+		if _, err := w.R.DB.Exec(ctx,
+			`update calendar_grant set status='valid', updated_at=now() where grant_id=$1`, o.GrantID); err != nil {
+			return err
+		}
+		return w.R.ExtendHorizon(ctx, o.GrantID)
+
+	case "calendar.created", "calendar.updated", "calendar.deleted":
+		// Calendars are few and cheap; fetch inline via a "single"-style item keyed on
+		// the calendar id with a distinct kind if you want them queued. Left as an
+		// exercise: calendar rows rarely change and don't gate rendering.
+		return nil
+
+	case "event.created", "event.updated", "event.deleted":
+		isSeries := o.MasterEventID != "" || len(o.Recurrence) > 0
+		target, kind, delay := o.ID, "single", time.Duration(0)
+		if isSeries {
+			kind = "series"
+			delay = 2 * time.Second // let the provider's burst finish landing
+			if o.MasterEventID != "" {
+				target = o.MasterEventID
+			}
+		}
+		return w.R.Enqueue(ctx, o.GrantID, o.CalendarID, target, kind, delay)
+	}
+	return nil
+}

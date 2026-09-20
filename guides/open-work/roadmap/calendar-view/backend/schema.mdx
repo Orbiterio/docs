@@ -1,0 +1,139 @@
+---
+title: "Calendar View — Backend Schema"
+sidebarTitle: "Schema"
+description: "The six-table AlloyDB mirror reference, scoped identity rules and production schema obligations before migration."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Webhook and queue](/guides/open-work/roadmap/calendar-view/backend/webhook) · [Reconciliation](/guides/open-work/roadmap/calendar-view/backend/reconciliation)
+
+The supplied `schema.sql` defines the read mirror and durable work/change ledgers. It is a reference DDL file, not an applied migration. [Download schema.sql as text](/assets/calendar-view/calendar-mirror/schema.sql.txt), or use the correctly named file in the [handoff ZIP](/assets/calendar-view/calendar-view-handoff.zip).
+
+## Table responsibilities
+
+| Table | Purpose | Consumer |
+| --- | --- | --- |
+| `calendar_grant` | User/provider binding, grant status and materialized window | Auth-scoped API reads and worker admission |
+| `calendar` | Calendar metadata, primary/read-only state and provider color | Left rail and event/calendar joins |
+| `calendar_event_master` | Recurrence rules and source snapshot for one series | Reconciliation; the client never expands RRULEs |
+| `calendar_event` | Flat singles and expanded occurrences | The event range endpoint |
+| `calendar_change` | Per-user change replay index, written with row mutations | SSE `since` replay |
+| `calendar_reconcile_queue` | Coalesced work per grant and target | `Drain` across worker replicas |
+
+The reference queue key is `(grant_id, target_id)`; for a recurring series, `target_id` is the master ID. Keep this coalescing identity. Generic control work and foreground commands need a collision-free target/kind design before adding them; they must not masquerade as event IDs.
+
+## Required schema work before migration
+
+1. **Identity scope:** provider IDs are not an assumed global tenant key. Prove their scope or use scoped internal uniqueness across grant/calendar/object, while preserving the public string `id` contract through an approved mapping. Every read, update, conflict handler and delete must be constrained to the authenticated owner and resolved grant/calendar. A collection keyed only by provider `id` needs the same collision proof.
+2. **Referential and value checks:** add appropriate owner/calendar/master FKs and interval integrity. The existing Go backend validates enum-like statuses/kinds/operations in service code; do not add SQL enum `CHECK` constraints contrary to that convention. Zero-duration `when.object=time` requires an explicit point-event rule; do not accidentally reject or hide it with a blanket strict interval check.
+3. **Queue ownership:** separate `run_after` from lease ownership/expiry; add a lease token and enqueue generation or equivalent fencing. Keep durable exhausted-work state, a due-work index and bounded retry metadata. An additional enqueue cannot shorten or steal an active lease.
+4. **Grant admission:** persist a grant-wide blocked-until value or equivalent shared reservation state. New enqueues and already claimed work must honor it after a 429. A blanket update to current queue rows is insufficient.
+5. **Coverage:** distinguish requested horizon from successfully materialized coverage. Store enough per-calendar/window progress to know that all pages and all jobs completed; a grant's UI-facing window is the safe covered interval, not merely the requested target.
+6. **Stream safety:** retain sufficient immutable change payload/revision data for replay, a commit-order-safe per-user cursor mechanism, retention/reset metadata and an initial snapshot/resume handshake. `bigserial` by itself supplies none of those guarantees. Keep row and change atomicity.
+7. **Read model:** implement range overlap, rather than start-within-window only, for timed multi-day events. Benchmark the supplied range index with the intended query and realistic data; an index name is not performance evidence. Use a separate all-day date interpretation consistent with the frontend contract.
+8. **Existing backend integration:** the inspected backend already owns `nylas_grants.calendars`, with internal UUIDs and `(external_id, grant_id)` uniqueness. Fit the mirror migration into that ownership model and preserve dependent widget consumers. Do not apply the standalone DDL or create a second grant owner without the migration/ID mapping decision in [QA07](/guides/open-work/roadmap/calendar-view/qa-review#qa07).
+
+The complete open decisions are tracked in [integration gates](/guides/open-work/roadmap/calendar-view/integration-gates). SQL changes belong to the backend implementation; the original file remains intact below.
+
+## Supplied schema
+
+<Accordion title="schema.sql — complete reference file">
+
+```sql
+-- Nylas v3 calendar mirror on AlloyDB.
+-- The UI never reads Nylas. It reads calendar_event, tails calendar_change over SSE,
+-- and writes through the Go API, which writes to Nylas and lets the webhook confirm.
+
+create table calendar_grant (
+  grant_id          text primary key,
+  user_id           uuid not null,
+  provider          text not null,                     -- google | microsoft | icloud | ...
+  status            text not null default 'valid',     -- valid | expired
+  expanded_from     timestamptz not null,              -- materialized recurrence window
+  expanded_through  timestamptz not null,
+  updated_at        timestamptz not null default now()
+);
+
+create table calendar (
+  id           text primary key,                        -- nylas calendar id
+  grant_id     text not null references calendar_grant,
+  user_id      uuid not null,
+  name         text not null,
+  hex_color    text,
+  is_primary   boolean not null default false,
+  read_only    boolean not null default false,
+  raw          jsonb not null,
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+
+-- One row per recurring series. Holds the RRULE/EXDATE lines for the tail beyond
+-- the materialized window; the UI never expands RRULEs itself.
+create table calendar_event_master (
+  id           text primary key,                        -- nylas master event id
+  grant_id     text not null,
+  calendar_id  text not null,
+  user_id      uuid not null,
+  recurrence   text[] not null,
+  raw          jsonb not null,
+  updated_at   timestamptz not null,
+  deleted_at   timestamptz
+);
+
+-- Flat occurrence table: singles and expanded recurrence instances side by side.
+-- This is the only table the calendar range endpoint touches.
+create table calendar_event (
+  id                text primary key,                   -- nylas event id (instance id for recurrences)
+  grant_id          text not null,
+  calendar_id       text not null,
+  master_event_id   text,                               -- null for single events
+  user_id           uuid not null,
+  title             text,
+  start_at          timestamptz not null,
+  end_at            timestamptz not null,
+  tz                text,                               -- provider tz of the event, for display of "3pm PT"
+  all_day           boolean not null default false,
+  status            text not null,                      -- confirmed | tentative
+  busy              boolean not null default true,
+  read_only         boolean not null default false,
+  participants      jsonb not null default '[]',        -- [{email,name,status,entity_id}]
+  raw               jsonb not null,
+  nylas_updated_at  timestamptz,
+  updated_at        timestamptz not null default now(),
+  deleted_at        timestamptz
+);
+create index calendar_event_range_idx
+  on calendar_event (user_id, start_at, end_at) where deleted_at is null;
+create index calendar_event_master_idx
+  on calendar_event (master_event_id) where master_event_id is not null;
+
+-- Append-only change log. The SSE stream tails it per user; `since=<seq>` is the
+-- reconnect cursor. Written in the same transaction as the row change.
+create table calendar_change (
+  seq       bigserial primary key,
+  user_id   uuid not null,
+  event_id  text not null,
+  op        text not null,                              -- upsert | delete
+  at        timestamptz not null default now()
+);
+create index calendar_change_user_idx on calendar_change (user_id, seq);
+
+-- Coalescing work queue. One row per (grant, target). A series edit lands as a burst
+-- of 2-3 webhooks; every enqueue pushes run_after out, so the burst collapses into a
+-- single reconcile. Lease-based so multiple Cloud Run replicas can drain it.
+create table calendar_reconcile_queue (
+  grant_id     text not null,
+  calendar_id  text not null,
+  target_id    text not null,                           -- event id (single) or master id (series)
+  kind         text not null,                           -- single | series
+  run_after    timestamptz not null,
+  attempts     int not null default 0,
+  primary key (grant_id, target_id)
+);
+create index calendar_reconcile_queue_due_idx on calendar_reconcile_queue (run_after);
+```
+
+</Accordion>
+
+## Acceptance
+
+Migration up/down and repository tests must cover scoped ID collisions, cross-user reads/deletes, repeated enqueue during a lease, grant backoff on new work, point/all-day/multi-day ranges, expired cursors and mirror/change rollback. Record table ownership and the approved DTO mapping before applying a migration to a live database.

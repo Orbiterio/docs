@@ -1,0 +1,86 @@
+---
+title: "Akira"
+sidebarTitle: "Overview"
+description: "Akira's proposed scope, implementation boundaries, related source-code inventory and open decisions."
+icon: "robot"
+---
+
+<Danger>
+**Spec only not implemented**
+</Danger>
+
+Akira is the proposed general-purpose Orbiter assistant. This page is the home for its scope and notes. Existing scoped chat features and an outcome-classification experiment provide possible building blocks; they do not establish an implemented or released Akira assistant.
+
+The Calendar View plan previously referred to “Akira” too loosely. Its assistant tools are a future integration dependency. The calendar mirror and ordinary day/week/month UI must ship independently of that work.
+
+## Scope and notes
+
+<CardGroup cols={2}>
+  <Card title="Source-code inventory" icon="code" href="/guides/open-work/roadmap/akira/source-inventory">
+    Where the existing scoped chat code lives, what it demonstrates, and what remains unimplemented or unverified.
+  </Card>
+  <Card title="Calendar capability" icon="calendar" href="/guides/open-work/roadmap/akira/calendar">
+    Five proposed calendar tools, shared mutation boundaries, build prerequisites and acceptance criteria.
+  </Card>
+  <Card title="JEV pilots and prompts" icon="filter" href="/guides/open-work/roadmap/akira/jev">
+    Optional intent-routing and evidence-support experiments, with prompts, synthetic responses and evaluation gates.
+  </Card>
+  <Card title="Earlier workshop" icon="file-lines" href="/guides/open-work/roadmap/akira-user-assistant">
+    Preserved August scope notes on delivery, memory, telemetry, learned workflows and costs.
+  </Card>
+</CardGroup>
+
+## Proposed product scope
+
+| Area | Proposed responsibility | Status |
+| --- | --- | --- |
+| User requests | Understand the user's goal, obtain missing information and select registered capabilities | Specification |
+| Tool execution | Use typed, authenticated application capabilities with explicit ownership, argument validation, idempotency and audit | Specification; individual product APIs may already exist |
+| Context | Read authorized person/company/relationship information and source-linked meeting context | Specification; scoped chat adapters exist, with identity migration gaps |
+| Calendar | List events, find availability, create/move through approved mutations, and navigate the calendar | Specification; see the dedicated capability page |
+| Memory | User-inspectable preferences and durable context with provenance, correction and deletion | Historical design notes; no Akira implementation verified |
+| Learned workflows | Potential per-user reusable workflows after repeated successful actions | Research/workshop scope |
+| JEV | Optional bounded classification where it measurably improves a baseline | Proposed pilots; not enabled or evaluated for Akira |
+| Evaluation | Correct tool choice, completed user outcomes, recovery, permissions, latency and total cost | Required before any implementation is called complete |
+
+A model can propose an action. Application code owns user identity, permissions, allowed tools, concrete arguments, recurring scope, quotas and side effects. Existing explicit intent and product approval rules apply; classifier confidence adds no authority.
+
+## Delivery model and earlier decisions
+
+The [2026-08-11 workshop](/guides/open-work/roadmap/akira-user-assistant) recorded a hybrid direction: an external MCP power surface and a bounded in-app Copilot, with a shared tool layer. It also recorded draft-and-deeplink email at v1, user-editable memory and separated factual telemetry from interpreted preferences.
+
+Those are historical specification decisions, not delivery evidence. Reconcile them with the current Go/UUID architecture and product naming before implementation. The workshop still contains Xano-era table/identifier assumptions; do not copy them into a new backend unchecked.
+
+## Implementation boundaries
+
+| Owner | Owns | Does not depend on |
+| --- | --- | --- |
+| Calendar View | Mirror, webhook/queue, dates, coverage, SSE, event collections, UI, direct user interactions and validated calendar writes | Akira or JEV |
+| Akira | Assistant conversation/orchestration, capability registration, source-grounded context, tool dispatch and optional JEV experiments | A model deciding calendar truth or permissions |
+| Shared application services | Authentication, ownership, people resolution, contact creation, authorized context and persistence | Assistant-generated identity or invented API fields |
+
+The Calendar plan links here for assistant scope. Its [Phase 6](/guides/open-work/roadmap/calendar-view/frontend/phase-6) is the calendar adapter task after Akira's required foundation is specified and implemented, not proof that a working Akira integration already exists.
+
+## Build sequence
+
+1. **Define the product and transport.** Confirm Akira versus scoped Copilot surfaces, the historical MCP direction, first capabilities and request/response contracts.
+2. **Inventory reusable pieces.** Review the [source inventory](/guides/open-work/roadmap/akira/source-inventory), inspect installed TanStack APIs, choose service ownership and resolve legacy numeric IDs versus Go UUIDs.
+3. **Implement the assistant foundation.** Establish the runtime, tool registry, server-side auth, bounded execution, cancellation, retries, audit and user-visible failure/unsupported states.
+4. **Add capabilities incrementally.** Reads first, then approved writes through the same application services as direct user actions. Calendar-specific requirements live on its capability page.
+5. **Evaluate optional classifiers.** Establish a functioning baseline before comparing JEV. A pilot can be rejected without blocking Akira or Calendar.
+6. **Prove readiness.** End-to-end accepted tasks, owner isolation, failure recovery, replay/idempotency, cost and latency evidence, plus a documented release decision.
+
+No step in this sequence has been executed by creating these documentation pages.
+
+## Open decisions
+
+- Which surface is named Akira, which remains Copilot, and which ships first?
+- Which capabilities are in the first release, with which read/write permissions and completion semantics?
+- How do current scoped chat features participate: reuse, adapter or separate runtime?
+- Where do UUID-compatible relationship context and per-claim provenance live?
+- Which historical memory, telemetry and learned-workflow proposals remain in scope after the Go migration?
+- What measured quality, time and cost baseline would justify either JEV pilot?
+
+## Related technical notes
+
+The existing [TanStack AI Chat plan](/guides/open-work/tanstack-ai-chat) documents scoped surfaces and dated QA/cutover records. Its status refers to that migration, not an Akira release. [Chat memory notes](/guides/open-work/tanstack-ai-chat-mem0), [mem0 scope](/guides/open-work/mem0-scope) and the earlier workshop remain source material; their historical implementation claims must be checked against the selected build branch.

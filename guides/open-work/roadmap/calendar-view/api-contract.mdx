@@ -1,0 +1,67 @@
+---
+title: "Calendar View — API Integration"
+sidebarTitle: "API integration"
+description: "The fixed Go route and DTO contract, mirror-to-client mapping and unresolved integration seams."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Complete frontend brief](/guides/open-work/roadmap/calendar-view/frontend/brief#2-1-api-contract) · [Open gates](/guides/open-work/roadmap/calendar-view/integration-gates)
+
+The supplied API routes and TypeScript types are the starting contract. Their complete verbatim definitions live in [brief sections 2.1–2.2](/guides/open-work/roadmap/calendar-view/frontend/brief#2-1-api-contract). Do not invent fields or endpoints to fill a UI need; record an API gap and keep the dependent feature behind a flag until the contract is amended.
+
+## Existing API versus the proposed contract
+
+The inspected Orbiter feature already serves `/v1/calendars`, a parameterless 14-day `/v1/calendar-events` feed, and `/v1/calendar-events/send-rsvp`. Its JSON responses use `{ data, error, meta }`, unwrapped by the existing frontend `backendFetch`; event data is grouped with provider-style `when` fields. These are not the new flat window/SSE DTOs. Phase 0 must approve concrete versioned routes, envelope/status handling, ID mapping, coexistence and migration before treating the supplied contract as implemented. See [QA02](/guides/open-work/roadmap/calendar-view/qa-review#qa02).
+
+RSVP exists in the older API, but its adapter into this new contract remains unspecified. Preserve the original brief and record an explicit amendment. Reused mutation paths also need the owner checks in [QA03](/guides/open-work/roadmap/calendar-view/qa-review#qa03). A JEV verdict cannot fill these gaps or add fields to `CalendarEvent`.
+
+## Route ownership
+
+| Route | Supplied response / behavior | Backend responsibility |
+| --- | --- | --- |
+| `GET /calendar/calendars` | `{ calendars: Calendar[] }` | Authorized calendar metadata from the mirror |
+| `GET /calendar/events?from=&to=` | `{ events: CalendarEvent[], window: { from, to } }` | Overlap query, complete authorized data for the declared covered window |
+| `POST /calendar/events` | `201 { event }`, real provider ID | Validated create command, provider completion and optimistic-ID replacement |
+| `PATCH /calendar/events/:id?scope=this\|following\|all` | `202 { event }` | Scoped command, provider reconciliation and normalized event response |
+| `DELETE /calendar/events/:id?scope=this\|following\|all` | `202` | Scoped delete command, then authoritative change delivery |
+| `POST /calendar/availability` | Body `emails[], from, to, durationMin`; response `slots[]` | Permission-aware availability via the provider worker owner |
+| `POST /calendar/window` | Body `through`; response/completion not specified | Coverage request, durable worker admission and eventual completion |
+| `GET /calendar/stream?since=` | Named SSE `change`; `ChangeEvent` union | Auth-scoped ordered replay and agreed cursor-reset behavior |
+| `GET /calendar/grants` | `grantId, provider, status` | Trusted grant state and reconnect presentation |
+
+All browser reads/writes go through this Go API. The supplied backend files implement only a mirror skeleton; they do not implement these HTTP routes, availability, write commands or SSE. Preserve the stated Drain-only provider boundary while specifying how command handlers obtain results and handle timeouts. A queue receipt cannot pretend to be a successful `201` response containing a real Nylas event ID.
+
+### Scheduling and invitation delivery
+
+Apply [Agenda and scheduling](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling#production-writes-go-through-nylas). Finalize the writable account/calendar and participant DTO, explicit Nylas notification query parameter, pending/confirmed states, retry deduplication and webhook reconciliation. The supplied read DTO and existing RSVP endpoint do not define event creation or invitations. Keep guest availability separate from the user's own cached open-time calculation.
+
+### Multiple connected accounts
+
+Follow the [left-panel account selector requirements](/guides/open-work/roadmap/calendar-view/navigation-and-cache#active-calendar-account-in-the-left-panel). `/calendar/grants` lacks an account email label; Phase 0 must approve a trusted adapter/join to the existing authenticated `/v1/nylas-grants` metadata or an explicit contract amendment. Distinguish the signed-in Orbiter owner, a connected grant and a calendar within that grant. Validate grant ownership, calendar membership and write capability together. The active UI selection cannot authorize a mutation or retarget an existing event/draft silently.
+
+## Mirror to DTO mapping
+
+| Stored/source field | Public field | Rule |
+| --- | --- | --- |
+| Scoped event identity | `id` | Keep the approved string identity and prove collision safety across loaded grants/calendars. |
+| `calendar_id`, `grant_id`, `master_event_id` | `calendarId`, `grantId`, `masterEventId` | Map explicitly; preserve null master for singles. |
+| `start_at`, `end_at`, `tz`, `all_day` | `startAt`, `endAt`, `tz`, `allDay` | ISO UTC; all-day values are date encodings, not viewer-local instants. |
+| `title` | `title: string` | Source can be null; ratify normalization without making the client invent a title. |
+| Source status / tombstone | `confirmed\|tentative` or delete | Cancelled records never appear as live `CalendarEvent`; emit the defined delete shape. |
+| Participants plus enrichment | `participants[].entityId?` | Resolve through the existing trusted people flow; it runs outside the mirror network/SQL critical path and emits a valid row change. |
+| Permitted source detail | `location?`, `conferencing?` | Present in the public DTO but absent from the supplied Go struct/columns; add explicit mapping from validated provider data. |
+| Mirror row revision timestamp | `updatedAt` | Define update/ordering semantics; it is not automatically a globally safe SSE cursor. |
+| `hex_color` | `hexColor` | Provider data is validated and transformed through an approved styling adapter; components still use design-system tokens. |
+
+Never expose raw provider JSON, credentials or another user's private event data as a convenience DTO. Read-only calendars and events are enforced at the server as well as in drag/resize UI. Availability permissions do not follow merely from knowing an attendee's email.
+
+## Optimistic writes and authoritative confirmation
+
+Human actions and Akira tools share collection mutation handlers. The client can paint a local optimistic change immediately, but a later provider-confirmed stream row wins. A failed write rolls back only its own pending operation and offers a retry; it must not undo a newer remote update.
+
+Creation replaces a temporary ID with the approved server row. Test the case where SSE arrives before the create response so one event cannot become two chips. Mutation body types, idempotency/retry rules, errors, recurrence split identities, conflicts and operation correlation are absent from the source contract and must be agreed under [G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06). Do not smuggle operation IDs into the fixed DTO.
+
+## Client state and time
+
+Maintain one collection-backed source of truth, five derived hooks and a bounded load-window store. View changes and navigation inside the loaded window make zero requests. Distinguish loaded client data from complete server materialization. A horizon request's acknowledgement alone cannot make a range available.
+
+Schema-check DTOs, deduplicate/upsert streamed changes through verified installed direct-write APIs, and protect them from stale refetch responses. For all-day values, retain date semantics. For timed values, use Temporal and the user's timezone. The 24-hour visual-grid requirement needs an explicit repeated/missing-hour policy for DST; never assume every local day lasts 24 elapsed hours.

@@ -1,0 +1,136 @@
+---
+title: "Calendar View — Build-plan QA"
+sidebarTitle: "Build-plan QA"
+description: "Source-inspection findings, existing Orbiter integration differences and release-blocking calendar fixes."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) · [Integration gates](/guides/open-work/roadmap/calendar-view/integration-gates)
+
+## Review verdict
+
+**The documentation is a usable implementation plan; the supplied backend is not ready to copy into production.** Resolve the blocking findings below before live integration. JEV has two optional text-classification pilots and no role in fixing calendar correctness.
+
+This 2026-09-19 pass reviewed the supplied SQL/Go files, the complete frontend brief and phase prompts, and selected current Orbiter integration paths. Frontend local HEAD was `b884f386`; backend local HEAD was `3aae647`, both on `work/contacts-outcome-chat`. The listed symbols refer to the inspected working files, which may include local changes. This does not establish deployed behavior.
+
+## Findings and required fixes
+
+<a id="qa01" />
+
+### QA01 — P1: missing single event can panic instead of being deleted
+
+**Evidence:** supplied `calendar-mirror/reconcile.go`, `ReconcileSingle`. `GetEvent` can return `nil, ErrNotFound`. The later `tx, err := r.DB.BeginTx(...)` reuses `err`; a successful begin sets it to nil. The subsequent `errors.Is(err, ErrNotFound)` test is now false, and evaluation reaches `e.Status` on the nil event.
+
+**Required correction:** preserve the fetch outcome separately, handle missing events explicitly, and only dereference a non-nil event. In the delete path, write the scoped tombstone and change record atomically, then acknowledge the correct queue generation.
+
+**Proof:** fake provider returns `nil, ErrNotFound` and transaction creation succeeds; assert no panic, the expected scoped delete/change, and correct acknowledgement. Also test begin failure, cancelled event, nil/malformed successful response and ordinary provider failure. This is a source-inspection finding; no Go test has been run in this documentation pass.
+
+<a id="qa02" />
+
+### QA02 — P1: the new contract differs from the existing calendar API
+
+**Evidence:** backend `api/calendars.openapi.yaml`, `internal/features/calendars/handler.go` and `service.go`; frontend `src/features/events/api/use-calendars.ts` and `use-widget-events.ts`.
+
+The existing feature exposes `/v1/calendars`, a parameterless `/v1/calendar-events` feed covering the next 14 days, and `/v1/calendar-events/send-rsvp`. Its event response is grouped by calendar with provider-style `when` and snake_case fields. The new brief specifies nine `/calendar/...` routes, flat camelCase events, arbitrary windows and SSE. These are different contracts.
+
+The backend's existing JSON transport uses `{ data, error, meta }`; the frontend's `backendFetch` unwraps that envelope. Treat the brief's shapes as proposed application DTOs until the concrete versioned paths, envelope adapter, status codes and OpenAPI are approved together. In particular, reconcile its delete `202` with the repository's no-payload response convention. SSE needs its own wire contract; do not JSON-envelope the event stream.
+
+**Required correction:** add an explicit migration/adapter plan that preserves existing widget consumers while introducing the new mirror contract. Port Nylas reads and RSVP commands to the chosen worker boundary; the current service performs them directly and does not satisfy the new Drain-only design. This plan does not authorize renaming the source contract silently.
+
+**Proof:** contract fixtures cover both the legacy widget and new calendar, including envelope unwrapping, owner scoping, current field mappings, provider failure and all-day spans.
+
+<a id="qa03" />
+
+### QA03 — P1: authentication is not enough for reused mutation paths
+
+**Evidence:** `calendars.Module.RegisterHTTP` requires WorkOS auth. However, the inspected `sendRSVP` handler forwards body grant/event/calendar IDs without passing a resolved owner to `Service.SendRSVP`; that service directly calls Nylas. `updatePreference` similarly forwards a calendar UUID to a query whose predicate is only `WHERE id = $1`.
+
+**Required correction:** before reusing either path, bind the authenticated owner to the grant/calendar/event, validate writable state and permitted operation, and scope the repository/provider command accordingly. Do not interpret an authenticated request or a valid provider ID as ownership. This identifies missing checks in the inspected call chain, not a live exploitation test.
+
+**Proof:** owner A cannot read or mutate owner B's calendar by supplying known IDs, a foreign grant, or a recurring target. Test RSVP, preference changes and each new write route. JEV cannot supply or replace these checks.
+
+<a id="qa04" />
+
+### QA04 — P1: person identifiers and relationship hooks need an adapter
+
+**Evidence:** frontend `src/features/events/schemas/calendar-event.ts` distinguishes Go `email_address.person_id` UUID strings from legacy numeric Xano `email_data.person_id`. `src/features/tanstack-ai-chat/server/tool-registry.server.ts` still validates positive numeric `master_person_id` for its relationship/shared-context tools.
+
+**Required correction:** define the approved UUID-compatible person/context contract before fulfilling the brief's “reuse existing resolver” requirement. Do not parse a UUID as a legacy number, guess identity from an email/name, or let JEV choose the mapping. Inspect the actual contact-create route and relationship read adapter together. Read-only meeting context must not accidentally invoke an interview or relationship-write operation.
+
+**Proof:** resolved UUID participant, unresolved email, same-name different people, missing bridge, revoked source access and mixed legacy/new data. No cross-person context or invented `entityId`.
+
+<a id="qa05" />
+
+### QA05 — P2: the existing widget adapter intentionally drops all-day events
+
+**Evidence:** `src/features/events/api/use-widget-events.ts`, `adaptEvent`, returns null when `start_time` or `end_time` is absent. The old row shape requires numeric times. That is incompatible with the new calendar's all-day and multi-day requirements.
+
+**Required correction:** implement the new Temporal-based DTO adapter and view selectors; do not reuse that filter or the widget's 14-day policy as calendar coverage. Preserve date semantics and the documented exclusive end. Keep the original all-day extra-day correction in [G08](/guides/open-work/roadmap/calendar-view/integration-gates#g08).
+
+**Proof:** Google/Microsoft single-day and multi-day fixtures survive normalization and render in all three views across timezone offsets and DST. No date classification call is needed.
+
+<a id="qa06" />
+
+### QA06 — P2: the brief assumes dependencies that are not declared
+
+**Evidence:** the inspected frontend `package.json` declares `@tanstack/ai` 0.38.0 and `@tanstack/react-virtual` 3.14.13. It does not declare `@tanstack/react-db`, `@tanstack/query-db-collection` or `temporal-polyfill`.
+
+**Required correction:** Phase 0 must record the package/lockfile inventory, choose compatible versions for missing dependencies and then inspect their actual installed `.d.ts` APIs before application code. A package.json declaration is not proof of an installed API. Do not substitute a remembered direct-write method or quietly use the existing UI date picker/calendar library.
+
+**Proof:** dependency/version decision plus exact installed export signatures; meaningful integration tests for collection refetch, direct writes and optimistic rollback.
+
+<a id="qa07" />
+
+### QA07 — P2: reuse the existing storage owner and service validation rules
+
+**Evidence:** backend `migrations/20260610220004_nylasgrants_004_calendars.sql` already creates `nylas_grants.calendars` with an internal UUID, owner, provider grant, external calendar ID and uniqueness on `(external_id, grant_id)`. The backend's contributor rules put enum-like validation in Go services rather than new SQL enum `CHECK` constraints.
+
+**Required correction:** choose how the new event mirror references that owner and calendar identity. Do not create an unrelated second grant/calendar store merely by applying the supplied standalone SQL. Use service validators for status/kind/operation vocabularies, while retaining appropriate relational and interval integrity. Map IDs explicitly into the new string-keyed collections.
+
+**Proof:** migration review, duplicate provider-ID fixtures across grants, rollback compatibility and service validation tests.
+
+<a id="qa08" />
+
+### QA08 — P2: existing RSVP support does not complete the new brief
+
+**Evidence:** `use-send-rsvp.ts` and the backend OpenAPI already define `event_id, calendar_id, grant_id, status`. The new brief contains no RSVP route or write DTO. The old optimistic update compares `participant.email` to `event.calendar_id`, which is not a reliable identity test.
+
+**Required correction:** amend the new contract or provide an explicit approved adapter; use the authenticated attendee identity and scoped event keys. Do not copy the old optimistic target condition. Notes editing remains a separate missing contract.
+
+**Proof:** accepting/declining updates exactly the signed-in attendee, rolls back only that operation on failure, and respects newer SSE state. Other attendees and same-ID events in another grant remain unchanged.
+
+<a id="qa09" />
+
+### QA09 — P2: JEV infrastructure exists, but Calendar pilots are new
+
+**Evidence:** the inspected frontend outcome router already supports `jev_first`, finite response validation and model fallback. The backend also has a Decisions client. Neither establishes an implemented Akira assistant, a Calendar intent taxonomy, calendar-local dispatch or a meeting-claim citation contract. [Akira is spec only, not implemented](/guides/open-work/roadmap/akira); the existing source inventory is documented separately there.
+
+**Required correction:** choose one server-side owner, reuse its transport pattern, and add separate Calendar prompts/evaluation only if useful. Avoid a second global router and do not copy the outcome confidence floor. Keep both pilots off by default. [Akira JEV assessment and complete prompt examples](/guides/open-work/roadmap/akira/jev).
+
+**Proof:** the pilot's held-out evaluation, disabled/error-path tests and no calendar performance regression. No live JEV decision was made by this review.
+
+## Previously identified blockers retained
+
+The earlier plan correctly required explicit lease/generation fencing, conditional acknowledgements, whole-grant 429 admission, immutable commit-ordered SSE replay, snapshot/cursor handoff, complete paginated coverage, provider-exclusive all-day end dates and defined write/recurring-scope contracts. Those requirements remain in [G01–G11](/guides/open-work/roadmap/calendar-view/integration-gates); JEV does not reduce them.
+
+## Build order after QA
+
+1. **Phase 0:** approve ownership, migration/transport adapters, person-ID bridge, missing dependency versions, SSE protocol and write DTOs. Decide which optional JEV pilots are worth evaluating.
+2. **Backend implementation:** close QA01–QA03 and the queue/SSE/coverage blockers; port the reference into the existing module architecture instead of installing it as a parallel service.
+3. **Phases 1–4:** build the deterministic fixture, collections and custom UI. The calendar must work with both JEV pilots disabled.
+4. **Phase 5:** implement approved context/RSVP adapters. J02 remains a shadow experiment until per-claim sources exist.
+5. **Phase 6:** after the Akira foundation is implemented, integrate the five proposed typed Calendar tools. J01 can shadow their semantic routing; deterministic arguments, identity and write policy stay authoritative.
+6. **Phase 7:** report measured performance, source/contract regressions and each optional pilot's benefit. Defer a pilot that adds cost or latency without better outcomes.
+
+## Verification record
+
+| Check | Status of this documentation QA |
+| --- | --- |
+| Supplied code and brief reviewed against selected current application paths | Complete; findings above |
+| Four original supplied files and original eight prompts | Preserved; corrections are separate addenda |
+| Proposed JEV requests/responses | Synthetic, schema/label/distribution checked; not live results |
+| Documentation build, links and static downloads | Checked separately from application readiness |
+| Backend compilation, migrations and ownership/concurrency tests | Not run |
+| Calendar UI implementation, provider backfill and performance budgets | Not run |
+| JEV quality, speed and cost claims on Calendar data | Not measured; pilots remain disabled |
+
+The handoff ZIP includes `QA-REVIEW.md`, `INTEGRATION-GATES.md` and `JEV.md` beside the unchanged extracted frontend brief. Phase prompts must be read with these addenda; copying only the original four files would omit the corrections discovered here.

@@ -1,0 +1,91 @@
+---
+title: "Akira — Calendar Capability"
+sidebarTitle: "Calendar capability"
+description: "Proposed assistant tools for Calendar View, their prerequisites, ownership and acceptance criteria."
+---
+
+<Danger>
+**Spec only not implemented**
+</Danger>
+
+[Akira](/guides/open-work/roadmap/akira) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Calendar integration phase](/guides/open-work/roadmap/calendar-view/frontend/phase-6)
+
+This page owns the assistant scope formerly embedded in Calendar View's build notes. The original supplied phase prompt is preserved in the [Calendar source brief](/guides/open-work/roadmap/calendar-view/sources) for provenance. The planned tools below are not registered calendar capabilities in the inspected scoped-chat code.
+
+## Proposed tool contract
+
+| Tool | Planned arguments | Behavior and prerequisites |
+| --- | --- | --- |
+| `list_events` | `{ from, to }` | Read approved event collections; report whether the requested range is fully loaded and materialized |
+| `find_availability` | `{ emails, from, to, durationMin }` | Use the approved Go availability contract; provider work follows Calendar's worker boundary |
+| `create_event` | `{ title, start, end, attendees, calendarId }` | Reuse the approved insert mutation; resolve attendees and writable calendar, validate time range and intent |
+| `move_event` | `{ id, start, end, scope }` | Reuse the approved update mutation; require event identity, read/write access and explicit recurrence scope |
+| `focus_range` | `{ from, to }` | Navigate/highlight the calendar; no provider write |
+
+These names and shapes come from the supplied Calendar brief. They are proposals pending the API/mutation decisions in [Calendar G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06). Do not invent missing DTO fields. Delete and RSVP are not additional tools in this five-tool phase.
+
+The initial in-app integration can use client-side handlers so validated actions update collections immediately. Provider calls and credentials remain behind authenticated server services. An external MCP host cannot directly read the browser's TanStack collections; a future MCP calendar capability needs its own approved service contract over the same domain behavior.
+
+## Shared behavior with direct user actions
+
+Human and assistant writes use the same mutation and provider-command path. Temporary-ID replacement, recurring scope, read-only rejection, rollback, SSE confirmation and idempotency apply to both. After a successful create/move, select the affected chip and reveal its agenda row without changing unrelated calendar data.
+
+A request to find availability is not a request to book. An explicit “find 30 minutes with Avery next week and book it” request can include both operations, but unresolved identity, dates, scope or stale availability must be resolved before execution. Model confidence does not replace those requirements.
+
+Dates, overlaps, durations, timezone conversion and availability are deterministic code/provider work. An event description or retrieved note cannot grant action authority. Use the registered argument schema and existing application intent/approval rules at dispatch.
+
+## Shared date input
+
+The [NL Date Picker](/guides/open-work/roadmap/calendar-view/nl-date-picker) is an independent shared component specification for natural-language and manual date/time input. A future Akira adapter may supply a proposed operation to the same validation/preview contract; it cannot bypass unresolved date choices or the host's write rules. Its J03 mention-selection pilot is separate from Akira intent routing.
+
+## Meeting context
+
+The desired detail panel can show authorized participant information, relationship context and what happened at a previous meeting. The inspected Go calendar uses UUID person identifiers; the older relationship tools accept numeric IDs. Resolve the [context adapter gap](/guides/open-work/roadmap/calendar-view/qa-review#qa04) before reuse.
+
+The optional [J02 evidence-support pilot](/guides/open-work/roadmap/akira/jev#j02) requires admitted, source-linked claims. It cannot invent missing context, join people by name, write relationship facts or substitute for a UUID bridge.
+
+## Optional JEV routing
+
+[J01](/guides/open-work/roadmap/akira/jev#j01) may classify a request into one simple calendar operation, `compound`, or `unknown`. It is a future shadow experiment after the assistant has a working baseline dispatcher. The scoped outcome router is a candidate implementation reference, not an existing calendar router.
+
+The pilot must replace measurable routing work to be worthwhile. Keep direct UI actions outside it. Multi-step requests remain with the approved planner; model errors and uncertain output use the baseline behavior. No JEV network call belongs in Calendar's mirror, SSE or rendering path.
+
+## Prerequisites
+
+1. Akira's runtime/surface, server identity, supported-tool registry and cancellation/failure semantics are specified and implemented.
+2. Calendar's mirror, completed coverage, range API and collection layer exist.
+3. Create/move/availability request schemas, provider command completion, recurrence and idempotency rules are approved.
+4. Existing mutation owner checks, all-day normalization and UUID context gaps from the [QA review](/guides/open-work/roadmap/calendar-view/qa-review) are closed.
+5. Installed TanStack AI client/server tool APIs are inspected; browser and server responsibilities are documented explicitly.
+
+## Build prompt
+
+```text
+Read the Akira overview, source inventory and Calendar capability spec, then
+Calendar BRIEF.md, QA-REVIEW.md and INTEGRATION-GATES.md. Treat Akira as
+specification-only until its runtime and dispatcher are implemented and tested.
+
+Implement the five proposed calendar tools only after their prerequisite
+contracts exist. Preserve their names and map arguments into approved DTOs.
+Reuse the same event queries/mutations as direct user actions. Validate owner,
+read-only state, dates, participant identity, recurring scope and write intent.
+No direct Nylas access from the browser.
+
+For a controlled booking fixture, prove one availability call and one insert,
+with the resulting event selected and visible. Test unknown participants,
+incomplete coverage, stale slots, read-only calendars, recurring events,
+cancellation, duplicate requests and provider failure.
+
+JEV is optional and off by default. If selected for evaluation, use the J01/J02
+prompts and held-out gates in JEV.md; do not call the outcome classifier an
+implemented Akira calendar router or treat illustrative responses as evidence.
+Report unresolved prerequisites rather than inventing contracts.
+```
+
+## Acceptance
+
+- A repeatable end-to-end booking fixture meets the one-availability/one-insert expectation; retries do not create duplicates.
+- Calendar's ordinary views and direct interactions work with Akira unavailable.
+- Tool errors leave no false success, ghost booking, broadened series edit or cross-user data.
+- Selection and agenda feedback work at the Calendar screenshot sizes and keyboard focus remains usable.
+- Any JEV pilot reports measured benefit independently; it can be deferred without blocking the calendar capability.

@@ -1,0 +1,65 @@
+---
+title: "Calendar View — Phase 1: Data layer and fixture"
+sidebarTitle: "Phase 1: Data layer and fixture"
+description: "Build deterministic fixtures, live collections, window state, replay and optimistic mutations against the fixed calendar contract."
+---
+
+[Phase 0](/guides/open-work/roadmap/calendar-view/frontend/phase-0) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 2](/guides/open-work/roadmap/calendar-view/frontend/phase-2)
+
+Build deterministic fixtures, live collections, window state, replay and optimistic mutations against the fixed calendar contract.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Preserve one owner-scoped store/stream across active grant switches. Keep coverage for availability-selected calendars across accounts even when hidden from display; no false free gaps or covered-switch refetch.
+Apply docs/calendar/PERFORMANCE.md to one shared store, visible-range-first loading, bounded 60-day warm-up, incremental changes and cache retention. Measure requests, payload/ingestion, delta latency and lifecycle counts; do not hide partial coverage.
+Read docs/calendar/NAVIGATION-AND-CACHE.md and implement G14 with the data layer. Warm the proposed 60-day forward range, union it with visible-range margins, migrate widget and calendar consumers to one normalized store, and own one stream in the shared session lifecycle. Test more than 50 events per calendar, all-day rows, partial pages, reload/replay and no duplicate feed requests.
+Keep the deterministic 5,000-event performance fixture unchanged. If Phase 0 selected a JEV pilot, add a separate synthetic Decisions fixture and disabled/timeout/429/malformed/unknown mocks. No live calendar data or provider calls are needed. Prove JEV cannot alter row identity, sync, cursor state or writes.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Paste-ready phase prompt
+
+```text
+Implement section 3 of docs/calendar/BRIEF.md.
+Deliverables:
+- fixtures/calendar/generate.ts producing the section 5.1 fixture from a seed, plus an MSW
+  handler set that serves the API contract (2.1) from that fixture, including an SSE endpoint
+  that emits a scripted sequence of ChangeEvents.
+- src/features/calendar/store: window store, calendarsCollection, eventsCollection.
+- src/features/calendar/queries.ts: the five hooks in 3.2.
+- src/features/calendar/realtime.ts: EventSource lifecycle, since cursor, reconnect, 410 handling.
+- src/features/calendar/mutations.ts: collection handlers with optimistic rollback and the
+  recurring scope parameter.
+- src/features/calendar/layout/packDay.ts with property-based tests (fast-check), written first.
+Definition of done:
+- vitest green, including a test that navigating inside the window issues zero fetches and one
+  that an SSE upsert updates a live query result without a refetch.
+- A short REPORT.md: what you verified against the installed types, anything you guessed.
+No UI in this phase beyond a scratch page that renders counts.
+```
+
+## Integration requirements
+
+- Apply the [navigation and shared-cache addendum](/guides/open-work/roadmap/calendar-view/navigation-and-cache) and close the phase-specific requirements in [G14](/guides/open-work/roadmap/calendar-view/integration-gates#g14).
+- Freeze and record the seed, PRNG, anchor date, timezone and generator version. Report a fixture hash and counts for all 5,000 events; the recurring, participant, all-day and multi-day categories may overlap.
+- Resolve snapshot/replay ordering and the native EventSource recovery design before claiming gap-free SSE. Test overlapping fetches and SSE updates, duplicate replay, remount/reload, expired cursors and updates that arrive while an optimistic mutation is pending.
+- Keep loaded ranges separate from backend coverage. Exercise failed and partial window loads without marking them complete. Zero network requests inside the loaded window must be measured.
+- Use approved write DTOs and verified installed collection APIs. Mocks may expose unresolved backend behavior, but must not turn it into a claimed production contract.
+
+Read the related gates: [G03](/guides/open-work/roadmap/calendar-view/integration-gates#g03), [G04](/guides/open-work/roadmap/calendar-view/integration-gates#g04), [G05](/guides/open-work/roadmap/calendar-view/integration-gates#g05), [G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06), [G09](/guides/open-work/roadmap/calendar-view/integration-gates#g09), [G10](/guides/open-work/roadmap/calendar-view/integration-gates#g10).
+
+## Acceptance evidence
+
+Fixture manifest, counts and hash; meaningful Vitest/property tests; raw fetch counts; scripted SSE results; `REPORT.md` naming verified types and remaining assumptions.
+
+[Phase 0](/guides/open-work/roadmap/calendar-view/frontend/phase-0) · [Phase 2](/guides/open-work/roadmap/calendar-view/frontend/phase-2)

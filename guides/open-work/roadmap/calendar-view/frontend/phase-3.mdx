@@ -1,0 +1,61 @@
+---
+title: "Calendar View — Phase 3: Month view and agenda panel"
+sidebarTitle: "Phase 3: Month view and agenda panel"
+description: "Add no-scroll month paging, a context-rich agenda List and a visual Timeline with linked selection. The original prompt below is preserved, with the current requirements taking precedence."
+---
+
+[Phase 2](/guides/open-work/roadmap/calendar-view/frontend/phase-2) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 4](/guides/open-work/roadmap/calendar-view/frontend/phase-4)
+
+Add no-scroll month paging, a context-rich agenda List and a visual Timeline with linked selection. The original prompt below is preserved, with the current requirements taking precedence.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Apply confirmed A01/A02: meeting rows come from the active account, free gaps include conflicts across the availability-selected calendars. Show neutral Busy on another calendar intervals in Timeline without adding those meetings to the active-account list.
+Apply docs/calendar/PERFORMANCE.md: use its month-paging replacement for source budget slot 5, preserve the other eight limits, and measure warm context List/Timeline open/switch, the explicit 500-record agenda slice and complete-coverage free gaps.
+Read docs/calendar/AGENDA-AND-SCHEDULING.md. It supersedes infinite/virtualized month scrolling and the 30-screen month-scroll gate in the preserved prompt: fit 4–6 week rows without scrolling and page by calendar month. Implement context-rich agenda List plus Timeline/open gaps; keep agenda virtualization and its 500-record gate.
+Read docs/calendar/NAVIGATION-AND-CACHE.md. Wire single-zero to open the shared agenda on today without leaving the current workspace view. Retain List/Timeline mode and contact/company panel sizing. Derive open-time gaps from complete shared calendar coverage; cancellations do not block time, and incomplete or failed ranges must not appear free.
+Use the new all-day-capable adapter and approved UUID context bridge. Keep the agenda chronological and virtualization deterministic. Defer semantic reranking unless an independently approved candidate-pool contract and evaluation justify it; do not add a new endpoint.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Paste-ready phase prompt
+
+```text
+Implement sections 4.3 and 4.5 (list state only) of docs/calendar/BRIEF.md.
+- Month rows and the agenda list are virtualized with @tanstack/react-virtual.
+- Month view spanning bars for multi-day and all-day events are laid out before single events.
+- Agenda rows resolve participant entityIds through the existing people resolver hook;
+  unresolved emails render as plain rows. Do not add a new resolver.
+- Hover linking between agenda rows and grid chips in both directions.
+Definition of done:
+- 30-screen month scroll recording with no dropped frames (Playwright trace).
+- Agenda mount timing with 500 rows.
+- Screenshots as before, plus a critique line.
+```
+
+## Integration requirements
+
+- Apply [Agenda and scheduling](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling); its explicit month-navigation, agenda-mode and scheduler requirements supersede conflicting source instructions.
+- Apply the [navigation and shared-cache addendum](/guides/open-work/roadmap/calendar-view/navigation-and-cache) and close the phase-specific requirements in [G14](/guides/open-work/roadmap/calendar-view/integration-gates#g14).
+- Use the same collections and fixture as the day/week views. Report the count of mounted rows while scrolling and separate virtualized DOM size from the 500 agenda records used for the mount gate.
+- Verify multi-day and all-day bars across month and timezone boundaries. Hover and selection must remain coherent when a related row or chip is outside the virtualized viewport.
+- Inspect and reuse the existing people resolver. If that hook is absent or incompatible, record the gap before proposing another endpoint or resolver.
+- Record month-paging/overflow traces covering four-, five- and six-row months, agenda mount timing, both viewport sizes and both themes. The original 30-screen month-scroll check is superseded. End the visual review with one named removal.
+
+Read the related gates: [G07](/guides/open-work/roadmap/calendar-view/integration-gates#g07), [G08](/guides/open-work/roadmap/calendar-view/integration-gates#g08), [G10](/guides/open-work/roadmap/calendar-view/integration-gates#g10), [G11](/guides/open-work/roadmap/calendar-view/integration-gates#g11).
+
+## Acceptance evidence
+
+Month-paging/overflow trace, frame data, 500-record context-agenda mount timing, mounted-row counts, screenshots and removal critique.
+
+[Phase 2](/guides/open-work/roadmap/calendar-view/frontend/phase-2) · [Phase 4](/guides/open-work/roadmap/calendar-view/frontend/phase-4)

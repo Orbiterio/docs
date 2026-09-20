@@ -1,0 +1,91 @@
+-- Nylas v3 calendar mirror on AlloyDB.
+-- The UI never reads Nylas. It reads calendar_event, tails calendar_change over SSE,
+-- and writes through the Go API, which writes to Nylas and lets the webhook confirm.
+
+create table calendar_grant (
+  grant_id          text primary key,
+  user_id           uuid not null,
+  provider          text not null,                     -- google | microsoft | icloud | ...
+  status            text not null default 'valid',     -- valid | expired
+  expanded_from     timestamptz not null,              -- materialized recurrence window
+  expanded_through  timestamptz not null,
+  updated_at        timestamptz not null default now()
+);
+
+create table calendar (
+  id           text primary key,                        -- nylas calendar id
+  grant_id     text not null references calendar_grant,
+  user_id      uuid not null,
+  name         text not null,
+  hex_color    text,
+  is_primary   boolean not null default false,
+  read_only    boolean not null default false,
+  raw          jsonb not null,
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz
+);
+
+-- One row per recurring series. Holds the RRULE/EXDATE lines for the tail beyond
+-- the materialized window; the UI never expands RRULEs itself.
+create table calendar_event_master (
+  id           text primary key,                        -- nylas master event id
+  grant_id     text not null,
+  calendar_id  text not null,
+  user_id      uuid not null,
+  recurrence   text[] not null,
+  raw          jsonb not null,
+  updated_at   timestamptz not null,
+  deleted_at   timestamptz
+);
+
+-- Flat occurrence table: singles and expanded recurrence instances side by side.
+-- This is the only table the calendar range endpoint touches.
+create table calendar_event (
+  id                text primary key,                   -- nylas event id (instance id for recurrences)
+  grant_id          text not null,
+  calendar_id       text not null,
+  master_event_id   text,                               -- null for single events
+  user_id           uuid not null,
+  title             text,
+  start_at          timestamptz not null,
+  end_at            timestamptz not null,
+  tz                text,                               -- provider tz of the event, for display of "3pm PT"
+  all_day           boolean not null default false,
+  status            text not null,                      -- confirmed | tentative
+  busy              boolean not null default true,
+  read_only         boolean not null default false,
+  participants      jsonb not null default '[]',        -- [{email,name,status,entity_id}]
+  raw               jsonb not null,
+  nylas_updated_at  timestamptz,
+  updated_at        timestamptz not null default now(),
+  deleted_at        timestamptz
+);
+create index calendar_event_range_idx
+  on calendar_event (user_id, start_at, end_at) where deleted_at is null;
+create index calendar_event_master_idx
+  on calendar_event (master_event_id) where master_event_id is not null;
+
+-- Append-only change log. The SSE stream tails it per user; `since=<seq>` is the
+-- reconnect cursor. Written in the same transaction as the row change.
+create table calendar_change (
+  seq       bigserial primary key,
+  user_id   uuid not null,
+  event_id  text not null,
+  op        text not null,                              -- upsert | delete
+  at        timestamptz not null default now()
+);
+create index calendar_change_user_idx on calendar_change (user_id, seq);
+
+-- Coalescing work queue. One row per (grant, target). A series edit lands as a burst
+-- of 2-3 webhooks; every enqueue pushes run_after out, so the burst collapses into a
+-- single reconcile. Lease-based so multiple Cloud Run replicas can drain it.
+create table calendar_reconcile_queue (
+  grant_id     text not null,
+  calendar_id  text not null,
+  target_id    text not null,                           -- event id (single) or master id (series)
+  kind         text not null,                           -- single | series
+  run_after    timestamptz not null,
+  attempts     int not null default 0,
+  primary key (grant_id, target_id)
+);
+create index calendar_reconcile_queue_due_idx on calendar_reconcile_queue (run_after);

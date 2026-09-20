@@ -1,0 +1,250 @@
+# Calendar View: Frontend Build Brief
+
+Read QA-REVIEW.md, INTEGRATION-GATES.md and JEV.md in this directory before
+each phase. Sections 1–6 below preserve the original supplied brief; the
+addenda record required corrections and existing application integration gaps.
+Akira is spec only, not implemented. Its Phase 6 tools are a future dependency.
+JEV has two optional shadow pilots; the base calendar must work independently
+of Akira and with both pilots off.
+For the separate shared date-input extension, also read NL-DATE-PICKER.md.
+It records the proposed standalone-picker library amendment and optional J03;
+the original sections below remain unchanged.
+Use the phase pages in Mintlify for the additional QA/JEV phase instructions.
+Also read NAVIGATION-AND-CACHE.md before Phases 0–3. It adds Cmd-K and top-left
+Calendar View navigation, 0 / 0 0 shortcuts, and the proposed shared 60-day
+forward warm window. Its navigation and minimum-preload amendments take
+precedence over the preserved source; all-day, coverage and replay gates remain.
+Also read AGENDA-AND-SCHEDULING.md. It supersedes infinite month scrolling and
+the simple agenda list: no-scroll month paging, context List plus Timeline,
+date/range scheduling, contact search/direct-email guests, and real Nylas writes
+with invitation delivery are the current requirements. The original source
+sections below are retained as reference, not as overrides of these decisions.
+
+Read PERFORMANCE.md before every phase. It defines the effective nine-slot
+performance matrix (only obsolete month scrolling is replaced), P01-P08,
+benchmark profiles, cache limits and raw evidence required from the build agent.
+All thresholds are unmeasured release targets; no implementation is claimed.
+
+The active-account amendment in NAVIGATION-AND-CACHE.md adds the left-panel
+Calendar account selector and per-account New events in destination. Switching
+shows that account's events and defaults new drafts to it. FREE / OPEN checks
+all calendars selected for availability across connected accounts. Existing
+drafts/events keep their reviewed identity; a local grant switch never resets
+the signed-in owner's shared event store or stream. A01/A02 are confirmed.
+
+## 1. Product frame
+
+This is the operator's day with Orbiter context attached to every meeting. The grid answers "what is my week"; the agenda panel answers "who am I about to see, how do I know them, what happened last time." The calendar is a surface for the graph, not a standalone scheduling app.
+
+Primary user: a media / tech / finance operator with 20 to 40 meetings a week across two or three connected calendars.
+
+Primary job: scan the week in under two seconds, open any meeting and see the people in it as Orbiter knows them, move things around without thinking about it.
+
+## 2. Hard constraints
+
+These are fixed. If a task seems to require breaking one, stop and report instead of working around it.
+
+- Framework: React 19, TanStack Router (file routes), TanStack Query, TanStack DB, TanStack Virtual, TanStack AI (Akira). Existing app conventions win where this brief is silent.
+- No calendar libraries. No FullCalendar, react-big-calendar, Schedule-X, or anything that owns its own event state or DOM. The grid is ours.
+- No `moment`, `dayjs`, `date-fns`. Use `Temporal` via `temporal-polyfill` and `Intl.DateTimeFormat`. Never do day-boundary arithmetic on `Date`.
+- All reads go through the Go API below. All writes go through the Go API. The client never calls Nylas.
+- Design tokens come from the Orbiter design system package. If a token is missing, add it there; do not inline hex values in components.
+- Verify every TanStack DB and TanStack AI API name against the installed package version before using it. Do not rely on memory of the API.
+
+### 2.1 API contract
+
+```
+GET    /calendar/calendars                       -> { calendars: Calendar[] }
+GET    /calendar/events?from=<iso>&to=<iso>      -> { events: CalendarEvent[], window: { from, to } }
+POST   /calendar/events                          -> 201 { event }            (server returns the Nylas id)
+PATCH  /calendar/events/:id?scope=this|following|all -> 202 { event }
+DELETE /calendar/events/:id?scope=this|following|all -> 202
+POST   /calendar/availability                    body { emails[], from, to, durationMin } -> { slots: [{ start, end }] }
+POST   /calendar/window                          body { through: <iso> }     (extend the materialized recurrence horizon)
+GET    /calendar/stream?since=<seq>              SSE: event "change", data ChangeEvent
+GET    /calendar/grants                          -> { grants: [{ grantId, provider, status: 'valid'|'expired' }] }
+```
+
+Writes are acknowledged optimistically by the server (it writes to Nylas, the webhook confirms). A `PATCH` may be followed by a `change` event with the same id and slightly different content (provider normalization); the client must treat the stream as authoritative.
+
+### 2.2 Types
+
+```ts
+type CalendarEvent = {
+  id: string
+  calendarId: string
+  grantId: string
+  masterEventId: string | null
+  title: string
+  startAt: string            // ISO 8601, UTC
+  endAt: string              // ISO 8601, UTC; all-day events are [00:00, 00:00 next day) in UTC
+  tz: string | null          // provider tz of the event, for "3:00 PM PT" hints
+  allDay: boolean
+  status: 'confirmed' | 'tentative'
+  busy: boolean
+  readOnly: boolean
+  participants: Array<{
+    email: string
+    name?: string
+    status: 'yes' | 'no' | 'maybe' | 'noreply'
+    entityId?: string        // resolved Orbiter entity; UI resolves avatar/name/title from this alone
+  }>
+  location?: string
+  conferencing?: { provider: string; url: string }
+  updatedAt: string
+}
+
+type Calendar = {
+  id: string
+  grantId: string
+  name: string
+  hexColor: string | null
+  isPrimary: boolean
+  readOnly: boolean
+}
+
+type ChangeEvent =
+  | { seq: number; op: 'upsert'; event: CalendarEvent }
+  | { seq: number; op: 'delete'; id: string }
+```
+
+## 3. Data layer
+
+### 3.1 Collections
+
+- `calendarsCollection`: query collection, key `id`, eager, loaded once per session.
+- `eventsCollection`: query collection, key `id`, schema-validated (zod). Its `queryFn` reads the current load window from a window store and fetches `/calendar/events?from&to`. Extending the window updates the store and calls the collection's refetch; the query collection diffs old vs new so rows are updated in place, never cleared.
+- Window policy: keep `[visibleStart - 4 weeks, visibleEnd + 4 weeks]` loaded. Navigating inside the window costs zero network requests. Crossing the edge extends by 8 weeks in that direction. If the requested `to` exceeds the server's materialized horizon (`window.to` in the response), call `POST /calendar/window` first.
+
+### 3.2 Live queries (one hook each, all in `features/calendar/queries.ts`)
+
+- `useCalendars()`
+- `useEventsInRange(from, to)`: sorted by `startAt`, excludes cancelled, joins calendar color.
+- `useDayEvents(day)`: thin wrapper over the above, memoized per day key.
+- `useAgenda(from, limit)`: forward-looking, sorted, for the side panel.
+- `useEvent(id)`
+
+Views are derived from the same collection. Switching day / week / month never refetches.
+
+### 3.3 Realtime
+
+One `EventSource` per session, opened after the first successful load with `since` = last seen `seq` (persisted in `sessionStorage`). Apply changes with the query collection's direct-write utilities (upsert / delete) rather than invalidating. On reconnect, replay from `since`; on a 410 from the server (cursor too old) do a full refetch of the window.
+
+### 3.4 Mutations
+
+Collection `onInsert` / `onUpdate` / `onDelete` handlers call the API. Optimistic state applies instantly; on failure the collection rolls back and a toast names what failed and offers retry.
+
+Recurring events: any mutation on an event with `masterEventId` opens a scope dialog (This event / This and following / All events) before the API call. Default focus on "This event." Scope maps to the `scope` query param.
+
+Create returns the real id from the server. Replace the temporary optimistic row with the server row on success.
+
+### 3.5 Derived layout data
+
+`packDay(events: CalendarEvent[], day): PositionedEvent[]` is a pure function. Interval-graph column packing: sort by start then longest first, assign columns greedily, compute `column / columnCount` per cluster of overlapping events. Output has `top`, `height`, `left`, `width` as fractions. Memoize per day key on the day's event slice so editing one event re-runs packing for one day only.
+
+## 4. UI spec
+
+### 4.1 Layout
+
+Full viewport, no page scroll. Three regions plus a top bar.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ‹ ›  Today   Sep 14 – 20, 2026        [Day|Week|Month]        ⌘K   ⚙   │ 48px
+├──────────┬────────────────────────────────────────────────┬──────────────┤
+│ mini     │ all-day row                                    │ Agenda       │
+│ month    ├────────────────────────────────────────────────┤              │
+│          │      Mon 14   Tue 15   Wed 16   Thu 17  Fri 18 │ Today        │
+│ Calendars│  9 ─ ┌──────┐         ┌─────────┐              │  10:00 Board │
+│ ● Work   │      │ 1:1  │         │ Pitch   │              │  12:30 Lunch │
+│ ● Personal 10 ─ └──────┘ ┌────┐  │ review  │              │              │
+│ ● Shared │             │Call│  └─────────┘   ═══now═══   │ Tomorrow     │
+│          │ 11 ─         └────┘                            │  09:00 …     │
+│ Connect  │                                                │              │
+│ calendar │                                                │              │
+└──────────┴────────────────────────────────────────────────┴──────────────┘
+  240px            flexible                                     360px
+```
+
+- Left rail: 240px, collapsible to 0 (persist in localStorage). Mini month (click a day to navigate, keyboard-navigable), calendar list with color swatch and visibility toggle, expired-grant warning with "Reconnect" if any grant is `expired`, "Connect calendar" at the bottom.
+- Main: the active view.
+- Agenda panel: 360px default, resizable 320 to 480, collapsible. Details in 4.5.
+- Top bar: prev / next, Today, current range title (tabular figures), view control, search (⌘K opens the app's existing command palette with a calendar scope), settings (start of week, hour density, default view, 12/24h).
+
+### 4.2 Week and day views
+
+- Hour gutter 56px, 48px per hour by default (density setting: 40 / 48 / 64). 24 hours rendered; initial scroll positions 8:00 near the top, or the current hour when viewing today.
+- All-day row at top, grows to fit up to 3 rows then "+n more."
+- Now-line: a 2px line across today's column with a small dot in the gutter; updates every minute. Today's column header is the one deliberate visual accent in the grid.
+- Columns are absolutely positioned. Event chips are absolutely positioned inside their column from `packDay` output; `top` and `height` are computed from `startAt` / `endAt` in the user's tz.
+- Chip content by height: under 24px shows title only on one line; 24 to 48px shows title and time; over 48px adds an avatar stack (max 3, then "+n") resolved from participant `entityId`s. Left edge carries a 3px bar in the calendar's color; chip background is a low-alpha tint of the same color.
+- Tentative events use a dashed left bar. `readOnly` events don't show drag handles.
+- Day view: one column; chips are wide enough to show participant names inline after the avatar stack.
+
+### 4.3 Month view
+
+- Six-week grid, virtualized by week row with TanStack Virtual so infinite vertical scroll through months is smooth. Row height fixed at 120px (density-scaled).
+- Each cell lists chips (time + title, single line) up to the cell's capacity, then "+n more" which opens a popover listing the rest.
+- Multi-day and all-day events render as spanning bars across cells in a row, laid out first, single events below them.
+- Clicking a day number switches to day view for that date.
+
+### 4.4 Interactions
+
+- Click an empty slot: quick-create popover anchored to the slot. Fields: title (autofocus), time range (pre-filled, editable as text), calendar select (defaults to primary writable calendar), attendee typeahead over Orbiter contacts (returns `entityId` + email). Enter saves, Esc cancels.
+- Drag on empty grid: creates a range, then the same popover.
+- Drag a chip: moves it. Resize from top or bottom edge. Snap to 15 minutes. During drag, move a ghost with CSS `transform` only; no React commit until pointerup. On drop, commit through the collection mutation. Cross-day drag in week view is allowed.
+- Keyboard: `t` today, `d` / `w` / `m` views, `←` / `→` previous / next period, `j` / `k` move selection through events, `Enter` open, `n` new event at the next free 30-minute slot, `Esc` close / cancel, `⌘K` search.
+- Selection: a selected chip gets a 2px ring in the calendar color; the agenda panel switches to its detail.
+
+### 4.5 Agenda panel
+
+Two states, list and detail, with a back affordance.
+
+List: forward-looking from now, grouped by day with sticky day headers ("Today", "Tomorrow", then weekday and date). Each row: start time in tabular figures, title, avatar stack, and a one-line context string when available ("Last met 3 weeks ago" or "Intro via Jason"). Virtualized. Hovering a row highlights its chip in the grid; hovering a chip scrolls the row into view. Clicking a row selects the event.
+
+Detail: title, when (with tz hint if the event tz differs from the user's), calendar, conferencing join button (primary action if the meeting is within 15 minutes), participants as Orbiter people cards (avatar, name, title, company, "How I know X" line resolved via `entityId`; unresolved emails show as plain rows with an "Add to Orbiter" affordance), location, notes. Actions: edit, delete, RSVP. Editing opens the same fields as quick-create, inline.
+
+Empty state for the list: "Nothing scheduled after this. Press n to add something." No illustration.
+
+### 4.6 Design direction
+
+- Quiet, dense, operator-grade. The grid is the interface; chrome stays out of the way.
+- One bold move: today. Today's column header and the now-line are the only saturated elements. Everything else is calendar tints on a neutral surface.
+- Type: the app's existing sans, tabular figures everywhere a time or date appears. No all-caps labels, no eyebrow text, no monospace for numbers.
+- Grid lines are hairlines at low contrast; hour labels sit in the gutter aligned to the line, not centered in the row.
+- No cards, no drop shadows on chips, no gradients. Popovers get one small shadow.
+- Motion only in response to an action: popover open, chip settling after drop, panel state change. Nothing animates on load. Respect `prefers-reduced-motion`.
+- Copy: sentence case, plain verbs, buttons say what they do ("Save event", "Delete series"). Errors say what failed and what to do.
+- Dark mode via tokens, not overrides.
+
+## 5. Performance budgets
+
+Measured with the fixture from 5.1 in a production build on a mid-range laptop (throttle CPU 4x in DevTools for the frame budgets). Numbers are gates, not goals.
+
+### 5.1 Fixture
+
+`fixtures/calendar/generate.ts` produces a deterministic seed: 5,000 events over 26 weeks, 8 calendars, 12% recurring instances sharing 60 masters, 15% with 4 or more participants, 5% all-day, 3% multi-day. Also a "dense day" with 40 overlapping events for the packing test.
+
+### 5.2 Gates
+
+| Measure | Gate |
+|---|---|
+| Week view first render after data is in the collection | under 50ms scripting |
+| Navigate one week inside the loaded window | 0 network requests, under 16ms commit |
+| Switch week to month to day | 0 network requests |
+| Drag frame time | under 8ms, zero React commits during drag |
+| Month scroll | no dropped frames over 30 screens |
+| Edit one event | only that day's column re-renders (React Profiler) |
+| Agenda list mount, 500 rows | under 30ms |
+| Calendar route chunk | under 120kB gzipped |
+| `packDay` on the dense day | under 1ms |
+
+## 6. Guardrails
+
+- If you reach for a calendar or date library, stop. Report why the existing approach felt insufficient and wait.
+- Do not invent API fields or endpoints. If the contract lacks something you need, list it under "API gaps" in your report and stub it behind a flag.
+- Write `packDay` test-first with property-based tests (no two positioned events in a cluster overlap; every event gets a column; `width * columnCount ≈ 1`).
+- Before using any TanStack DB or TanStack AI export, open `node_modules/@tanstack/*/dist/*.d.ts` and confirm the name and signature.
+- Take a Playwright screenshot of each view at 1440x900 and 1920x1080 at the end of every phase and attach it to the report. Critique it: name one thing to remove.
+- Never call `new Date()` for day boundaries or tz math. `Temporal.Now.zonedDateTimeISO(userTz)` is the only clock.
+- Keep every component under 200 lines. Split by responsibility (layout, grid, chip, agenda, popover), not by view.

@@ -1,0 +1,64 @@
+---
+title: "Calendar View — Phase 2: Shell, week and day views"
+sidebarTitle: "Phase 2: Shell, week and day views"
+description: "Render the quiet calendar shell, packed event columns and timezone-aware day/week views, then measure them."
+---
+
+[Phase 1](/guides/open-work/roadmap/calendar-view/frontend/phase-1) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 3](/guides/open-work/roadmap/calendar-view/frontend/phase-3)
+
+Render the quiet calendar shell, packed event columns and timezone-aware day/week views, then measure them.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Add the left-rail Calendar account selector (email/provider/status) and New events in destination. Account switching filters calendar/linked agenda events and defaults future drafts; preserve date/view. Keep identity accessible with a collapsed rail.
+Apply docs/calendar/PERFORMANCE.md to covered navigation, render isolation, day packing, code splitting and shortcut dispatch. Report first render, commits, requests and total incremental bundle bytes.
+Read docs/calendar/NAVIGATION-AND-CACHE.md and implement its navigation contract: Cmd-K > Navigation > Calendar View, top-left icon switcher, and one 400 ms controller for 0 versus 0 0. Preserve the shared header on the calendar route. Dispatch single-zero to the shared today-agenda action; Phase 3 completes that panel. Test focus exclusions, repeat, timing and no agenda flash on double-zero.
+Apply the QA all-day and dependency corrections. No JEV calls belong in the shell, grid, now-line, layout, date conversion or loaded-window navigation. Preserve every rendering and screenshot gate.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Paste-ready phase prompt
+
+```text
+Implement sections 4.1, 4.2 and 4.6 of docs/calendar/BRIEF.md against the Phase 1 data layer
+and fixture. Left rail and agenda panel can be empty containers with the correct dimensions
+and collapse behavior; the mini month should work.
+Rules:
+- Grid and chips are absolutely positioned from packDay output. No per-cell components in a
+  CSS grid.
+- Now-line updates on a 60s interval and on visibility change.
+- All time math through Temporal in the user's tz; tests cover DST transition weeks
+  (March 8 and November 1, 2026, America/New_York).
+Definition of done:
+- Playwright screenshots of week and day at both viewport sizes, light and dark.
+- React Profiler numbers for: week first render, week navigation, editing a single fixture
+  event via the collection (which columns re-rendered).
+- Report which of the section 5.2 gates pass and the raw numbers.
+- One sentence naming the visual element you removed after reviewing the screenshots.
+```
+
+## Integration requirements
+
+- Apply the [navigation and shared-cache addendum](/guides/open-work/roadmap/calendar-view/navigation-and-cache) and close the phase-specific requirements in [G14](/guides/open-work/roadmap/calendar-view/integration-gates#g14).
+- Implement the agreed DST behavior for missing and repeated local hours. Use Temporal for range boundaries, all-day dates, overlap and coordinates; do not assume every day lasts 24 hours.
+- Use one accent for today's column and the now-line, hairline grid rules, tabular figures and flat event chips. Calendar colors remain subordinate, low-alpha data cues.
+- Measure first render, navigation and the columns affected by one event change. A cross-day or multi-day change may invalidate the relevant old and new columns; unrelated days should remain stable.
+- Capture week and day at 1440×900 and 1920×1080 in light and dark themes. Review those screenshots and name one visual element actually removed.
+
+Read the related gates: [G08](/guides/open-work/roadmap/calendar-view/integration-gates#g08), [G10](/guides/open-work/roadmap/calendar-view/integration-gates#g10), [G11](/guides/open-work/roadmap/calendar-view/integration-gates#g11).
+
+## Acceptance evidence
+
+DST test results, four viewport/theme combinations for each view, React Profiler measurements and a one-sentence removal critique.
+
+[Phase 1](/guides/open-work/roadmap/calendar-view/frontend/phase-1) · [Phase 3](/guides/open-work/roadmap/calendar-view/frontend/phase-3)
