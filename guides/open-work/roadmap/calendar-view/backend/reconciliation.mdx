@@ -1,0 +1,631 @@
+---
+title: "Calendar View — Reconciliation and SSE"
+sidebarTitle: "Reconciliation and SSE"
+description: "Authoritative master-window reconciliation, correct all-day normalization, honest coverage and replay-safe changes."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Schema](/guides/open-work/roadmap/calendar-view/backend/schema) · [Webhook and queue](/guides/open-work/roadmap/calendar-view/backend/webhook)
+
+`ReconcileMaster` owns recurring-series mutations. It reads the authoritative master and the expanded occurrences inside a bounded materialized window, including cancellations, then applies a scoped diff. Singles use `ReconcileSingle`; a newly discovered recurring item is promoted into master work rather than written as a partial series.
+
+[Download reconcile.go as text](/assets/calendar-view/calendar-mirror/reconcile.go.txt). The supplied file is preserved below; the requirements on this page identify work still needed before it is production-ready.
+
+<Warning>
+**QA01: fix the missing-single-event path before implementation.** `ReconcileSingle` reuses `err` for `BeginTx`, losing the preceding `ErrNotFound` result. After a successful begin, it can dereference a nil event. Preserve the fetch outcome and test the scoped tombstone path. The [QA finding](/guides/open-work/roadmap/calendar-view/qa-review#qa01) describes the required regression cases; the original source below remains unchanged.
+</Warning>
+
+## Master-window algorithm
+
+1. Resolve the trusted user, grant, calendar, master and requested interval from worker state. Validate the lease/generation and grant admission. All provider I/O stays in `Drain`; no SQL transaction spans those calls.
+2. Fetch the master. A verified scoped missing/cancelled master tombstones its known series and master metadata transactionally. A timeout, authentication problem or incomplete page fetch is not a deletion.
+3. List all instance pages for the master using `expand_recurring=true`, `show_cancelled=true` and bounded start/end. Detect repeated cursors, enforce page/deadline limits, validate IDs and retain coverage. Never apply the “missing locally” deletion diff from a partial listing.
+4. Compare the completed remote snapshot with local rows in the **same ownership and coverage scope**. Include events that overlap the requested interval even if they began earlier. Deduplicate by scoped identity, not list order. Provider overrides may replace an old occurrence ID.
+5. In a short transaction, recheck ownership/freshness, update master data, upsert meaningful changed occurrences and tombstone cancellations or disappeared rows only within proven complete coverage. Do not churn `updated_at` or the change log for identical content.
+6. Append the corresponding immutable change records in that transaction using the selected per-user publication-order mechanism; commit.
+7. Acknowledge only the reconciled work generation. A newer enqueue or expired lease cannot be erased by the completed request. Advance advertised coverage only after every required work item for that interval succeeds.
+
+Nylas's [list-events contract](https://developer.nylas.com/docs/reference/api/events/get-all-events/) describes overlap-based range filtering, non-chronological Google results when filtering by master, and provider limitations on `master_event_id`. Freeze these details and pagination limits in real adapter fixtures. The supplied `limit=200` is a reference setting to verify, not a demonstrated universal cap. Do not advertise iCloud parity until its recurrence path is separately specified and tested.
+
+## All-day and time normalization
+
+The API's all-day UTC midnights encode **calendar dates**, while timed UTC values encode instants. In the UI, parse an all-day value into a `Temporal.PlainDate` span without shifting it into the viewer's timezone. Timed values use `Temporal.Instant` and the selected IANA timezone. Both use exclusive ends.
+
+| Nylas shape | Required interpretation |
+| --- | --- |
+| `timespan` | UTC instant interval; preserve provider timezone as a display hint. Validate bounds. |
+| `date` | One calendar date, represented as midnight UTC through the following midnight UTC. |
+| `datespan` | Provider date span normalized once to an exclusive end. Verify the provider-specific contract. |
+| `time` | Point event; define selection, minimum visual height and overlap behavior without fabricating a duration. |
+
+**Correction to the reference file:** Nylas currently documents Google and Microsoft all-day end dates as the following day. The reference's unconditional `e.AddDate(0, 0, 1)` therefore adds an extra day for that documented shape. Keep the exclusive provider end for those cases; do not subtract a day from the stored exclusive boundary merely because a human-facing final-date label is inclusive. [Nylas all-day handling](https://developer.nylas.com/docs/v3/calendar/using-the-events-api/#all-day-event-handling).
+
+The first backfill must capture raw Google and Microsoft one-day and multi-day fixtures and compare raw dates, normalized API values and rendered dates in positive/negative UTC offsets. Include the New York DST weeks of March 8 and November 1, 2026. Confirm recurring all-day overrides and cancelled occurrences. A mismatch blocks that provider's date normalization; do not normalize by guessing from duration.
+
+## Exact SSE requires more than atomic insertion
+
+Keeping `calendar_event` and `calendar_change` in the same transaction is required. However, an allocated `bigserial` value is not a commit-order watermark. For example, transaction A allocates 10 and waits, B allocates 11 and commits, and the client advances to 11. If A then commits, a naive `seq > 11` tail will miss 10. This is an inference from PostgreSQL's documented non-transactional sequence behavior, not a test performed here. [PostgreSQL sequence semantics](https://www.postgresql.org/docs/current/functions-sequence.html).
+
+Before live streaming, choose and test a publication protocol. A proposed implementation is to serialize each user's change-producing apply transactions on an owner row, acquire that lock before allocating that user's visible cursor and hold it through commit. Every writer, including participant enrichment, must participate. An alternative needs equivalent proof that no lower visible cursor can commit after a client has advanced past it. Gaps from aborted allocations are harmless; lost committed changes are not.
+
+The reference log stores only event ID and operation. An old upsert cannot be reconstructed faithfully by joining an event that has since changed or been deleted. Store a matching immutable DTO snapshot or a retained row revision per change. Emit the public `ChangeEvent` for that revision, never whatever the mutable table happens to contain at send time.
+
+Also specify:
+
+- A snapshot/resume handshake that cannot lose writes between the initial range read and stream subscription. The supplied range response has no cursor; record the agreed solution as a contract amendment instead of inventing one in the client.
+- Ordered delivery, duplicate handling, per-user isolation, safe `seq: number` range, retention and cursor-expiry behavior.
+- Native EventSource authentication and reset handling. Its ordinary `error` event does not expose an HTTP response status; the brief's 410 recovery needs an approved status-aware handshake/transport design, not `error.status`. [EventSource API](https://developer.mozilla.org/en-US/docs/Web/API/EventSource).
+- Cursor persistence only after successful application. A newly initialized collection cannot blindly reuse an old sessionStorage cursor. Scope storage to the authenticated account, clear on logout, and restore snapshot plus cursor coherently.
+- Loading/refetch race handling: a late range response cannot overwrite newer streamed data. Buffer/replay or use approved row revisions; do not depend on request timing.
+
+## Backfill and materialized coverage
+
+The proposed default rolling window is 90 days behind and 365 days ahead. Its exact bounds and per-grant/calendar completion must be stored and reported. `ExtendHorizon` currently re-enqueues known live masters and immediately updates grant bounds; this does not discover unknown masters/singles and does not prove those intervals are materialized.
+
+Implement initial calendar discovery and paginated backfill, incremental rechecks, periodic horizon work, expired-grant recovery and a way to request a specific future horizon. Separate request acceptance from completion, then wake/refetch the waiting client when coverage is genuinely available. The fixed `POST /calendar/window` only supplies `through`; older-than-covered navigation and its response/completion semantics remain [API gaps](/guides/open-work/roadmap/calendar-view/integration-gates#g05).
+
+Calendar metadata, grant status and participant entity resolution also need a declared refresh/change mechanism; the supplied stream union contains event upserts/deletes only. A collection loaded once per session otherwise misses a renamed calendar or expired grant.
+
+## Supplied reconciler
+
+<Accordion title="reconcile.go — complete reference file">
+
+```go
+// Package calsync keeps the AlloyDB calendar mirror in step with Nylas v3.
+//
+// Design rule: never trust the shape of a webhook for a recurring series.
+// Providers disagree about what a series edit looks like once it reaches Nylas:
+//
+//   - Google: editing one occurrence mints a new override event id (same
+//     master_event_id) and fires event.created + event.updated on the override.
+//     The master gets no webhook.
+//   - Microsoft: the master gets event.updated (EXDATE added) and a new override
+//     event fires event.created.
+//
+// So anything that touches a series is collapsed into one operation:
+// re-materialize the master's window from Nylas and diff it against the mirror.
+package calsync
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ---------------------------------------------------------------------------
+// Thin Nylas v3 client (no official Go SDK; keep the surface to what we use)
+// ---------------------------------------------------------------------------
+
+type Nylas struct {
+	BaseURL string // https://api.us.nylas.com
+	APIKey  string
+	HTTP    *http.Client
+}
+
+type When struct {
+	Object        string `json:"object"` // timespan | datespan | date | time
+	StartTime     int64  `json:"start_time,omitempty"`
+	EndTime       int64  `json:"end_time,omitempty"`
+	StartTimezone string `json:"start_timezone,omitempty"`
+	EndTimezone   string `json:"end_timezone,omitempty"`
+	StartDate     string `json:"start_date,omitempty"`
+	EndDate       string `json:"end_date,omitempty"`
+	Date          string `json:"date,omitempty"`
+	Time          int64  `json:"time,omitempty"`
+	Timezone      string `json:"timezone,omitempty"`
+}
+
+type Participant struct {
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type Event struct {
+	ID            string          `json:"id"`
+	GrantID       string          `json:"grant_id"`
+	CalendarID    string          `json:"calendar_id"`
+	MasterEventID string          `json:"master_event_id,omitempty"`
+	Title         string          `json:"title"`
+	Status        string          `json:"status"` // confirmed | tentative | cancelled
+	Busy          bool            `json:"busy"`
+	ReadOnly      bool            `json:"read_only"`
+	Recurrence    []string        `json:"recurrence,omitempty"`
+	Participants  []Participant   `json:"participants"`
+	When          When            `json:"when"`
+	UpdatedAt     int64           `json:"updated_at"`
+	Raw           json.RawMessage `json:"-"`
+}
+
+var ErrNotFound = errors.New("nylas: not found")
+
+type RateLimited struct{ RetryAfter time.Duration }
+
+func (r *RateLimited) Error() string { return "nylas: rate limited" }
+
+func (n *Nylas) get(ctx context.Context, path string, q url.Values, out any) error {
+	u := n.BaseURL + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+n.APIKey)
+	req.Header.Set("Accept", "application/json")
+	res, err := n.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	switch {
+	case res.StatusCode == http.StatusNotFound:
+		return ErrNotFound
+	case res.StatusCode == http.StatusTooManyRequests:
+		ra := 30 * time.Second
+		if s, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && s > 0 {
+			ra = time.Duration(s) * time.Second
+		}
+		return &RateLimited{RetryAfter: ra}
+	case res.StatusCode >= 300:
+		return fmt.Errorf("nylas: GET %s -> %d", path, res.StatusCode)
+	}
+	return json.NewDecoder(res.Body).Decode(out)
+}
+
+// GetEvent fetches one event (master or instance) by id.
+func (n *Nylas) GetEvent(ctx context.Context, grantID, calendarID, id string) (*Event, error) {
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	q := url.Values{"calendar_id": {calendarID}}
+	if err := n.get(ctx, fmt.Sprintf("/v3/grants/%s/events/%s", grantID, id), q, &env); err != nil {
+		return nil, err
+	}
+	var e Event
+	if err := json.Unmarshal(env.Data, &e); err != nil {
+		return nil, err
+	}
+	e.Raw = env.Data
+	return &e, nil
+}
+
+// ListInstances returns every expanded occurrence of a master inside [from, to),
+// cancelled ones included, paging at the 200/page cap.
+func (n *Nylas) ListInstances(ctx context.Context, grantID, calendarID, masterID string, from, to time.Time) ([]Event, error) {
+	q := url.Values{
+		"calendar_id":      {calendarID},
+		"master_event_id":  {masterID},
+		"expand_recurring": {"true"},
+		"show_cancelled":   {"true"},
+		"start":            {strconv.FormatInt(from.Unix(), 10)},
+		"end":              {strconv.FormatInt(to.Unix(), 10)},
+		"limit":            {"200"},
+	}
+	var out []Event
+	for {
+		var env struct {
+			Data       []json.RawMessage `json:"data"`
+			NextCursor string            `json:"next_cursor"`
+		}
+		if err := n.get(ctx, fmt.Sprintf("/v3/grants/%s/events", grantID), q, &env); err != nil {
+			return nil, err
+		}
+		for _, raw := range env.Data {
+			var e Event
+			if err := json.Unmarshal(raw, &e); err != nil {
+				return nil, err
+			}
+			e.Raw = raw
+			out = append(out, e)
+		}
+		if env.NextCursor == "" {
+			return out, nil
+		}
+		q.Set("page_token", env.NextCursor)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reconciler
+// ---------------------------------------------------------------------------
+
+type Reconciler struct {
+	DB    *pgxpool.Pool
+	Nylas *Nylas
+	Log   *slog.Logger
+	// Materialized recurrence window relative to now. 90d / 365d is a sane start;
+	// the UI asks the API to extend it when a user scrolls past the horizon.
+	Past, Future time.Duration
+}
+
+type change struct {
+	EventID string
+	Op      string // upsert | delete
+}
+
+func (r *Reconciler) window() (time.Time, time.Time) {
+	now := time.Now().UTC()
+	return now.Add(-r.Past), now.Add(r.Future)
+}
+
+// ReconcileMaster is the only code path that mutates a recurring series in the mirror.
+func (r *Reconciler) ReconcileMaster(ctx context.Context, userID, grantID, calendarID, masterID string) error {
+	from, to := r.window()
+
+	master, err := r.Nylas.GetEvent(ctx, grantID, calendarID, masterID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return r.tombstoneSeries(ctx, userID, masterID)
+	case err != nil:
+		return err
+	case master.Status == "cancelled":
+		return r.tombstoneSeries(ctx, userID, masterID)
+	}
+
+	remote, err := r.Nylas.ListInstances(ctx, grantID, calendarID, masterID, from, to)
+	if err != nil {
+		return err
+	}
+
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		insert into calendar_event_master (id, grant_id, calendar_id, user_id, recurrence, raw, updated_at, deleted_at)
+		values ($1, $2, $3, $4, $5, $6, to_timestamp($7), null)
+		on conflict (id) do update
+		   set recurrence = excluded.recurrence, raw = excluded.raw,
+		       updated_at = excluded.updated_at, deleted_at = null`,
+		master.ID, grantID, calendarID, userID, master.Recurrence, master.Raw, master.UpdatedAt,
+	); err != nil {
+		return err
+	}
+
+	// Live local instances inside the window. Anything Nylas no longer returns here
+	// is gone: EXDATE'd, series truncated, or a Google override that got re-cut.
+	rows, err := tx.Query(ctx, `
+		select id from calendar_event
+		 where master_event_id = $1 and deleted_at is null
+		   and start_at >= $2 and start_at < $3`, masterID, from, to)
+	if err != nil {
+		return err
+	}
+	local := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		local[id] = struct{}{}
+	}
+	rows.Close()
+
+	var changes []change
+	for i := range remote {
+		e := &remote[i]
+		delete(local, e.ID)
+		if e.Status == "cancelled" {
+			// Google keeps a cancelled tombstone per occurrence; Microsoft EXDATEs the
+			// master instead. Both land here as a soft delete.
+			if err := softDelete(ctx, tx, e.ID); err != nil {
+				return err
+			}
+			changes = append(changes, change{e.ID, "delete"})
+			continue
+		}
+		if err := upsertEvent(ctx, tx, userID, e); err != nil {
+			return err
+		}
+		changes = append(changes, change{e.ID, "upsert"})
+	}
+	for id := range local {
+		if err := softDelete(ctx, tx, id); err != nil {
+			return err
+		}
+		changes = append(changes, change{id, "delete"})
+	}
+
+	if err := logChanges(ctx, tx, userID, changes); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReconcileSingle handles non-recurring events. A 404 or cancelled status is a delete.
+func (r *Reconciler) ReconcileSingle(ctx context.Context, userID, grantID, calendarID, id string) error {
+	e, err := r.Nylas.GetEvent(ctx, grantID, calendarID, id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var c change
+	switch {
+	case errors.Is(err, ErrNotFound), e.Status == "cancelled":
+		if err := softDelete(ctx, tx, id); err != nil {
+			return err
+		}
+		c = change{id, "delete"}
+	case e.MasterEventID != "" || len(e.Recurrence) > 0:
+		// Webhook lied about kind (or the event was made recurring after creation).
+		// Hand it to the series path rather than upserting a partial view.
+		tx.Rollback(ctx)
+		target := e.MasterEventID
+		if target == "" {
+			target = e.ID
+		}
+		return r.Enqueue(ctx, grantID, calendarID, target, "series", 0)
+	default:
+		if err := upsertEvent(ctx, tx, userID, e); err != nil {
+			return err
+		}
+		c = change{id, "upsert"}
+	}
+	if err := logChanges(ctx, tx, userID, []change{c}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Reconciler) tombstoneSeries(ctx context.Context, userID, masterID string) error {
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		update calendar_event set deleted_at = now(), updated_at = now()
+		 where master_event_id = $1 and deleted_at is null
+		returning id`, masterID)
+	if err != nil {
+		return err
+	}
+	var changes []change
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		changes = append(changes, change{id, "delete"})
+	}
+	rows.Close()
+
+	if _, err := tx.Exec(ctx, `
+		update calendar_event_master set deleted_at = now() where id = $1`, masterID); err != nil {
+		return err
+	}
+	if err := logChanges(ctx, tx, userID, changes); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ---------------------------------------------------------------------------
+// Row helpers
+// ---------------------------------------------------------------------------
+
+// bounds normalizes Nylas's four `when` shapes into UTC start/end.
+// Verify datespan.end_date inclusivity against your provider mix on first backfill;
+// Nylas presents it as the last day of the span, not Google's exclusive end.
+func bounds(w When) (start, end time.Time, allDay bool, tz string, err error) {
+	const d = "2006-01-02"
+	switch w.Object {
+	case "timespan":
+		return time.Unix(w.StartTime, 0).UTC(), time.Unix(w.EndTime, 0).UTC(), false, w.StartTimezone, nil
+	case "date":
+		s, err := time.Parse(d, w.Date)
+		if err != nil {
+			return start, end, false, "", err
+		}
+		return s, s.AddDate(0, 0, 1), true, "", nil
+	case "datespan":
+		s, err := time.Parse(d, w.StartDate)
+		if err != nil {
+			return start, end, false, "", err
+		}
+		e, err := time.Parse(d, w.EndDate)
+		if err != nil {
+			return start, end, false, "", err
+		}
+		return s, e.AddDate(0, 0, 1), true, "", nil
+	case "time":
+		t := time.Unix(w.Time, 0).UTC()
+		return t, t, false, w.Timezone, nil
+	}
+	return start, end, false, "", fmt.Errorf("unknown when.object %q", w.Object)
+}
+
+func upsertEvent(ctx context.Context, tx pgx.Tx, userID string, e *Event) error {
+	start, end, allDay, tz, err := bounds(e.When)
+	if err != nil {
+		return fmt.Errorf("event %s: %w", e.ID, err)
+	}
+	// entity_id resolution (participants -> Orbiter people) is a separate pass keyed on
+	// email; keep it out of the sync transaction so a slow lookup never blocks the mirror.
+	parts, _ := json.Marshal(e.Participants)
+	var master *string
+	if e.MasterEventID != "" {
+		master = &e.MasterEventID
+	}
+	_, err = tx.Exec(ctx, `
+		insert into calendar_event
+		  (id, grant_id, calendar_id, master_event_id, user_id, title, start_at, end_at, tz, all_day,
+		   status, busy, read_only, participants, raw, nylas_updated_at, updated_at, deleted_at)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,to_timestamp($16),now(),null)
+		on conflict (id) do update set
+		  calendar_id = excluded.calendar_id, master_event_id = excluded.master_event_id,
+		  title = excluded.title, start_at = excluded.start_at, end_at = excluded.end_at,
+		  tz = excluded.tz, all_day = excluded.all_day, status = excluded.status,
+		  busy = excluded.busy, read_only = excluded.read_only, participants = excluded.participants,
+		  raw = excluded.raw, nylas_updated_at = excluded.nylas_updated_at,
+		  updated_at = now(), deleted_at = null`,
+		e.ID, e.GrantID, e.CalendarID, master, userID, e.Title, start, end, tz, allDay,
+		e.Status, e.Busy, e.ReadOnly, parts, e.Raw, e.UpdatedAt)
+	return err
+}
+
+func softDelete(ctx context.Context, tx pgx.Tx, id string) error {
+	_, err := tx.Exec(ctx, `
+		update calendar_event set deleted_at = now(), updated_at = now()
+		 where id = $1 and deleted_at is null`, id)
+	return err
+}
+
+func logChanges(ctx context.Context, tx pgx.Tx, userID string, cs []change) error {
+	if len(cs) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, c := range cs {
+		batch.Queue(`insert into calendar_change (user_id, event_id, op) values ($1, $2, $3)`,
+			userID, c.EventID, c.Op)
+	}
+	return tx.SendBatch(ctx, batch).Close()
+}
+
+// ---------------------------------------------------------------------------
+// Coalescing queue
+// ---------------------------------------------------------------------------
+
+// Enqueue upserts a work item. Re-enqueueing pushes run_after out, which is how a
+// burst of series webhooks collapses into one reconcile.
+func (r *Reconciler) Enqueue(ctx context.Context, grantID, calendarID, targetID, kind string, delay time.Duration) error {
+	_, err := r.DB.Exec(ctx, `
+		insert into calendar_reconcile_queue (grant_id, calendar_id, target_id, kind, run_after)
+		values ($1, $2, $3, $4, now() + make_interval(secs => $5))
+		on conflict (grant_id, target_id) do update
+		   set run_after = now() + make_interval(secs => $5), kind = excluded.kind`,
+		grantID, calendarID, targetID, kind, delay.Seconds())
+	return err
+}
+
+type queueItem struct {
+	GrantID, CalendarID, TargetID, Kind, UserID string
+	Attempts                                    int
+}
+
+// Drain leases a batch, releases the lock, works each item against Nylas, then
+// deletes or reschedules. Safe to run from several replicas at once.
+func (r *Reconciler) Drain(ctx context.Context, batch int) (int, error) {
+	const lease = 5 * time.Minute
+	tx, err := r.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	rows, err := tx.Query(ctx, `
+		with due as (
+		  select q.grant_id, q.target_id
+		    from calendar_reconcile_queue q
+		    join calendar_grant g using (grant_id)
+		   where q.run_after <= now() and g.status = 'valid'
+		   order by q.run_after
+		   limit $1
+		   for update of q skip locked
+		)
+		update calendar_reconcile_queue q
+		   set run_after = now() + $2::interval, attempts = q.attempts + 1
+		  from due, calendar_grant g
+		 where q.grant_id = due.grant_id and q.target_id = due.target_id and g.grant_id = q.grant_id
+		returning q.grant_id, q.calendar_id, q.target_id, q.kind, g.user_id, q.attempts`,
+		batch, lease)
+	if err != nil {
+		tx.Rollback(ctx)
+		return 0, err
+	}
+	var items []queueItem
+	for rows.Next() {
+		var it queueItem
+		if err := rows.Scan(&it.GrantID, &it.CalendarID, &it.TargetID, &it.Kind, &it.UserID, &it.Attempts); err != nil {
+			rows.Close()
+			tx.Rollback(ctx)
+			return 0, err
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+
+	done := 0
+	for _, it := range items {
+		var err error
+		if it.Kind == "series" {
+			err = r.ReconcileMaster(ctx, it.UserID, it.GrantID, it.CalendarID, it.TargetID)
+		} else {
+			err = r.ReconcileSingle(ctx, it.UserID, it.GrantID, it.CalendarID, it.TargetID)
+		}
+		var rl *RateLimited
+		switch {
+		case err == nil:
+			_, _ = r.DB.Exec(ctx, `delete from calendar_reconcile_queue where grant_id=$1 and target_id=$2`,
+				it.GrantID, it.TargetID)
+			done++
+		case errors.As(err, &rl):
+			// Back the whole grant off, not just this item; Nylas limits per app+grant.
+			_, _ = r.DB.Exec(ctx, `
+				update calendar_reconcile_queue set run_after = now() + $2::interval where grant_id = $1`,
+				it.GrantID, rl.RetryAfter)
+			r.Log.Warn("nylas rate limited", "grant", it.GrantID, "retry_after", rl.RetryAfter)
+		case it.Attempts >= 6:
+			r.Log.Error("reconcile dead-lettered", "grant", it.GrantID, "target", it.TargetID, "err", err)
+			_, _ = r.DB.Exec(ctx, `delete from calendar_reconcile_queue where grant_id=$1 and target_id=$2`,
+				it.GrantID, it.TargetID)
+		default:
+			backoff := time.Duration(1<<uint(it.Attempts)) * 15 * time.Second
+			_, _ = r.DB.Exec(ctx, `
+				update calendar_reconcile_queue set run_after = now() + $3::interval
+				 where grant_id=$1 and target_id=$2`, it.GrantID, it.TargetID, backoff)
+			r.Log.Warn("reconcile retry", "target", it.TargetID, "attempt", it.Attempts, "err", err)
+		}
+	}
+	return done, nil
+}
+
+// ExtendHorizon re-enqueues every live master for a grant with jitter. Run weekly so
+// the materialized window keeps rolling forward without a thundering herd on Nylas.
+func (r *Reconciler) ExtendHorizon(ctx context.Context, grantID string) error {
+	_, err := r.DB.Exec(ctx, `
+		insert into calendar_reconcile_queue (grant_id, calendar_id, target_id, kind, run_after)
+		select grant_id, calendar_id, id, 'series', now() + (random() * interval '6 hours')
+		  from calendar_event_master
+		 where grant_id = $1 and deleted_at is null
+		on conflict (grant_id, target_id) do nothing`, grantID)
+	if err != nil {
+		return err
+	}
+	_, err = r.DB.Exec(ctx, `
+		update calendar_grant set expanded_from = now() - $2::interval,
+		       expanded_through = now() + $3::interval, updated_at = now()
+		 where grant_id = $1`, grantID, r.Past, r.Future)
+	return err
+}
+```
+
+</Accordion>
+
+## Acceptance scenarios
+
+Both provider burst patterns converge; cancellation and truncated series remove the right instances; moved overrides replace the old instance without duplicates; reordered/duplicate pages do not lose events; a failed final page causes no deletion diff; a repeated unchanged reconcile emits no changes.
+
+Concurrency tests deliberately reverse transaction completion, re-enqueue during a provider read, reclaim an expired lease and race range snapshots against SSE. Replay after disconnect must reproduce the same authorized mirror. Test cursor expiry, logout, grant expiry/re-auth, missing calendars and all-day dates before any live rollout.

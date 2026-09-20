@@ -1,0 +1,63 @@
+---
+title: "Calendar View — Phase 5: Event detail and Orbiter context"
+sidebarTitle: "Phase 5: Event detail and Orbiter context"
+description: "Connect event details to existing Orbiter contact context without extending the fixed API silently."
+---
+
+[Phase 4](/guides/open-work/roadmap/calendar-view/frontend/phase-4) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 6](/guides/open-work/roadmap/calendar-view/frontend/phase-6)
+
+Connect event details to existing Orbiter contact context without extending the fixed API silently.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Apply docs/calendar/PERFORMANCE.md to deferred/batched meeting context, stable person-ID caches and details loaded on demand. No per-event request waterfall or model dependency may block the agenda or scheduler.
+Read docs/calendar/AGENDA-AND-SCHEDULING.md. Use supported meeting/relationship context in the agenda List as well as event detail. Editing reuses the scheduler and preserves selected guest identities/emails. Never synthesize missing context or attendee acceptance.
+Apply QA04 and QA08 before reusing relationship or RSVP hooks. If the approved per-claim source contract exists, add J02 only in shadow mode at the context adapter; preserve baseline display and record supported/contradicted/insufficient with source versions. If that evidence is absent, defer J02 explicitly. Do not generate facts or resolve people with JEV.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Shared input extension
+
+Read the separate [NL Date Picker specification](/guides/open-work/roadmap/calendar-view/nl-date-picker) (`docs/calendar/NL-DATE-PICKER.md` in the handoff). Reuse the same picker for event-detail time edits. Preserve read-only, recurrence-scope and mutation rules; new NL suggestions cannot overwrite a newer manual edit or imply event-save success.
+
+## Paste-ready phase prompt
+
+```text
+Implement the detail state of the agenda panel (section 4.5).
+- Participants render as Orbiter people cards using the existing entityId resolver and the
+  "How I know X" narrative hook. Unresolved emails get an "Add to Orbiter" action that calls
+  the existing contact-create flow.
+- The conferencing join button becomes the primary action within 15 minutes of start.
+- Inline edit reuses the quick-create fields; delete goes through the scope dialog for series.
+Definition of done:
+- Screenshots of detail for: a 1:1 with a resolved contact, a 6-person meeting with two
+  unresolved emails, an all-day event, a read-only event.
+- No new data fetching hooks; everything comes from the collections plus the existing
+  people resolver.
+```
+
+## Integration requirements
+
+- Apply [Agenda and scheduling](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling); its explicit month-navigation, agenda-mode and scheduler requirements supersede conflicting source instructions.
+- Interpret the supplied prompt's 'people cards' as reusable participant content rendered in flat rows, consistent with the brief's no-cards direction.
+- Inspect the existing entity resolver, relationship narrative and contact-create flow. Report missing or incompatible hooks; do not invent a replacement data source.
+- Location and conferencing are optional DTO fields that the supplied Go adapter does not yet populate. Notes and RSVP writes lack contracts in the new brief; an older RSVP API exists but needs the approved ownership/identity adapter from QA08. Keep these gaps explicit and do not claim unsupported actions work.
+- Capture the four requested detail scenarios at both viewport sizes in light and dark. Check focus, read-only controls and the join-button timing; name one element removed.
+
+Read the related gates: [G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06), [G07](/guides/open-work/roadmap/calendar-view/integration-gates#g07), [G11](/guides/open-work/roadmap/calendar-view/integration-gates#g11).
+
+## Acceptance evidence
+
+Resolved/unresolved participant cases, read-only and all-day detail screenshots, hook reuse references, join-timing checks and removal critique.
+
+[Phase 4](/guides/open-work/roadmap/calendar-view/frontend/phase-4) · [Phase 6](/guides/open-work/roadmap/calendar-view/frontend/phase-6)

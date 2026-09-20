@@ -1,0 +1,214 @@
+---
+title: "Calendar View — Integration and Verification Gates"
+sidebarTitle: "Integration and verification"
+description: "Open contract decisions, reference-code corrections, concurrency fixtures and unmeasured release gates."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [API integration](/guides/open-work/roadmap/calendar-view/api-contract) · [Frontend Phase 0](/guides/open-work/roadmap/calendar-view/frontend/phase-0)
+
+This register separates supplied intent from reference-code gaps and proposed implementation fixes. It does not replace the fixed routes/types or authorize new fields. Phase 0 records owner decisions; implementation closes each gate with evidence. Independent fixture-backed work can proceed while a dependent live feature stays flagged.
+
+## Readiness to hand off
+
+**Product decisions are sufficient to begin Phase 0.** The account-selector choices A01/A02 are confirmed in [Navigation and shared cache](/guides/open-work/roadmap/calendar-view/navigation-and-cache#account-display-and-availability-decisions): show the active account's events and use it for new meetings, while availability checks all selected calendars across accounts. No further product question from this review needs to block that planning phase.
+
+The implementing agent still has technical decisions to resolve before dependent live features:
+
+| Work | Required Phase 0 outcome |
+| --- | --- |
+| Existing app/API integration | Approve exact create/edit/delete/availability schemas, account-email and calendar-permission adapter, recipient UUID/search adapter, scoped identities and preference persistence. Do not invent fields. |
+| Provider command completion | Define Drain-owned command scheduling, bounded completion, notification policy, recurring scopes, idempotency and uncertain-result recovery before any real invitations. |
+| Reliable data and free time | Specify completed per-calendar coverage, all-page backfill, owner/grant isolation, durable queue fencing and snapshot/SSE replay without skipped changes. |
+| Performance and UI integration | Inspect installed APIs; record existing shell/panel dimensions, cache cap, cold-load budget and reproducible benchmark environment. Keep user-confirmed product behavior fixed. |
+
+Phase 0 is ready to start; production readiness remains conditional on closing the gates below with implementation evidence. Read-only inspection, schema planning and deterministic fixtures can proceed independently of unresolved live-provider contracts.
+
+## Contract decisions
+
+<a id="g01" />
+
+### G01 — Ownership, authorization and identity
+
+**Before:** backend migration, real reads or collection integration.
+
+The supplied DDL uses unscoped provider IDs as primary keys, while worker updates/deletes often filter by ID/master alone. Prove provider ID uniqueness at the required scope or adopt scoped internal keys with an approved string-ID mapping. Resolve users from authenticated grant ownership; test identical provider IDs in two grants/calendars and attempted cross-user mutation. The QA pass inspected existing `nylas_grants.calendars`, its UUID/provider IDs and selected authenticated routes. Reused RSVP/preference paths lack explicit owner checks in the inspected call chain; close [QA03](/guides/open-work/roadmap/calendar-view/qa-review#qa03) and approve the migration in [QA07](/guides/open-work/roadmap/calendar-view/qa-review#qa07). This was a targeted inspection, not a complete backend audit.
+
+<a id="g02" />
+
+### G02 — Drain-only provider I/O and synchronous API results
+
+**Before:** real create, move, delete or availability.
+
+The user-supplied boundary puts Nylas calls in `Drain`; the reference implements provider reads only. The fixed create route returns a real Nylas ID and availability returns slots. Specify a worker-owned command dispatch/completion path, bounded waiting, timeout/retry behavior and result correlation without holding a SQL transaction across I/O. Do not place Nylas calls in webhook/API handlers silently, or return a queue acknowledgement as the promised event. The existing calendar service currently reads Nylas and sends RSVP directly; migrating those callers is part of [QA02](/guides/open-work/roadmap/calendar-view/qa-review#qa02). Approve the new route/envelope/status adapter explicitly before wiring the feature.
+
+<a id="g03" />
+
+### G03 — Durable queue and lifecycle controls
+
+**Before:** multi-replica workers or webhook admission.
+
+Replace the reference's `run_after` lease with fenced ownership plus enqueue generation. Acknowledge/apply only the claimed generation, retain mid-flight enqueues, preserve same-target single-to-series promotion and persist dead letters. Enforce grant-wide backoff before each request, including new work and already claimed batches. Move grant/calendar lifecycle handling into durable worker admission; the reference ignores calendar notifications and updates grants inline. Check SQL/row-iteration errors and validate duration-to-interval bindings against the actual pgx version.
+
+<a id="g04" />
+
+### G04 — Replay cursor and initial snapshot
+
+**Before:** Phase 1 realtime against a real server.
+
+Atomic mirror/change writes remain required, with a commit-order-safe cursor protocol and immutable change payloads/revisions. Define initial snapshot-to-stream handoff, retained cursor lifetime, duplicates, reconnect, ordering, JS-safe numeric sequence range and data/cursor restoration after reload. Native EventSource does not directly expose HTTP 410 status through its error callback; agree on authentication and status-aware recovery without inventing events or fields. Prove no missed update when a slow lower-sequence transaction commits after a faster higher-sequence transaction.
+
+<a id="g05" />
+
+### G05 — Loaded window versus materialized coverage
+
+**Before:** Phase 1 horizon logic or real backfill.
+
+Clarify the meaning of the supplied `window.from/to`, how the client learns completed coverage, and the response/completion semantics of `POST /calendar/window`. A request with `through` does not specify past extension. Define behavior when navigating earlier than `expanded_from`; do not report an uncovered interval as empty or free.
+
+The source `ExtendHorizon` only enqueues known masters and advances metadata immediately. Implement initial discovery of calendars, singles and masters, completed-page coverage and a grant-level safe window. Client loading combines the proposed 60-day forward warm minimum from [G14](#g14) with four-week visible-range margins and eight-week edge extension; cache/view navigation inside loaded coverage stays network-free.
+
+<a id="g06" />
+
+### G06 — Write DTOs, recurrence and acknowledgement races
+
+**Before:** live mutations or Phase 4 interactions.
+
+The source lists response types but not create/patch request schemas, error envelopes, delete-body behavior, idempotency or conflict rules. Agree on those without guessing from a `CalendarEvent` read DTO. Specify `this/following/all` semantics, provider splits/new master IDs, read-only failures and notification-to-response correlation. A recurrence scope dialog appears for any event with a master ID before dispatch.
+
+Test temporary ID replacement, SSE arriving before the HTTP response, provider normalization after acknowledgement and a failed optimistic mutation racing a newer remote update. A rollback must not restore stale data or undo another operation.
+
+<a id="g07" />
+
+### G07 — UI needs absent from the API contract
+
+**Before:** the affected live UI feature.
+
+| Need in the brief | Missing or incomplete seam | Required handling |
+| --- | --- | --- |
+| Notes and RSVP | New contract lacks notes/RSVP; an older `/v1/calendar-events/send-rsvp` route and hook do exist | Approve an adapter/amendment; fix attendee targeting and ownership before reuse; notes remain separate |
+| Location and conferencing | DTO allows them; supplied Go event type/mapping omits them | Backend mapping and real fixtures |
+| Reconnect/connect actions | Grant listing exists, authorization flow is unspecified | Reuse the actual app flow after inspection; do not invent routes |
+| Calendar rename/color and grant expiry updates | Collections load once; SSE union carries events only | Declare invalidation/refresh behavior |
+| People, “How I know X,” previous meeting context | Go participant UUIDs do not match the inspected relationship tools' legacy numeric person IDs | Approve a UUID-compatible read adapter under QA04; no guessed identity bridge |
+| Search/settings persistence | Existing palette and token/persistence adapters unspecified | Inspect app conventions; keep missing contracts explicit |
+| Provider colors and “people cards” | Color data versus token-only components; no-card direction | A validated styling adapter and flat participant rows, not hard-coded component hex or card chrome |
+
+<a id="g08" />
+
+### G08 — All-day dates, overlap and DST
+
+**Before:** first backfill and Phase 2 date rendering.
+
+Correct the supplied `datespan` extra-day addition against the documented Google/Microsoft exclusive end, then verify raw provider fixtures on both grant types. Treat all-day midnight UTC values as dates; never timezone-shift them into the previous day. Select spanning timed events by interval overlap and define point-event behavior.
+
+Resolve how a fixed 24-hour visual grid presents missing/repeated DST wall-clock hours without losing distinct instants or changing durations. Test New York spring/fall transition weeks, cross-midnight/multi-day events and all-day selection in multiple timezones. The UTC horizon, calendar-day loading policy and user's display timezone are distinct concepts.
+
+<a id="g09" />
+
+### G09 — Installed TanStack and app contracts
+
+**Before:** application code.
+
+Inspect installed package versions and their exported `.d.ts` definitions for collections, query collection direct writes, mutation handlers, refetch and AI tool registration. Record exact signatures and their file locations. The inspected frontend package manifest does not declare `@tanstack/react-db`, `@tanstack/query-db-collection` or `temporal-polyfill`; Phase 0 must record compatible dependency decisions before inspecting the installed APIs. Never fabricate an export. See [QA06](/guides/open-work/roadmap/calendar-view/qa-review#qa06).
+
+Define query keys/window subscriptions, loading/refetch races, per-session EventSource teardown, signed-in Orbiter user/workspace-scoped cursors and optimistic transaction ownership using those verified APIs. Prove a stream upsert updates a live query without a refetch and an old fetch cannot overwrite it. No calendar library, `Date` day math or calendar-local `date-fns` workaround is introduced.
+
+<a id="g10" />
+
+### G10 — Deterministic performance measurements
+
+**Before:** accepting a visual phase or declaring a budget passed.
+
+Freeze the generator algorithm/seed, clock/date anchor, timezone, calendar distribution and output hash. The base dataset is exactly 5,000 events over 26 weeks and eight calendars. It includes 600 recurring instances across 60 masters, 750 events with at least four participants, 250 all-day and 150 multi-day events. These categories may overlap; record the overlap policy. Use a separate dense-day scenario with 40 overlapping events so the base count remains exact.
+
+For the 500-row agenda measurement, name the deterministic fixture slice/anchor that supplies those rows; do not silently measure ten rows. Reports identify commit, production-build command, browser/hardware, viewport, timezone, seed/hash, profiler/trace artifacts, sample count and the statistic being compared with each gate. Use 4× CPU throttle for frame budgets and the Phase 7 pass. Report raw numbers, not just pass/fail.
+
+“Only that day's column re-renders” applies to a same-day edit. Cross-day moves and multi-day events may affect the necessary old/new day slices; unrelated columns must stay unchanged. Test overlap packing with endpoint-touching, clipping and zero-duration cases. Distinguish permitted overlap in time from forbidden visual collision.
+
+Apply the effective nine-slot matrix in [Performance requirements](/guides/open-work/roadmap/calendar-view/performance): month paging replaces the obsolete 30-screen scroll slot, while the other eight limits remain. Its additional P01–P08 gates and benchmark profiles apply alongside this deterministic fixture.
+
+<a id="g11" />
+
+### G11 — Visual, interaction and Akira acceptance
+
+**Before:** the relevant phase is complete.
+
+Every visual phase captures 1440×900 and 1920×1080 screenshots, including required light/dark and detail scenarios; records a critique; and names one element removed. Test focus handling, editable-control shortcut suppression, pointer cancellation, reduced motion and read-only affordances.
+
+Akira reads through collection queries and writes through the same validated mutations as human actions. Validate tool arguments against registered schemas, check loaded coverage before claiming to list a time range, and apply existing user-intent/confirmation rules before a write. The scripted “find 30 minutes … and book it” test is explicit booking intent; a mere availability question must not create an event. The one-availability/one-insert count is a controlled fixture assertion, not a claim that production retries never happen.
+
+<a id="g12" />
+
+### G12 — QA corrections and optional JEV pilots
+
+**Before:** copying the backend reference, accepting Phase 0, or enabling a JEV-assisted feature.
+
+Close the [QA findings](/guides/open-work/roadmap/calendar-view/qa-review), including the `ReconcileSingle` lost-error/nil-event case, existing API and storage migration, owner checks, UUID-compatible context and all-day adapter. Preserve the original source files; implement corrections in the actual owning application module.
+
+The [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) defines J01 calendar intent routing and J02 source support as independent, disabled-by-default pilots. Phase 0 can reject or defer either. Reuse existing Decisions infrastructure with a dedicated Calendar taxonomy, finite response validation and measured thresholds. Do not put JEV in webhook/queue/SSE/date/availability/identity/rendering code or make it an authorization gate. Performance and correctness must pass with JEV off and under timeout/error conditions.
+
+<a id="g13" />
+
+### G13 — Shared NL Date Picker
+
+**Before:** adopting the reusable picker in quick-create, event detail or another host.
+
+Follow the [NL Date Picker contract](/guides/open-work/roadmap/calendar-view/nl-date-picker): one controlled draft, explicit Apply, Temporal validation, source spans, versioned asynchronous results and visible timezone/DST choices. Record the narrowly scoped manual-picker library amendment; it does not replace the custom day/week/month scheduler or permit date-fns in its domain calculations.
+
+J03 is a separate optional mention-selection pilot, with its own candidates, threshold and evaluation. It cannot calculate dates, resolve missing intent or authorize writes. Prove offline/manual behavior, no stale-result overwrite and host mutation compatibility. Keep the base Calendar usable before this extension is complete.
+
+<a id="g14" />
+
+### G14 — Navigation and shared 60-day event cache
+
+**Before:** shared-store integration, calendar navigation or claiming open-time availability.
+
+Implement [Navigation and shared cache](/guides/open-work/roadmap/calendar-view/navigation-and-cache): Cmd-K → Navigation → Calendar View, the top-left icon entry, `0 0` for full Calendar View and `0` for today's agenda. One 400 ms sequence controller prevents duplicate actions and ignores text-entry/modal scopes. Preserve the workspace header and use shared panel sizing/state.
+
+The current header warms a 14-day feed in `["calendar-events-widget"]`; `["calendar-events"]` fetches the same feed independently. The source backend makes one provider request capped at 50 events per calendar, and the adapter drops all-day events. Consolidate consumers into the normalized Phase 1 store, warm 60 calendar days forward and retain G05's visible-range margins and edge extension. Complete range coverage, all pages, signed-in owner and grant-scoped row ownership, one browser stream and reconnect/reload recovery are prerequisites. Server webhooks alone do not update the current Query cache.
+
+Acceptance requires shortcut timing/focus tests, all navigation entry points, a greater-than-50-events-per-calendar fixture, partial-load handling, no false free gaps, measured shared-fetch counts and an upsert/delete propagating to widget/calendar/agenda without a reload. Read the addendum's complete evidence list; the 60-day policy and push integration are not yet implemented.
+
+The same addendum now requires a left-rail account selector and per-account writable destination. Switching connected accounts filters Calendar View/agenda events and defaults new meetings to that account, while FREE / OPEN checks the separate availability-selected calendars across accounts. Resolve trusted email/capability metadata and preference persistence. Distinguish this local grant selection from a signed-in user/workspace change; only the latter clears the shared owner cache/stream. Include cross-account conflicts, draft/save races, original-event ownership, expiry and covered-switch performance in acceptance.
+
+<a id="g15" />
+
+### G15 — Agenda scheduler and provider delivery
+
+**Before:** Phase 3 UI acceptance or enabling real event writes.
+
+Apply [Agenda and scheduling](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling). Fit the month without scrolling and page by calendar month; this replaces infinite month scrolling and its 30-screen gate. The agenda has a context-rich List and proportional Timeline. Open-time/range selection opens a draft scheduler with contact search or direct-email guests. The date strip itself navigates the agenda.
+
+Verify that the existing contact-search candidate contract supports typo-tolerant name/email/company lookup; its current name-filter hook does not prove this. Finalize writable account/calendar, selected email identity, provider notification query placement and explicit Create event & send invites behavior. Keep draft changes local. Provider success, pending/uncertain writes, deduplicated retries and webhook-before-response races follow G02/G06; guests are not marked accepted by the client. Run the addendum's authorized Google/Microsoft invite/update/cancel/RSVP acceptance checks before claiming live integration.
+
+<a id="g16" />
+
+### G16 — Performance throughout the implementation
+
+**Before:** Phase 0 acceptance, each affected implementation phase and release.
+
+Read [Performance requirements](/guides/open-work/roadmap/calendar-view/performance). Freeze the measurement environment, seeds, cache cap/eviction rules and cold-load budget in Phase 0. The effective nine-slot matrix replaces only month-scroll slot 5 with no-scroll month paging; keep the other eight limits. Add P01–P08 for agenda/scheduler latency, input, pending feedback, incremental stream updates, fuzzy search, mirror/webhook processing, memory/lifecycle and AI failure independence.
+
+Report raw samples, p50/p95/max, query plans, trace/profile artifacts, request counts and total incremental dependency bytes. Core operations have no model dependency; provider confirmation remains distinct from optimistic feedback. Shared caching, incremental queries, deferred context and bounded provider workers must preserve complete coverage, correct invitations and ordered replay. Mark unmeasured gates not run; no silent budget relaxation or reduced fixtures. This is a build requirement for the implementing agent, with no performance results yet.
+
+## Backend fixture matrix
+
+| Scenario | Required outcome |
+| --- | --- |
+| Valid/invalid/oversize webhook; database admission failure | Correct response, no provider I/O in handler, durable retry path |
+| Google and Microsoft bursts, duplicated/reversed/interleaved | One canonical master target and converged mirror |
+| Notification arrives during reconcile; same-target promotion | Later generation survives acknowledgement |
+| Slow worker loses lease; two replicas race | Stale result cannot apply or delete current work |
+| 429 with claimed work, new enqueue and another replica | Whole grant waits; unaffected grants progress |
+| Last page fails, cursor repeats or unknown provider shape | No false absence deletion or coverage completion |
+| Missing single event with successful transaction begin | Preserve the fetch error, avoid nil dereference, emit scoped tombstone/change |
+| Master cancelled/deleted; instance moved/overridden | Scoped tombstones and exact surviving occurrences |
+| Identical snapshot reconciled twice | No unnecessary row/change churn |
+| Calendar/grant rename, expiry and reconnect | Durable handling and coherent UI refresh |
+| Reversed commit order, cursor expiry and snapshot/SSE race | No committed update skipped; approved reset path |
+| All-day exclusive end, DST, overlap and point event | Correct stored and displayed bounds |
+| Participant resolution after initial mirror | Authorized update emits a valid change without blocking sync |
+
+## Release record
+
+All implementation measurements are **not run** in this documentation pass. Track backend migration/worker/API proofs separately from frontend Phases 0–7. Use the phase definitions of done, record every remaining API gap, and enable live provider/interaction features only after their dependencies pass. A source bundle, green documentation build or mocked UI is not production evidence.

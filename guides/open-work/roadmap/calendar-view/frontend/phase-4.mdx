@@ -1,0 +1,66 @@
+---
+title: "Calendar View — Phase 4: Interactions"
+sidebarTitle: "Phase 4: Interactions"
+description: "Implement drag, resize, quick-create and keyboard controls through the shared optimistic mutation layer."
+---
+
+[Phase 3](/guides/open-work/roadmap/calendar-view/frontend/phase-3) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 5](/guides/open-work/roadmap/calendar-view/frontend/phase-5)
+
+Implement drag, resize, quick-create and keyboard controls through the shared optimistic mutation layer.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Bind each draft and mutation to an explicit grant/calendar. New drafts inherit the active destination; changing the rail does not retarget open drafts/in-flight writes. Existing events retain their original identity. Test expired/read-only destinations and cross-account conflicts.
+Apply docs/calendar/PERFORMANCE.md to drag frames, isolated form input, scheduler open, guest search and pending feedback. Measure provider confirmation separately; local draft/drag performance must not depend on AI or Nylas.
+Read docs/calendar/AGENDA-AND-SCHEDULING.md. Build click/range scheduling with the shared date picker, fuzzy contacts/direct-email guest entry and explicit final event creation/invitation delivery through the approved Go/Nylas command path. Draft changes never send invitations. Verify notification query placement, provider identity, recovery and webhook reconciliation.
+Close the ownership, write-schema and attendee-targeting gaps before reusing legacy mutations. Pointer, keyboard, read-only state, recurring scope and rollback stay deterministic. A JEV verdict never authorizes a write or changes the user-selected scope.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Shared input extension
+
+Read the separate [NL Date Picker specification](/guides/open-work/roadmap/calendar-view/nl-date-picker) (`docs/calendar/NL-DATE-PICKER.md` in the handoff). Quick-create may use the shared picker after its temporal core and manual controls pass. Text interpretation only updates a draft; the existing event Save action owns the mutation. Keep the base calendar usable with manual fields while the extension is unfinished.
+
+## Paste-ready phase prompt
+
+```text
+Implement section 4.4 of docs/calendar/BRIEF.md and the recurring scope dialog from 3.4.
+- Drag and resize use pointer events on the column, a ghost element moved with transform,
+  and a single collection mutation on pointerup. Prove zero React commits during drag with a
+  Profiler recording.
+- 15-minute snap. Cross-day drag in week view.
+- Quick-create popover with the attendee typeahead using the existing contacts search hook.
+- Full keyboard map from 4.4 with a visible focus ring on the selected chip.
+- Optimistic failure path: MSW returns 500 for one PATCH; the chip snaps back and a toast
+  offers retry.
+Definition of done:
+- Playwright tests: drag-move, resize, drag-create, keyboard navigation, failure rollback,
+  recurring scope dialog appears only for events with masterEventId.
+- Drag frame timing under 4x CPU throttle.
+```
+
+## Integration requirements
+
+- Apply [Agenda and scheduling](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling); its explicit month-navigation, agenda-mode and scheduler requirements supersede conflicting source instructions.
+- Finalize mutation bodies, recurring-scope semantics and conflict handling before exercising writes. Respect read-only events and calendars through pointer, keyboard and mutation entry points.
+- Handle pointer cancellation, lost capture and Escape without committing a ghost edit. Test DST transitions, cross-day moves, all-day boundaries and failure rollback after a newer SSE change.
+- Keep text inputs safe from global single-letter shortcuts. Restore focus after popovers and dialogs close; preserve visible keyboard selection in virtualized views.
+- Prove zero React commits during the drag interval and report frame timing at 4× CPU throttle. Include interaction screenshots at both viewport sizes in light and dark, plus one named removal.
+
+Read the related gates: [G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06), [G07](/guides/open-work/roadmap/calendar-view/integration-gates#g07), [G08](/guides/open-work/roadmap/calendar-view/integration-gates#g08), [G10](/guides/open-work/roadmap/calendar-view/integration-gates#g10), [G11](/guides/open-work/roadmap/calendar-view/integration-gates#g11).
+
+## Acceptance evidence
+
+Playwright interaction and failure cases, Profiler recording, raw drag timings, screenshots and removal critique.
+
+[Phase 3](/guides/open-work/roadmap/calendar-view/frontend/phase-3) · [Phase 5](/guides/open-work/roadmap/calendar-view/frontend/phase-5)

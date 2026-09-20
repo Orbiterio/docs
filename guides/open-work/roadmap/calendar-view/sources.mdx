@@ -1,0 +1,92 @@
+---
+title: "Calendar View — Sources and Handoff"
+sidebarTitle: "Sources and handoff"
+description: "Download the supplied backend references, the frontend repository brief and the original eight-phase agent brief."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Integration gates](/guides/open-work/roadmap/calendar-view/integration-gates)
+
+## Download the handoff
+
+[Download the Calendar View handoff ZIP](/assets/calendar-view/calendar-view-handoff.zip). It preserves the three supplied backend files and the full original frontend brief. The extracted frontend `BRIEF.md` contains sections 1–6, ready to place at `docs/calendar/BRIEF.md` in the frontend repository.
+
+```text
+calendar-mirror/
+  schema.sql
+  webhook.go
+  reconcile.go
+frontend/
+  docs/calendar/BRIEF.md
+  docs/calendar/QA-REVIEW.md
+  docs/calendar/INTEGRATION-GATES.md
+  docs/calendar/JEV.md
+  docs/calendar/NL-DATE-PICKER.md
+  docs/calendar/NAVIGATION-AND-CACHE.md
+  docs/calendar/AGENDA-AND-SCHEDULING.md
+  docs/calendar/PERFORMANCE.md
+  docs/calendar/PHASE-PROMPTS.md
+  docs/calendar/jev-examples.json
+reference/
+  calendar-frontend-agent-brief.md
+README.md
+```
+
+<Warning>
+These are supplied reference files, with known gaps documented in the [integration gates](/guides/open-work/roadmap/calendar-view/integration-gates) and [QA review](/guides/open-work/roadmap/calendar-view/qa-review). They are not a verified, deployed backend. In particular, the missing-single-event path can dereference nil, the normalizer adds an extra day to Nylas `datespan.end_date`, and queue/SSE handling needs the corrections in the plan.
+</Warning>
+
+## Individual source files
+
+The text links append `.txt` so Mintlify serves the original contents as readable static files. The ZIP restores the original filenames.
+
+| File | Purpose | Read or download |
+|---|---|---|
+| `schema.sql` | Grants, calendars, masters, occurrence mirror, changes and work queue | [Source text](/assets/calendar-view/calendar-mirror/schema.sql.txt) · [Schema guide](/guides/open-work/roadmap/calendar-view/backend/schema) |
+| `webhook.go` | Challenge/signature handling and webhook admission | [Source text](/assets/calendar-view/calendar-mirror/webhook.go.txt) · [Webhook guide](/guides/open-work/roadmap/calendar-view/backend/webhook) |
+| `reconcile.go` | Nylas reads, occurrence normalization, reconciliation, queue draining and horizon extension | [Source text](/assets/calendar-view/calendar-mirror/reconcile.go.txt) · [Reconciliation guide](/guides/open-work/roadmap/calendar-view/backend/reconciliation) |
+| `calendar-frontend-agent-brief.md` | Complete supplied brief, eight prompts and prompt rationale | [Original source text](/assets/calendar-view/calendar-frontend-agent-brief.md.txt) |
+| `BRIEF.md` | Sections 1–6 for the frontend repository | [Repository brief text](/assets/calendar-view/BRIEF.md.txt) · [Rendered brief](/guides/open-work/roadmap/calendar-view/frontend/brief) |
+| `PHASE-PROMPTS.md` | All eight phase pages, including current addenda and original prompts | [Agent phase instructions](/assets/calendar-view/PHASE-PROMPTS.md.txt) |
+| `PERFORMANCE.md` | Effective render budgets, local interaction targets, backend measurements and reporting requirements | [Performance specification](/assets/calendar-view/PERFORMANCE.md.txt) · [Rendered page](/guides/open-work/roadmap/calendar-view/performance) |
+
+The three backend code accordions and all eight phase prompts preserve the supplied text. Corrections and proposed decisions appear outside those source blocks. Sections 1–6 in the extracted brief are unchanged; its preamble points to the required addenda. Copy the entire `frontend/docs/calendar/` bundle during handoff. The phase pages include paste-ready QA/JEV, navigation, scheduling and performance additions to read before the original prompts. `PHASE-PROMPTS.md` packages all eight pages so the receiving agent has those additions offline.
+
+The bundle also includes the [Akira JEV assessment](/guides/open-work/roadmap/akira/jev), [QA review](/guides/open-work/roadmap/calendar-view/qa-review), integration gates and [synthetic request/response examples](/assets/calendar-view/jev-examples.json.txt). The examples are not live model results.
+
+The bundle also includes the new [NL Date Picker spec](/guides/open-work/roadmap/calendar-view/nl-date-picker), with open-source research, the shared input contract and optional J03. [Download its Markdown snapshot](/assets/calendar-view/NL-DATE-PICKER.md.txt). This is an extension to the original supplied brief, not a completed component.
+
+The bundle includes the [Navigation and shared cache addendum](/guides/open-work/roadmap/calendar-view/navigation-and-cache), covering Cmd-K / top-left navigation, `0` and `0 0`, the left-panel calendar account selector, selected-account event display, cross-account availability, the verified 14-day widget behavior and the proposed shared 60-day preload. [Download its Markdown snapshot](/assets/calendar-view/NAVIGATION-AND-CACHE.md.txt). Read it before Phases 0–3; it extends the original preload/navigation policy without rewriting the supplied source sections.
+
+The [Agenda and scheduling addendum](/guides/open-work/roadmap/calendar-view/agenda-and-scheduling) is also included, covering no-scroll month paging, the context-rich List / Timeline agenda, scheduler guest entry and Nylas invitation delivery. [Download its Markdown snapshot](/assets/calendar-view/AGENDA-AND-SCHEDULING.md.txt). It supersedes conflicting month-scroll and simple-list instructions in the preserved source brief and prompts.
+
+The [Performance requirements](/guides/open-work/roadmap/calendar-view/performance) apply before every phase and ship as `PERFORMANCE.md`. [Download the Markdown snapshot](/assets/calendar-view/PERFORMANCE.md.txt). They define immediate local interactions, bounded shared caching, efficient Nylas synchronization, optional AI isolation and the effective measurement gates. This is a specification for another agent to implement, with all performance results still not run.
+
+## JEV review sources
+
+- **JEV: The Ultimate Guide**, Mark Pederson, 2026-09-18: supplied Markdown attachment, reviewed with the local `jev-classifier` skill and its prompt, integration and QA references. Historical thresholds and smoke results are not Calendar measurements.
+- [30 useful JEV use cases](https://bold-ledger-2qjf.here.now/): read in the browser; routing, evidence support and retrieval patterns informed the fit assessment.
+- [TypeSafe model limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13), [API contract](https://docs.typesafe.ai/api), [function calling](https://docs.typesafe.ai/cookbooks/function_calling) and [citation checking](https://docs.typesafe.ai/cookbooks/citation_check): checked for decision boundaries and request structure.
+- The inspected local Orbiter Decisions clients establish the transport example. OpenRouter's public alpha reference was unavailable in this review; verify its current contract before a live pilot.
+
+## Why the prompts are shaped this way
+
+The following is section 8 of the supplied brief:
+
+- The brief lives in the repo, not in the prompt. Each phase prompt is short because the constraints are already loaded and stable across phases.
+- Phase 0 is a read-and-plan gate. Ambiguities surface before code exists, and the agent has to prove it looked at installed types instead of remembering an API.
+- Fixture first. Every later phase measures against the same 5,000-event seed, so performance numbers are comparable and the agent cannot make the UI look fast on ten events.
+- Budgets are gates with numbers, and the agent reports raw measurements. "Feels fast" is not a deliverable.
+- Every visual phase ends with a screenshot and a one-line critique that names a removal. This is the cheapest way to get a design pass out of a code agent.
+- Guardrails name the specific temptations (calendar library, Date math, invented fields) instead of general advice. Agents route around vague warnings and respect specific ones.
+- Interactions come after static rendering. Drag logic layered on an unstable grid produces a mess; drag logic on a grid that already meets its render budget is usually short.
+- Akira tools reuse the mutation layer rather than calling the API directly, so agent actions and human actions are indistinguishable to the rest of the app and to the SSE reconciliation.
+
+## Primary references checked for this plan
+
+- [Nylas all-day event handling](https://developer.nylas.com/docs/v3/calendar/using-the-events-api/#all-day-event-handling): Google and Microsoft use an exclusive `datespan.end_date`. Still verify real grants during the first backfill.
+- [Nylas event-list API](https://developer.nylas.com/docs/reference/api/events/get-all-events/): occurrence-window filtering and provider-specific master filtering.
+- [Nylas event notifications](https://developer.nylas.com/docs/reference/notifications/events/) and [recurring events](https://developer.nylas.com/docs/v3/calendar/recurring-events/): webhook and series behavior.
+- [PostgreSQL sequence functions](https://www.postgresql.org/docs/current/functions-sequence.html): sequence allocation alone does not provide the per-user commit-order guarantee the SSE cursor requires.
+- [MDN EventSource](https://developer.mozilla.org/en-US/docs/Web/API/EventSource): browser lifecycle and the constraints of native EventSource error handling.
+
+These references inform the written acceptance gates. No live Google/Microsoft backfill, migration, frontend phase, benchmark or screenshot run is claimed by this documentation update.

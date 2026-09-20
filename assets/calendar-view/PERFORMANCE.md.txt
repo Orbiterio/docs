@@ -1,0 +1,121 @@
+# Calendar View — Performance Build Requirements
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Navigation and shared cache](/guides/open-work/roadmap/calendar-view/navigation-and-cache) · [Integration gates](/guides/open-work/roadmap/calendar-view/integration-gates#g16)
+
+> **Build plan only — for the implementing agent.** Performance is a requirement throughout the build, not a final cleanup phase. These are release targets and required evidence, not measured results. No application implementation, live invitation or benchmark is claimed by this documentation update.
+
+## Execution priority
+
+Read this document before every phase. It supplements the original nine budgets, replaces only the obsolete infinite-month-scroll gate, and applies to the widget, full calendar, agenda, scheduler and NL Date Picker. Follow the latest navigation and scheduling decisions when preserved source text conflicts. Keep correct dates, complete coverage, accessible controls, authorization and exact provider synchronization while optimizing; do not pass a budget by dropping events or suppressing errors.
+
+Optimize the measured critical path first. Reuse the existing shell, transport and identity integrations. Keep one event store and one mutation layer. Introduce a worker, extra cache or dependency only when a profile demonstrates its value and its overhead is included in the result.
+
+## Local interactions and rendering
+
+- Paint available calendar rows immediately from the shared normalized store. Page one calendar month at a time without scrolling; four to six week rows fit the canvas. Fetching, meeting context, JEV and provider availability never block covered month navigation, the agenda shell or manual draft editing.
+- Index/select events by account, calendar and overlapping date range. Cache day packing and availability by the affected data revision, timezone and working-hours policy. A one-event change invalidates only its affected old/new days and relevant selectors. Avoid sorting/scanning all 5,000 rows on every keystroke, pointer movement, clock tick or component render.
+- Update the now-line and upcoming filter at their required cadence in one shared owner. Do not create one timer per event. Recompute gaps only for changed days; midnight, timezone and work-hours changes deliberately invalidate the relevant ranges.
+- Keep the full month DOM bounded to visible cells and a viewport-appropriate number of chips per day. Use “+n more” to reach every hidden event. Virtualize long agenda/context lists; preserve focus, expansion state and measured heights. Mount detailed notes only on demand.
+- Use pointer capture and animation-frame updates for drag selection/movement, with transforms and cached geometry. No React state updates, model calls, network writes or repeated forced layouts per drag frame. Commit the validated mutation once on drop. Cancellation commits nothing; keyboard creation/movement remains available. Cross-day and recurring changes still obey their correctness gates.
+- Isolate form state so typing a title, invite address or NL phrase does not rerender the calendar. Split route code, parser and optional AI/context panels at meaningful boundaries. Reuse shared dependencies; report total incremental JavaScript, not just a small route file whose dependencies were moved into the shell.
+
+## Shared cache and loading
+
+Implement [Navigation and shared cache](/guides/open-work/roadmap/calendar-view/navigation-and-cache): one signed-in Orbiter user/workspace-scoped normalized store containing authorized grant/calendar rows, a 60-calendar-day forward minimum, visible-range margins, deduplicated missing-range requests and one stream owner per active application instance. Widget/calendar/agenda are selectors over the same rows. Switching the active connected calendar account uses cached selectors and does not clear this store, refetch covered ranges or restart the stream. Multiple browser tabs may each own a stream; do not add cross-tab leader election without measured need.
+
+On cold start, prioritize the visible range/today, then warm the remainder in bounded background work. Existing usable data remains interactive. Track coverage per completed interval and calendar: a partial response can render events but cannot establish free time. Complete coverage is required before a range is called loaded. Repeated mount, route change or widget opening must not create another feed.
+
+Define finite cache retention in Phase 0: maximum rows/bytes, expiry, pinned visible and draft ranges, and least-recently-used range eviction. Record the chosen values and sizing evidence. Evict associated coverage metadata atomically; a later visit reloads the missing interval. Do not retain every month ever visited or silently truncate the promised warm range to fit a cap. If the 60-day working set exceeds the cap, report that conflict and resolve paging/storage policy before claiming acceptance. Persisted storage is optional and must restore compatible data/cursor ownership together.
+
+Use incremental upserts/deletes, structural sharing and bounded change batches. Batch application may coalesce painting, but must preserve revision order, deletes and the latest safely applied cursor. An unhealthy or overloaded stream must expose staleness and recover through the agreed replay/snapshot protocol, never silently discard changes. Healthy SSE should not trigger a full-range refetch for every webhook. Refocus/reconnect uses staleness and cursor state, with deduplication/backoff, rather than parallel unconditional reads.
+
+## Scheduler, guests and meeting context
+
+- Open the scheduler and show its local draft immediately. Manual date/time/email entry works without an AI response or contact-search success. Opening a draft performs no provider write.
+- Debounce remote fuzzy contact search by **150 ms**, reuse normalized signed-in user/workspace-scoped results, cancel superseded requests and reject stale responses. Bound the dropdown to **20 results** from an authorized candidate source that actually supports fuzzy name/email/company retrieval. Do not download an entire address book, query on every render, or use an LLM to guess recipients. Direct email entry is immediate.
+- Derive the user's free gaps locally from complete event coverage. Request guest/provider availability only when needed for the current scheduling intent, after inputs settle or the user explicitly asks. Cancel outdated searches; any cached guest-availability result must show freshness and be revalidated when necessary. It is not a reservation.
+- Render meeting identity/time before relationship context. Reuse or batch authorized context reads for visible/expanded meetings, keyed by stable person IDs and evidence revision; avoid an event-by-event request waterfall. Load long notes or generated preparation on explicit expansion/intent. Never regenerate summaries on every render or stream tick.
+- Save shows a pending row immediately, then uses the shared authenticated command path to Nylas. Provider confirmation, uncertain completion, failure and reconciled state stay distinct. Do not label invitations sent just because the UI rendered quickly. Retry only through approved deduplication/idempotency rules.
+
+## Backend and Nylas work
+
+- Reads come from the mirror. Query only the authorized overlapping range with the agreed DTO projection and bounded pagination. Inspect query plans against realistic scoped data; add indexes based on those plans. Measure database time, serialization, transferred bytes and client ingestion separately. No per-event participant lookup waterfall or Nylas fan-out during a normal range read.
+- Webhook admission verifies the signature and persists durable work promptly. All provider I/O remains in Drain. Coalesce recurrence bursts per grant/master, paginate fully, diff against the mirror, and avoid writes/change-log entries for unchanged rows. Never delete missing rows until the authoritative page sequence completes.
+- Use bounded worker concurrency and fair scheduling across grants. Prioritize foreground create/edit/cancel/availability commands over bulk backfill without starving reconciliation; foreground commands do not wait for the webhook quiet-window debounce. Respect provider ordering, same-target ownership and grant-wide backoff. A rate-limited grant does not consume every worker or block healthy grants.
+- Backoff uses the provider's retry guidance plus bounded jittered retries. Keep leases, fencing and enqueue generations intact. Apply range snapshots/change rows in bounded transactions, with no open transaction across provider I/O. Maintain G04's commit-order-safe cursor even when optimizing batches.
+- Instrument queue admission, queue age, worker start, each provider request, mirror commit, SSE send and client apply. Separate foreground latency from backfill. Report Nylas latency/429s and provider webhook delay independently from application processing; these external delays are not under the UI's control.
+
+## Optional JEV and natural language
+
+The core calendar has **zero required JEV/LLM calls**. Do not put AI in navigation, rendering, availability math, contact identity, validation, webhook processing, sync or ordinary create/edit dispatch. The optional J01/J02/J03 pilots remain independently disabled until their quality and full-path latency/cost evaluations pass.
+
+For the NL Date Picker, preserve immediate manual controls and deterministic local parsing. Start remote interpretation only for the current settled input and allowed intent; cancel or ignore obsolete draft revisions. The existing picker targets remain: local input-to-paint p95 at most 50 ms, local interpretation p95 at most 100 ms after its 150 ms debounce, useful optional AI preview p95 at most 2 seconds, and a **3-second deadline** followed by a usable manual/clarification state. Account for JEV plus any fallback together. A fast classification followed by a slow fallback is not a fast full path. Read the [picker's full gates](/guides/open-work/roadmap/calendar-view/nl-date-picker#accessibility-performance-and-resilience).
+
+## Acceptance budgets
+
+Keep all nine original budget slots. Slot 5 now measures month paging. The other original limits remain unchanged. For repeated timings, report p50, p95 and maximum; a strict original limit is not relaxed by averaging. Mark an unmeasured metric **not run**.
+
+| Slot | Gate for the implementing agent |
+| --- | --- |
+| 1 | Week first render after collection data is ready: under 50 ms scripting. |
+| 2 | Navigate one covered week: zero range requests and under 16 ms React commit. |
+| 3 | Switch covered week/month/day: zero range requests. |
+| 4 | Drag frames: under 8 ms application work/frame and zero React commits during the gesture. Report dropped frames and full frame duration separately. |
+| 5 — replacement | Page 30 consecutive covered months forward/back using a separate 5,000-event fixture distributed across 36 months with a frozen seed/hash: zero range requests, p95 input-to-painted-grid at most 100 ms, each React commit under 16 ms, and no month-canvas overflow at either required viewport. This extra scenario does not change the original 5,000-event fixture. |
+| 6 | Same-day edit rerenders only affected day slices. Cross-day/multi-day edits may update their old/new slices, never unrelated columns. |
+| 7 | Agenda mount using the declared 500-record fixture slice: under 30 ms. Report mounted DOM rows separately; do not substitute a ten-event dataset. |
+| 8 | Calendar route chunk under 120 kB gzip. Also disclose transitive route bytes, shared-shell delta, parser/AI lazy chunks and cold/warm requests; no hiding dependencies outside the measured file. |
+| 9 | `packDay` for the separate 40-overlap dense-day fixture: under 1 ms. |
+
+Additional gates for the new scope:
+
+| ID | Gate and measurement boundary |
+| --- | --- |
+| P01 | Warm agenda open, List/Timeline switch, covered calendar-account switch and scheduler open: p95 input-to-first-usable-paint at most **100 ms**. Single `0` includes its intentional 400 ms sequence wait; measure UI work after dispatch separately and report total input latency. |
+| P02 | Manual title/date/time/email input: p95 input-to-paint at most **50 ms** under the recorded 4× CPU profile; no calendar-wide rerender or network dependency. |
+| P03 | Save/drop feedback: pending state painted within **100 ms p95**. No duplicate logical mutation or invitations from double-submit/retry fixtures; confirmation latency is reported separately. |
+| P04 | A normalized one-event delta received by the browser updates all mounted consumers within **100 ms p95**. A 100-change burst settles within **500 ms p95**, without main-thread tasks over 50 ms or skipped changes. |
+| P05 | Bounded remote guest search: **one request after a settled 150 ms debounce**, no requests for direct-email insertion, no stale-result replacement. Server search p95 at most **150 ms** under the declared backend profile; include debounce/network in a separate end-to-end report. |
+| P06 | Mirror range-read server processing p95 at most **200 ms**; webhook verification plus durable admission p95 at most **100 ms**, excluding WAN and downstream Nylas time. Verify durability and query plans as well as speed. |
+| P07 | Fifty repeated view/panel open-close cycles return to the same listener, timer and stream counts. After identical GC/settle conditions, retained heap growth is at most **5 MiB** versus the first settled cycle. Loading/eviction also stays within the Phase 0 documented cache cap. |
+| P08 | With AI disabled, timing out and erroring, all core navigation, manual scheduling and sync gates still pass. No fallback spinner blocks date/time controls or discards the draft. |
+
+P01–P08 are proposed release thresholds, not claims about current source. A failed threshold requires a profile and a recorded resolution; the agent must not quietly increase a budget or reduce the fixture.
+
+## Reproducible measurement and handoff
+
+Phase 0 records hardware, OS/browser, production build command, dependency versions, exact clock/timezone, seeds/hashes and network settings. Keep the original 5,000-event/26-week/eight-calendar fixture, separate 40-overlap dense day and explicit 500-row agenda slice. Add deterministic six-row months, the multi-year paging scenario, all-day/spanning events, incomplete coverage and a greater-than-50-events calendar. The context benchmark includes real-shaped guest/context payloads, not empty rows.
+
+Measure frontend interaction gates with the recorded 4× CPU slowdown at **1440×900** and **1920×1080**, including both themes. Use at least 30 samples per repeated interaction; include raw samples and p50/p95/max. Measure cold route load with cache disabled and warm route/panel opens separately. Record bytes, parse/compile/ingestion time, heap, fetch counts and time to the first usable view; establish a reviewed cold-load threshold in Phase 0 from the target device/network rather than disguising a warm measurement as cold.
+
+For P05/P06, use a recorded staging server/database allocation and **20 concurrent authenticated clients** against **10 synthetic accounts, each with the fixed 5,000-event dataset**. Separately seed **10,000 contacts per account** for typo-search tests. Freeze request/query mix and fixture hashes in Phase 0. Measure at least 100 samples after declared warm-up, report cold database/search results separately, and disclose saturation. Provider stubs make this load test deterministic; it sends no real invitations. Authorized live Google/Microsoft acceptance is a separate correctness and observed-latency run.
+
+Test jitter, loss/reconnect, duplicated notifications, 429s and an unavailable provider. Record request-to-pending, queue wait, provider response, mirror commit and browser apply as distinct spans. Same-time provider events must converge without inflated counts. Offline/manual usability must not be reported as successful provider delivery.
+
+Every phase reports affected gates and new payload/memory/query costs. Phase 7 runs the complete effective nine-slot matrix, P01–P08 and the picker/pilot gates that apply. Include traces, React profiles, bundle analysis, query plans and raw measurements. Report pass/fail/not-run, outstanding API gaps and one concrete visual removal. Fix measured bottlenecks without changing agreed behavior; defer speculative optimizations that add cost without evidence.
+
+## Paste-ready instruction for the build agent
+
+```text
+Read docs/calendar/BRIEF.md, QA-REVIEW.md, INTEGRATION-GATES.md,
+NAVIGATION-AND-CACHE.md, AGENDA-AND-SCHEDULING.md and PERFORMANCE.md.
+Read NL-DATE-PICKER.md and JEV.md when working on those optional extensions.
+This is an implementation handoff. The original source is reference material;
+the dated addenda take precedence where they explicitly replace a requirement.
+
+Build for immediate local interaction over one shared event store. Full month
+view never scrolls; page by calendar month. Keep the 60-day warm window and
+coverage/replay correctness. Keep AI and Nylas off the local rendering/input
+path. Provider writes still use the authenticated Drain-owned Nylas path and
+must result in real calendar updates/invitations after confirmation.
+
+In Phase 0 record the performance environment, cache limits, cold-load budget,
+effective nine-slot matrix and P01-P08 plan. In every later phase measure the
+affected gates on the fixed fixtures and report raw numbers plus traces.
+Do not invent API fields, claim mock data proves provider delivery, relax a
+budget silently, or hide dependencies by moving them to a different chunk.
+Profile and fix failures. Mark missing evidence not run. Phase 7 cannot pass
+with an unresolved required performance or correctness gate.
+```
+
+[Download this specification](/assets/calendar-view/PERFORMANCE.md.txt). The [handoff bundle](/assets/calendar-view/calendar-view-handoff.zip) includes it as `frontend/docs/calendar/PERFORMANCE.md`.

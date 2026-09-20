@@ -1,0 +1,60 @@
+---
+title: "Calendar View — Phase 6: Akira tools"
+sidebarTitle: "Phase 6: Akira tools"
+description: "Proposed Calendar integration after Akira's runtime and tool contracts are implemented."
+---
+
+[Phase 5](/guides/open-work/roadmap/calendar-view/frontend/phase-5) · [Calendar View](/guides/open-work/roadmap/calendar-view) · [Phase 7](/guides/open-work/roadmap/calendar-view/frontend/phase-7)
+
+The proposed tool scope now lives in [Akira — Calendar capability](/guides/open-work/roadmap/akira/calendar). **Akira is spec only, not implemented.** The inspected scoped chat registry is a reuse candidate; it is not a functioning Akira calendar registry. This integration phase depends on Akira's runtime and the required calendar contracts being implemented. The original supplied prompt below retains its wording for provenance.
+
+<Note>
+This is a future implementation task. The supplied prompt is preserved below; the integration requirements add the decisions and evidence needed to accept it. This documentation does not indicate that the phase has been implemented or measured.
+</Note>
+
+## QA and JEV instructions
+
+Prepend this addendum to the original phase prompt below:
+
+```text
+Read docs/calendar/QA-REVIEW.md, docs/calendar/INTEGRATION-GATES.md and
+docs/calendar/JEV.md alongside docs/calendar/BRIEF.md.
+Apply docs/calendar/PERFORMANCE.md. Akira tools reuse the same queries/mutations and preserve pending versus confirmed outcomes. Measure optional AI full-path latency/cost, including fallback; core calendar gates must pass with AI off, slow and erroring.
+Apply J01 only at the calendar-local routing seam and only in shadow mode initially. Reuse the verified server-side Decisions pattern without adding a duplicate global outcome router. Preserve five tool names and argument contracts; route compound/unknown requests through the approved baseline planner once Akira is implemented. Validate targets, dates, ownership, scope and intent independently before mutation. Establish the working baseline first, then report routing benefit against it.
+```
+
+The [QA review](/guides/open-work/roadmap/calendar-view/qa-review) and [Akira JEV assessment](/guides/open-work/roadmap/akira/jev) are included in the handoff bundle. The original prompt remains verbatim.
+
+## Paste-ready phase prompt
+
+```text
+Expose the calendar to Akira through @tanstack/ai.
+Tools (client-side, so the UI reacts in the same tick):
+- list_events({ from, to }): reads eventsCollection, returns compact rows.
+- find_availability({ emails, from, to, durationMin }): calls POST /calendar/availability.
+- create_event({ title, start, end, attendees, calendarId }): uses the Phase 4 insert mutation.
+- move_event({ id, start, end, scope }): uses the update mutation and the scope rules.
+- focus_range({ from, to }): navigates the grid and highlights the range.
+When a tool creates or moves an event, the affected chip gets the selection ring and the agenda
+scrolls to it. Tool definitions carry the JSON schema for arguments; validate with zod before
+executing. Read the existing Akira tool registration pattern first and match it exactly.
+Definition of done:
+- A scripted conversation test: "find 30 minutes with <email> next week and book it" results
+  in one availability call, one insert, and the chip visible in the grid.
+- Tools appear in the Akira tool list with descriptions that a non-engineer would understand.
+```
+
+## Integration requirements
+
+- After Akira is implemented, inspect and match its actual registration pattern. Preserve the five tool names and the supplied argument shapes; map them explicitly into approved mutation DTOs rather than creating a second write path.
+- `list_events` must distinguish complete loaded coverage from a partial local result. Availability belongs to the backend contract and must follow the agreed all-provider-calls-in-Drain design.
+- Validate arguments before execution. A request to find a free slot does not itself authorize booking; the supplied scripted test includes explicit booking intent.
+- Exercise tools against fixtures and mocks for this phase. Test read-only, recurring scope, failed mutation and repeated tool execution as well as the happy path. Capture the resulting UI state in both viewport sizes/themes and name one removed element.
+
+Read the related gates: [G02](/guides/open-work/roadmap/calendar-view/integration-gates#g02), [G05](/guides/open-work/roadmap/calendar-view/integration-gates#g05), [G06](/guides/open-work/roadmap/calendar-view/integration-gates#g06), [G09](/guides/open-work/roadmap/calendar-view/integration-gates#g09), [G11](/guides/open-work/roadmap/calendar-view/integration-gates#g11).
+
+## Acceptance evidence
+
+Argument-validation tests, scripted conversation with one availability call and one insert, tool descriptions, mutation reuse evidence, UI screenshots and removal critique.
+
+[Phase 5](/guides/open-work/roadmap/calendar-view/frontend/phase-5) · [Phase 7](/guides/open-work/roadmap/calendar-view/frontend/phase-7)

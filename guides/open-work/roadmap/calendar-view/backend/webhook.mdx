@@ -1,0 +1,173 @@
+---
+title: "Calendar View — Webhook and Queue"
+sidebarTitle: "Webhook and queue"
+description: "Signature-only webhook admission, durable coalescing, lease fencing and grant-wide rate-limit handling."
+---
+
+[Calendar View](/guides/open-work/roadmap/calendar-view) · [Schema](/guides/open-work/roadmap/calendar-view/backend/schema) · [Reconciliation](/guides/open-work/roadmap/calendar-view/backend/reconciliation)
+
+**Locked boundary:** the handler verifies the signature, validates routing fields and commits one durable work admission. Every Nylas call runs through `Drain`. The registration GET challenge is the handshake exception; it echoes the challenge and performs no sync work. A database failure returns non-2xx so delivery can retry.
+
+The supplied `webhook.go` is the starting point, with important unfinished branches listed below. [Download webhook.go as text](/assets/calendar-view/calendar-mirror/webhook.go.txt).
+
+## Provider bursts and canonical targets
+
+| Notification pattern supplied with the brief | Queue target | Result after the quiet window |
+| --- | --- | --- |
+| Google override `event.created` + `event.updated`; no master webhook | `(grant, master_event_id)` | One master-window reconcile |
+| Microsoft master `event.updated` + override `event.created` | Same `(grant, master_id)` for both | One master-window reconcile |
+| Known single event changed/deleted | `(grant, event_id)` | Fetch authoritative state, then upsert or tombstone |
+| Payload lacks recurrence metadata | Resolve against trusted mirror evidence, then bounded worker lookup | Never assume “single” is authoritative |
+| Grant/calendar lifecycle notification | A durable, namespaced control work target | Worker updates mirror state and coverage |
+
+The supplied two-second series debounce is an initial configuration value to test against recorded bursts. It is not an exactly-once promise. Later notifications may legitimately require another reconcile. Duplicated, delayed, reversed and interleaved bursts must converge to the same provider-confirmed mirror.
+
+## Admission and worker rules
+
+- Validate the exact raw request bytes against `X-Nylas-Signature`; bound body size and reject oversize input rather than silently truncating it. Accept only the intended methods, distinguish the GET challenge, and validate required grant/calendar/target fields before durable admission.
+- Resolve owner identity from the trusted grant record. Payload IDs nominate a sync target; they do not authorize arbitrary SQL writes. Handle unknown grants under an explicit durable quarantine/retry policy.
+- Each enqueue advances a generation and updates the next-run time. It must not clear or shorten a lease or bypass a grant-level backoff. Use a monotonic scheduling rule when a zero-delay path races with a two-second series debounce.
+- `Drain` claims work transactionally, then releases the SQL transaction before network I/O. Fenced lease ownership and a generation check protect both the mirror apply and final acknowledgement.
+- On success, acknowledge only the generation actually reconciled. A newer enqueue stays pending. A stale/expired worker cannot write an older snapshot or delete another worker's work.
+- Before **every** Nylas call, honor the shared grant blocked-until value. On 429, stop processing further claimed items for that grant and extend the block conservatively; other grants can continue. Include new enqueues, concurrent workers and retries in the same admission rule.
+- Bound attempts and deadlines; classify retries in code. Exhausted work moves to a durable inspectable dead-letter state with replay tooling, not a log message followed by deletion. Check acknowledgement/reschedule errors and `rows.Err()`.
+
+## Gaps in the supplied handler and drain
+
+| Reference behavior | Required implementation change |
+| --- | --- |
+| `grant.expired` writes grant state inline | Admit lifecycle work through the same durable boundary; define expiry/reconnect exposure and deletion policy. |
+| `grant.updated` writes state and calls `ExtendHorizon` inline | Queue control work; establish recovery coverage through worker completion. |
+| Calendar create/update/delete returns success without work | Implement durable calendar synchronization and the corresponding UI refresh policy. |
+| Queue “lease” reuses `run_after` | Add explicit ownership/expiry and generation fencing; re-enqueue must not make an active target claimable. |
+| Successful work deletes by grant + target only | Conditional acknowledgement preserves a webhook arriving during reconciliation. |
+| Single-to-series promotion re-enqueues the same master target | Do not delete the newly promoted item in the caller's success cleanup. Preserve the promoted generation. |
+| 429 updates only existing queue timestamps | Add shared grant admission; current batches and future enqueues cannot escape the backoff. |
+| Six failed attempts are logged then deleted | Persist exhausted work and expose operator retry/reset. |
+
+These are code-inspection findings, not test results. Nylas's [webhook documentation](https://developer.nylas.com/docs/v3/notifications/) and [event notification reference](https://developer.nylas.com/docs/reference/notifications/events/) are the provider references to freeze with recorded fixtures during implementation.
+
+## Supplied webhook
+
+<Accordion title="webhook.go — complete reference file">
+
+```go
+package calsync
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"time"
+)
+
+// Webhook is the Nylas v3 receiver. It does exactly two things synchronously:
+// verify the signature and write one queue row. Everything that talks to Nylas
+// happens in Drain, so the handler stays under Nylas's response deadline and a
+// Cloud Run scale-down can't lose work.
+//
+// Register with trigger_types:
+//   event.created, event.updated, event.deleted,
+//   calendar.created, calendar.updated, calendar.deleted,
+//   grant.expired, grant.updated
+type Webhook struct {
+	Secret string // webhook secret returned by POST /v3/webhooks
+	R      *Reconciler
+}
+
+type payload struct {
+	Type string `json:"type"`
+	Data struct {
+		Object struct {
+			ID            string   `json:"id"`
+			GrantID       string   `json:"grant_id"`
+			CalendarID    string   `json:"calendar_id"`
+			MasterEventID string   `json:"master_event_id"`
+			Recurrence    []string `json:"recurrence"`
+		} `json:"object"`
+	} `json:"data"`
+}
+
+func (w *Webhook) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// Registration challenge: Nylas GETs ?challenge=<token> and expects it echoed raw.
+	if req.Method == http.MethodGet {
+		_, _ = rw.Write([]byte(req.URL.Query().Get("challenge")))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+	if err != nil {
+		http.Error(rw, "read", http.StatusBadRequest)
+		return
+	}
+	if !w.verify(body, req.Header.Get("X-Nylas-Signature")) {
+		http.Error(rw, "bad signature", http.StatusUnauthorized)
+		return
+	}
+	var p payload
+	if err := json.Unmarshal(body, &p); err != nil {
+		http.Error(rw, "json", http.StatusBadRequest)
+		return
+	}
+	if err := w.route(req.Context(), p); err != nil {
+		// Non-2xx makes Nylas retry, which is what we want for a DB blip.
+		http.Error(rw, "queue", http.StatusInternalServerError)
+		return
+	}
+	rw.WriteHeader(http.StatusOK)
+}
+
+func (w *Webhook) verify(body []byte, sig string) bool {
+	mac := hmac.New(sha256.New, []byte(w.Secret))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(sig))
+}
+
+func (w *Webhook) route(ctx context.Context, p payload) error {
+	o := p.Data.Object
+	switch p.Type {
+	case "grant.expired":
+		// Drain skips expired grants; the UI reads status and shows a reconnect banner.
+		_, err := w.R.DB.Exec(ctx,
+			`update calendar_grant set status='expired', updated_at=now() where grant_id=$1`, o.GrantID)
+		return err
+
+	case "grant.updated":
+		// Re-auth. Flip back to valid and roll the horizon so the gap gets refilled.
+		if _, err := w.R.DB.Exec(ctx,
+			`update calendar_grant set status='valid', updated_at=now() where grant_id=$1`, o.GrantID); err != nil {
+			return err
+		}
+		return w.R.ExtendHorizon(ctx, o.GrantID)
+
+	case "calendar.created", "calendar.updated", "calendar.deleted":
+		// Calendars are few and cheap; fetch inline via a "single"-style item keyed on
+		// the calendar id with a distinct kind if you want them queued. Left as an
+		// exercise: calendar rows rarely change and don't gate rendering.
+		return nil
+
+	case "event.created", "event.updated", "event.deleted":
+		isSeries := o.MasterEventID != "" || len(o.Recurrence) > 0
+		target, kind, delay := o.ID, "single", time.Duration(0)
+		if isSeries {
+			kind = "series"
+			delay = 2 * time.Second // let the provider's burst finish landing
+			if o.MasterEventID != "" {
+				target = o.MasterEventID
+			}
+		}
+		return w.R.Enqueue(ctx, o.GrantID, o.CalendarID, target, kind, delay)
+	}
+	return nil
+}
+```
+
+</Accordion>
+
+## Required proof
+
+Use a fake Nylas client that fails the test if invoked from the HTTP handler. Replay both supplied provider bursts in all relevant orders. Inject a new notification during a worker's network call and prove a later reconcile remains scheduled. Expire a lease during slow I/O and prove the stale owner cannot apply or acknowledge. Simulate a 429 with multiple claimed items and a second replica, then assert no further call for that grant until its block expires. Verify calendar/grant lifecycle work is durable and exhausted work remains recoverable.
