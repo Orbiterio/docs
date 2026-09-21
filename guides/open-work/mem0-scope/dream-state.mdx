@@ -1,0 +1,112 @@
+---
+title: "Mem0 Dream State"
+sidebarTitle: "Mem0 Dream State"
+description: "The nightly cron that maintains Orbiter's mem0 memories while nobody is waiting on a response"
+icon: "moon"
+---
+
+<Check>
+  **This scope doc in process - Mon Sep 21**
+</Check>
+
+[Mem0 Scope 2.0](/guides/open-work/mem0-scope) · [Mem0 Entry Points & Surfaces](/guides/open-work/mem0-scope/entry-points-and-surfaces) · [Mem0 Decisions](/guides/open-work/mem0-scope/decisions) · [Akira Pre-Scope](/guides/open-work/mem0-scope/akira-pre-scope)
+
+<Note>
+  **Early scope.** Two jobs are decided. The rest of this page is proposal. Nothing is built.
+</Note>
+
+Dream State is the nightly cron for mem0. [Entry points](/guides/open-work/mem0-scope/entry-points-and-surfaces) write a memory the moment something happens, which keeps memory fresh. Dream State runs when no user is waiting, which keeps memory correct: it reconciles what was written that day, retires what is no longer true, and keeps base memories in line with Universe.
+
+Orbiter's writers store text verbatim (`infer=false`), so mem0 never merges, corrects, or retires anything by itself. If Dream State does not do that work, nothing does.
+
+## Write fast, consolidate at night
+
+| | Entry points, by day | Dream State, by night |
+| --- | --- | --- |
+| **Job** | Record what happened, immediately | Make the record correct and small |
+| **Trigger** | An event | A schedule |
+| **Judgment** | Is this worth remembering? | Is this still true, and has it been said already? |
+| **Cost** | Constant per event | Bounded: the last day's memories and their near neighbors, never the whole store |
+
+The split takes the strong half of two designs. Writing on every event gives near-immediate freshness, where a store that only ingests nightly can lag by a day or two. Consolidating offline gives a small, accurate store, where a store that only ever adds collects contradictions and leaves retrieval to sort them out.
+
+## Jobs decided so far
+
+From [Mem0 Decisions](/guides/open-work/mem0-scope/decisions). How each job runs is still to be written. One write is deliberately not nightly: a brand-new entity's edge memories are written when its first enrichment package lands (decision 19). Dream State is the backstop for that trigger, not its owner.
+
+| Job | What it does | Decision |
+| --- | --- | --- |
+| **Base memory refresh** | Selects entities that are in at least one user's contacts and whose Universe publish time is newer than their `base_memories_at` stamp. For each, reads the entity's base memories and diffs them against its edges on `edge_uuid`: adds what is missing, updates text that changed, deletes what is gone | 4 and 5 |
+| **Base memory repair** | Finds entities that were claimed (`base_memories_at` is set) but whose memory count is short of their edge count, because a job stopped midway, and finishes them | 3 |
+
+## Proposed: the reconciliation pass
+
+For private memories: what a user's email, calendar, notes, and chats say about a contact. These have no graph behind them, so nothing else will ever correct them.
+
+<Steps>
+  <Step title="Select the day's memories">
+    For each user, the memories created or changed in the last 24 hours.
+  </Step>
+  <Step title="Find each one's near neighbors">
+    A mem0 search inside the same user scope, filtered to the same `contact_entity_id`. A handful of candidates, not the whole store.
+  </Step>
+  <Step title="Classify each pair">
+    One closed vocabulary:
+
+    | Verdict | Meaning | Action |
+    | --- | --- | --- |
+    | `same` | Both state the same fact | Keep the better one, supersede the other |
+    | `supersedes` | The new one replaces the old one: a changed role, a move to another city, a corrected detail | Supersede the old one, with `valid_to` and `superseded_by` |
+    | `generalize` | Several examples of one trait, such as asking for bullet points three times | Write one trait memory, supersede the examples |
+    | `stale` | A temporary detail whose time has passed, such as "traveling next week" | Supersede it, with no replacement |
+    | `unrelated` or `unknown` | Different facts, or not clear enough to act on | Leave both alone |
+  </Step>
+  <Step title="Apply and log">
+    Write the changes to mem0 and record each one in the audit log.
+  </Step>
+</Steps>
+
+### Rules the pass follows
+
+- **Supersede, never delete.** A superseded memory gets `status = superseded`, `valid_to`, and `superseded_by` in its metadata, and every read filters on `status = active`. History stays answerable ("where did Ryan work before?"), and a wrong verdict from last night can be undone. It is the same valid-from, valid-to shape the graph edges already use.
+- **Base memories are the exception.** Universe holds their history: a role that ends becomes a `WORKED_AT` edge with its own memory. So the refresh diff deletes a base memory whose edge is gone.
+- **Every writer stamps `status = active`.** mem0 metadata filters match equality on top-level keys (checked against the docs on 2026-09-21), so a memory with no `status` key would not match the read filter. This applies to every entry point, from the first memory written.
+- **JEV classifies, code compares dates, a generative model writes.** The pair verdict is a bounded choice over supplied text, which is JEV's job. Which of two dated facts is newer is arithmetic, which is code's job. Only `generalize` needs new text, and only that step uses a generative model.
+- **Bounded work.** Only the last day's memories and their neighbors. The cost of a run tracks the day's activity, not the size of the store.
+- **Every change is logged.** Before, after, verdict, model, and run ID, in an audit table. A run can be inspected and reversed.
+
+## Proposed: what the pass feeds
+
+The user profile that Akira would read on every turn is rendered after the pass, from consolidated memories instead of raw ones. That idea lives on [Akira Pre-Scope](/guides/open-work/mem0-scope/akira-pre-scope), and none of it is to be built yet.
+
+## Candidate jobs
+
+Not decided.
+
+1. **Near-duplicate cleanup for base memories.** Exact duplicates are already dropped when base memories are written (decision 7). What remains is same-fact pairs, such as a `FOUNDED` and a `WORKS_AT` memory for the same company. It would reuse the reconciliation classifier's `same` verdict. Build it only if retrieval shows the pairs get in the way.
+2. **Backfill for existing users and contacts.** Users and contacts that predate these rules have no user memories, base memories, or contact creation memories. The contact-add safety net (decision 14) covers users who add someone new. Everyone else needs a one-time pass.
+
+## Considered, not adopted
+
+- **A graph pointer per memory.** A `USER_NOTED` edge from the user to the entity, carrying the mem0 memory ID. Memories already carry `contact_entity_id` and `user_entity_id`, which gives entity-filtered search with no graph write per memory. Revisit if a traversal needs it.
+- **mem0 project-level extraction instructions.** They steer mem0's own extractor, which Orbiter does not use.
+- **Self-hosting mem0 on AlloyDB.** An infrastructure choice, outside this page.
+
+## Measure it
+
+Ask the same retrieval questions before and after the pass is switched on. mem0's open-source benchmark harness, run on Orbiter's own transcripts, is one way to do it. The pair classifier is held to the gates in the `jev-classifier` skill: labeled pairs, a held-out set, and shadow mode first.
+
+## Where these ideas came from
+
+An outside comparison of two memory designs that Mark brought in on 2026-09-21: Dhravya Shah's black-box teardown of Instinct's memory, set against mem0's architecture. The teardown is a secondhand reconstruction by the founder of a competing product, so its claims about either system are unverified. The takeaway used here is Instinct-style offline consolidation on the write side with mem0's hybrid retrieval on the read side. What is on this page rests on its own reasoning, not on the teardown being right.
+
+## To document
+
+| Section | Question it answers |
+| --- | --- |
+| Schedule and trigger | When does it run in each environment, and what stops two runs from overlapping? |
+| Inputs | Which memories and which Universe changes does a run look at: everything, or only what changed since the last run? |
+| Jobs | What does a run do, and in what order? |
+| JEV decisions | Which jobs are bounded classifications that JEV can make? |
+| Outputs and audit | What does a run write, and where is the record of what it changed? |
+| Limits and failure | Budget per run, retry behavior, and what happens when a run stops midway |

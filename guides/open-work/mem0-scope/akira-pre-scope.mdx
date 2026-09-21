@@ -1,0 +1,173 @@
+---
+title: "Akira Pre-Scope"
+sidebarTitle: "Akira Pre-Scope"
+description: "Planning notes on Akira's harness and memory: consent before action, JEV for bounded decisions, and a first look at OpenClaw"
+icon: "robot"
+---
+
+<Danger>
+  **Planning and ideas only - do NOT build yet**
+</Danger>
+
+[Mem0 Scope 2.0](/guides/open-work/mem0-scope) · [Mem0 Entry Points & Surfaces](/guides/open-work/mem0-scope/entry-points-and-surfaces) · [Mem0 Dream State](/guides/open-work/mem0-scope/dream-state) · [Mem0 Decisions](/guides/open-work/mem0-scope/decisions)
+
+Akira is not built. It is at the planning stage, and its harness may be based on OpenClaw. This page collects early thinking on two things: how much Akira may do without a human saying yes, and how Akira would use the memory described in Mem0 Scope 2.0. The Akira plans themselves live on [Akira](/guides/open-work/roadmap/akira) and [Akira user assistant](/guides/open-work/roadmap/akira-user-assistant). Nothing here is a decision.
+
+Two directions from Mark, 2026-09-21, shape everything below:
+
+1. **Lean heavily on JEV** inside the harness.
+2. **Strictly limit what the agent can do without human consent.**
+
+## Consent first
+
+### Principles
+
+- **Reading is free. Changing anything needs a yes.** Akira can look things up without asking. Anything that changes data, or that leaves Orbiter, waits for the human.
+- **Consent is enforced in code, not in the prompt.** A tool call that needs consent is stopped by the harness until the human approves it. The model is never trusted to hold itself back. An approval that cannot be collected counts as a no.
+- **Approval binds to the exact action.** The human approves this email, to these people, with this text. If anything changes after approval, the approval is void. OpenClaw's exec approvals already work this way for shell commands, binding to the exact arguments and working directory.
+- **JEV never grants permission.** A confident classifier answer is not consent. JEV can route, narrow, and escalate. It can make Akira stricter and never looser.
+- **No human message, no action.** When Akira runs by itself, on a schedule or from an event, it may read and draft. What it finds is offered as a suggestion, and acting on it takes the same consent as anything else.
+
+### Action tiers
+
+A first cut. Every tool Akira has would be assigned one tier in a static table, in code.
+
+| Tier | Examples | Without consent |
+| --- | --- | --- |
+| **Read** | Search memory, read contacts and the graph, read the calendar | Allowed |
+| **Draft** | Draft an email, propose a calendar event, propose a note | Allowed. The result is shown to the human and goes nowhere |
+| **Write inside Orbiter** | Save a note, add a contact, put someone in a collection, remember a preference | One confirmation per action |
+| **Outbound or irreversible** | Send an email or a message, create or move an event with attendees, delete anything | One confirmation per action, with the exact payload shown |
+| **Never** | Run shell commands, change credentials or integrations, bulk delete, act for another user | Not given to Akira at all |
+
+## Where JEV sits in the harness
+
+JEV answers bounded questions over text the harness already holds. Each one below is a closed choice with an explicit `unknown`, runs in shadow first, and falls back to the stricter path on a low-confidence, malformed, or missing answer. The rules are the ones in the `jev-classifier` skill and on [Akira JEV pilots](/guides/open-work/roadmap/akira/jev).
+
+| # | Decision | Seam | Labels | Effect |
+| --- | --- | --- | --- | --- |
+| A | Which tool family is this turn about? | Before the prompt is built | The tool families, `compound`, `unknown` | Only those tools are offered to the model this turn. Smaller attack surface, fewer tokens |
+| B | Does this tool call look riskier than its tier says? | Before the tool call | `as_tiered`, `riskier`, `unknown` | `riskier` or `unknown` escalates to consent. It can raise a tier and never lower one |
+| C | Where did the instruction behind this call come from? | Before the tool call | `user_request`, `retrieved_content`, `unknown` | An action prompted by an email body or a web page, and not by the user, is blocked or sent to consent with a warning |
+| D | Is each claim in this outgoing draft supported by its sources? | Before a message is sent | `supported`, `contradicted`, `insufficient` per claim | Unsupported claims are flagged to the human before they approve. The pattern is J02 on the Akira JEV page |
+| E | Is this worth remembering? | Memory writers | See [write policy](/guides/open-work/mem0-scope/entry-points-and-surfaces#write-policy-when-jev-decides) | Already scoped for memory |
+
+What stays in code and is never a classifier's call: who the user is and what they may access, tenant boundaries, the tier table, binding an approval to its payload, dates and availability, and identity resolution.
+
+## OpenClaw as the harness: a first look
+
+Read from the OpenClaw repository and docs on 2026-09-21. Facts below are quoted or paraphrased from those pages. Anything marked "to check" was not confirmed.
+
+### What it is
+
+An MIT-licensed, open-source assistant harness in TypeScript, stewarded by the OpenClaw Foundation. A local Gateway is the control plane for sessions, tools, and events. Chat channels, companion apps, tools, skills, and plugins connect to it, and model providers are pluggable.
+
+### What fits
+
+| OpenClaw has | Why it matters for Akira |
+| --- | --- |
+| A stated philosophy of "Policy is code. Denial is structural, not a request the model is asked to honor; approval paths fail closed" | The same stance as the consent principles above |
+| A `before_tool_call` plugin hook that can "block a tool or request approval" | The seam for the tier table, decisions B and C, and the consent prompt |
+| A `before_prompt_build` hook that can "add context or narrow tools for a turn" | The seam for the standing profile and for decision A |
+| A `message_sending` hook that can "rewrite outgoing text or cancel a send" | The seam for decision D |
+| Exec approvals that bind to exact arguments and fail closed (`askFallback` defaults to `deny`) | A working model of payload-bound approval to copy for every consent tier |
+| A pluggable memory slot | mem0 could sit behind the harness's `memory_search` tool |
+| TypeScript | Orbiter's existing JEV client for chat, `jev-classifier.server.ts`, is TypeScript |
+
+### What does not fit, or needs work
+
+1. **It is not multi-tenant.** The security docs assume "one trust boundary per gateway: a single operator, or a team whose members trust each other", and say it is not a boundary between mutually untrusting users. Orbiter is multi-tenant. Either every user gets a gateway, or OpenClaw supplies only the agent loop and every tenant rule is enforced by Orbiter's backend tools. This has to be settled before anything else.
+2. **Built-in approvals cover shell commands only.** Consent for every other tool would be a plugin Orbiter writes on `before_tool_call`. That is the hook's purpose, and it is still Orbiter's code to build and test.
+3. **Its memory is files the agent writes.** Out of the box the agent keeps `MEMORY.md`, `USER.md`, and daily notes in its workspace, flushes memory before compaction, and runs a background "Dreaming" consolidation. That is a second memory store with an agent write path, which is the opposite of idea 2 below. Akira would need a read-only mem0 plugin in the memory slot, the memory flush turned off (`agents.defaults.compaction.memoryFlush.enabled`), and OpenClaw's Dreaming left off in favor of Orbiter's [Dream State](/guides/open-work/mem0-scope/dream-state).
+4. **Tools run on the host unless sandboxing is configured.** Akira should have no shell at all: `tools.exec.mode` set to `deny`.
+5. **It acts on a schedule with no human message.** The heartbeat runs a full agent turn every 30 minutes by default, with the same tool access as a normal turn, and it can message the user. Under the consent principles that is off by default for Akira (`agents.defaults.heartbeat.every` set to `"0m"`). If it is ever turned on, its runs are limited to the read and draft tiers, with `target: "none"` so nothing is sent.
+6. **It is built as a personal assistant across chat apps.** Akira lives inside Orbiter, so most of the channel layer would go unused. Orbiter also already has a TanStack AI chat stack with JEV routing in it. Whether OpenClaw earns its place over extending that stack is an open question.
+
+To check: whether a mem0 memory backend exists for OpenClaw (the docs list a built-in SQLite store, Honcho, and LanceDB), and the exact return shape of `before_tool_call` for requesting approval.
+
+### Workspace files, and what Akira would do with each
+
+OpenClaw gives every agent a workspace of Markdown files. Several are injected into the prompt on every turn.
+
+| File | OpenClaw's purpose | Written by | For Akira |
+| --- | --- | --- | --- |
+| `AGENTS.md` | Operating instructions, including how to use memory | Human | Orbiter-authored and fixed. Carries the consent rules in words, as a second line behind the code |
+| `SOUL.md` | Persona, tone, and boundaries | Human | Orbiter-authored and fixed |
+| `IDENTITY.md` | The agent's name and style | Agent, at first run | Orbiter-authored. Akira does not name itself |
+| `USER.md` | Stable preferences, style, relationships, and active projects. About 4,000 characters, injected every turn | Human | The standing profile from idea 1, rendered by Orbiter from the profile doc. Read-only to Akira |
+| `MEMORY.md` and `memory/YYYY-MM-DD.md` | Long-term memory and daily notes | Agent | Not used. mem0 is the memory, behind a read-only search tool |
+| `BOOTSTRAP.md` | A one-time first-run ritual, deleted after use | Agent | Not used. Onboarding is Orbiter's own flow |
+
+### The Muse post
+
+Mark linked a post on X (2026-09-21) claiming that Muse, a consumer assistant, is OpenClaw underneath. In the screenshot, Muse compares the OpenClaw repository with its own system files and reports the same set of workspace files, with `SOUL.md` lines that match OpenClaw's template nearly word for word. The evidence is one assistant describing itself in one screenshot, so treat it as a lead, not a fact.
+
+Two things to take from it either way:
+
+- **The pattern can carry a mass-market product.** If the claim holds, a large consumer assistant shipped on these workspace files, which is a point in OpenClaw's favor as a base.
+- **Whatever is in the workspace, the user can get out of it.** Muse listed and quoted its own system files because someone asked. Assume every workspace file is visible to the user it serves. No secrets, no other tenant's data, and one workspace per user.
+
+## How Akira would use memory
+
+### 1. A standing profile every turn, search only for specifics
+
+Akira reads a short profile of the user on every turn: who the user is, how the user likes to work, and what the user is working on. A recap of the current session rides along with it. mem0 search is kept for the specific facts a question needs.
+
+- **Why.** The assistant stops rebuilding who the user is from twenty fragments on every turn. Fewer tokens, lower latency.
+- **Already planned.** The Akira user assistant plan has this profile: `profile_doc`, held in AlloyDB and re-rendered by a nightly cron.
+- **What the memory work adds.** [Dream State](/guides/open-work/mem0-scope/dream-state)'s reconciliation pass runs first, so the profile is rendered from consolidated memories. One profile, not a second one.
+- **Size.** A few thousand tokens. The outside analysis suggested 2,000 to 4,000 for the profile. Treat that as a starting guess to test.
+
+### 2. Akira reads memory, the backend writes it
+
+Akira gets search tools only. No tool writes to mem0 directly.
+
+- **Conversations are written server-side, once per session.** After the session ends, or once a day under that session's `run_id`, the backend hands the whole transcript to the extractor. The extractor sees a conversation instead of message pairs, which means fewer duplicates and better facts.
+- **No path from untrusted text into permanent memory.** An email or a web page that Akira reads cannot talk it into saving something, because Akira has nothing to save with.
+- **Nothing is lost by waiting.** Inside a session, continuity comes from the recap.
+- **Already planned, and it fits.** The Akira plan has post-session distillation. [Decision 9](/guides/open-work/mem0-scope/decisions) keeps `run_id` free for real sessions like this one.
+- **One tension.** The Akira plan has a `remember_preference` tool that writes when the user asks. Under the tiers above it is a write inside Orbiter: allowed, with one confirmation, and routed through the backend writer as its own entry point, never as a direct mem0 tool.
+
+### 3. Search by the entities in the conversation
+
+Every memory carries entity IDs: `contact_entity_id`, `user_entity_id`, `entity_id`. When Akira knows who the conversation is about, it searches those entities first and widens only if it has to.
+
+"Tell me about Ryan" would read two places:
+
+| Read | Scope | Filters |
+| --- | --- | --- |
+| What this user knows about Ryan | `user_id = {user WorkOS ID}` | `contact_entity_id` is Ryan's, `status = active` |
+| What is publicly known about Ryan | `user_id = entity:{Ryan's entity ID}` | `status = active`, award nominations left out by default ([decision 6](/guides/open-work/mem0-scope/decisions)) |
+
+Memory text names people by their full canonical name, never a pronoun or a first name alone, so mem0's keyword and entity matching land on the right person. The base memory and contact creation templates already do this. Extracted memories would need the same rule.
+
+### 4. Only active memories
+
+Every read filters on `status = active`, so Akira never repeats a fact that Dream State has superseded. When the question is about history ("where did Ryan work before?"), Akira drops the filter on purpose.
+
+## What Akira would need from Mem0 Scope 2.0
+
+| Need | Provided by | State |
+| --- | --- | --- |
+| Memories stamped with entity IDs | [Entry points](/guides/open-work/mem0-scope/entry-points-and-surfaces) 0 to 2 | Decided |
+| Consolidated memories, free of duplicates | Dream State's reconciliation pass | Proposed |
+| A `status = active` read filter | Dream State's rules | Proposed |
+| An entry point for chat sessions | Entry points, AI chat | Not scoped |
+| The user profile | Akira user assistant plan | Draft |
+
+## Questions for later
+
+1. **Tenancy.** A gateway per user, or OpenClaw as the agent loop only, with Orbiter's backend enforcing every tenant rule?
+2. **OpenClaw, or the TanStack AI chat stack Orbiter already has?** What does OpenClaw give Akira that extending the existing stack would not?
+3. **The tier table.** Which tier is each planned Akira tool, and who signs the table off?
+4. **Consent fatigue.** Which confirmations can be batched ("approve these five notes") without weakening the rule?
+5. **Does `remember_preference` survive** as the one explicit memory write, confirmed each time?
+6. **Per session or per day** for writing chat memories?
+7. **A brief per contact.** Would a standing one-page summary of each important contact be worth keeping, the way the user profile is kept for the user?
+8. **Reranking** on specific searches: worth the latency?
+
+## Where these ideas came from
+
+- The memory ideas come from the outside comparison cited on [Dream State](/guides/open-work/mem0-scope/dream-state#where-these-ideas-came-from): a teardown of Instinct's memory set against mem0's architecture, brought in by Mark on 2026-09-21. It is secondhand, so its claims about either product are unverified.
+- The OpenClaw notes come from its GitHub repository and docs (`docs.openclaw.ai`: memory, agent workspace, heartbeat, security, exec approvals, plugin hooks, why OpenClaw), read on 2026-09-21.
+- The Muse claim comes from a post on X that Mark shared as a screenshot the same day. The post could not be opened directly, and the claim is unverified.
