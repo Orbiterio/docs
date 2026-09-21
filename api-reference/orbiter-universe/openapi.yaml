@@ -264,7 +264,7 @@ paths:
         - Enrichment
       summary: Get-or-create a company (the enrichment entry gate)
       description: |
-        The only sanctioned company get-or-create path. Resolves the seed through strong identifiers (profile URL, domain), runs the pre-create guards and the LLM research preflight, dedups against the Universe backbone and the fundable mirror, and creates the company with its initial graph node when nothing matches. Every branch returns the shell: guard misses come back 200 with `company_created: false` and null fields — a blocked input is an answer, not an error. A company name alone is never enough: the seed must carry a domain or profile URL. Requires scope `enrich:company`.
+        The only sanctioned company get-or-create path. Resolves the seed through strong identifiers (profile URL, domain), runs the pre-create guards, dedups against the Universe backbone and the fundable mirror, and creates the company with its initial graph node when nothing matches. Research never runs inside this request: the shell carries the seed's own name, domain and profile, the run dispatched behind it researches the company in the worker, and the corrected identity arrives in the projection (`projection_status` says when to poll). A namesake answer or a non-company is parked for review there and surfaces as `409:needs_review`. Every branch returns the shell: guard misses come back 200 with `company_created: false` and null fields — a blocked input is an answer, not an error. A company name alone is never enough: the seed must carry a domain or profile URL. Requires scope `enrich:company`.
       security:
         - bearerAuth: []
       requestBody:
@@ -3674,7 +3674,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (ids filled only where the mirror holds the same organization and deal), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -4622,7 +4622,7 @@ components:
           description: True for a round the LLM fallback reported before any Fundable deal existed; the amount, when present, is the LLM's figure.
         source:
           type: string
-          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (no deal id, no round, no company id), or Company_LLM for the fallback.
+          description: Who reported the round — Fundable, Signal NFX for a row read off the investor's Signal profile (ids filled only where the mirror holds the same organization and deal), or Company_LLM for the fallback.
         funding_type:
           type:
             - string
@@ -5176,13 +5176,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProjectionAddress'
-          description: Every geocoded address, HQ first.
+          description: Every geocoded address, primary first; birthplace addresses remain separate.
         primary_location:
           oneOf:
             - $ref: '#/components/schemas/ProjectionLocation'
             - type: 'null'
           description: |
-            The one-line summary of addresses[0]. Distinct from person.primary_location, which is the distilled free-text location string.
+            The one-line summary of the person's address labelled primary, or null when none is held. Birthplace addresses are excluded. Distinct from person.primary_location, which is the distilled free-text location string.
         important_dates:
           type: array
           items:
@@ -6311,6 +6311,14 @@ components:
       description: |
         The 17-field seed contract. Legacy integer fields (data_source_id) are accepted for caller compatibility and ignored.
       properties:
+        source_urls:
+          type: array
+          maxItems: 12
+          items:
+            type: string
+            format: uri
+            pattern: ^https?://
+          description: Corroborated public profile URLs supplied as evidence to company preflight; they do not bypass identity checks.
         domain:
           type: string
           description: Bare host preferred; URL-shaped values are discarded.
@@ -6347,7 +6355,7 @@ components:
           description: Suppresses both dispatch and queueing.
         return_fast:
           type: boolean
-          description: Skips the synchronous LLM preflight only.
+          description: Accepted for older callers; research no longer runs in the request, so it changes nothing.
         lookup_only:
           type: boolean
           description: Match-only; a miss returns the miss shell.
@@ -6393,6 +6401,7 @@ components:
         The response status is always 200 — a resolved entity is not an error. `class` is an HTTP-SHAPED CLASS for the projection field alone, so a client can branch without knowing every slug: 200 you have it, 202 it is coming, 4xx this call will not give it to you.
         `poll` is DERIVED from `code`; a client that reads only `poll` is never wrong about whether to come back.
         A repeat get-add of an already enriched person answers `200:available` from what we hold and dispatches no run inside the server's re-run window (24h by default) unless `force` is sent. While a run IS still settling the code is `200:stale` with the package from the last satisfied run, or `202:enriching` when no run has ever satisfied; `409:unsatisfied` is reserved for a run that settled with a failed clause.
+        `409:needs_review` means the research described a different company than the seed and was quarantined: the entity exists with the seed's identifiers only, a review item is open, and polling changes nothing until a human resolves it.
         The two `disputed` codes are the pair to handle deliberately. They mean a provider resolved an IDENTITY that contradicts the name we hold, so we no longer know for certain who the record describes. `200:disputed` still carries the package — most of it is likely correct, only the identity is in doubt, so hold the record rather than discard it and do not act on its identity; `409:disputed` means there is no package to send. Both are `poll: false`: the record is frozen on our side and no further run will revisit it until a human reconciles it, so re-reading never changes the answer. Tell us instead.
       properties:
         code:
@@ -6411,6 +6420,7 @@ components:
             - 404:never_enriched
             - 409:not_distilled
             - 409:unsatisfied
+            - 409:needs_review
             - 409:disputed
             - 422:unsupported_entity_type
         class:
@@ -11123,7 +11133,7 @@ components:
             - 'null'
   responses:
     BadRequest:
-      description: The request failed validation.
+      description: The request failed validation. Unknown JSON fields are rejected and named in the error, so a misspelt key never silently drops a value.
       content:
         application/json:
           schema:
