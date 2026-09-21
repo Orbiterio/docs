@@ -1,29 +1,70 @@
 ---
 title: "Revised Projects, Tasks & Deals"
 sidebarTitle: "Revised Projects, Tasks & Deals"
-description: "One Go build plan with AlloyDB as the sole database: projects, shared tasks, configurable deal pipelines, Kanban boards, and authorized agent execution."
+description: "One Go build plan with AlloyDB as the sole database: personal ToDos, project tasks, configurable deal pipelines, Kanban boards, and authorized agent execution."
 icon: "diagram-project"
 ---
 
+<Check>
+**Updated September 20, 2026**
+
+- **Personal ToDo table:** every user has a private catch-all for tasks without a project, assigned to that user. “Buy milk” can be captured without creating a project.
+- **Editable planning fields:** separate target and due dates, plus estimates in minutes, hours, days, weeks or months.
+- **AI-suggested tasks:** a new **Suggested** state with **Accept** and **Delete** controls. Suggestions do not become committed work or trigger deadline reminders until accepted.
+- **Project assignment:** assigning an accepted ToDo to a project moves the same task out of the personal table, preserving its dates and estimate without duplication.
+- **Build instructions updated:** the data model, API contracts and acceptance criteria now cover these behaviors. These are specification changes; implementation is still to be built.
+</Check>
+
 <Note>
-**Status: build plan, September 14, 2026.** This is the current implementation specification for Projects, Tasks & Deals. It combines the September 9 scope with the confirmed pipeline and AI-first requirements, and replaces the deprecated August 11 plan. Backend integration was reviewed at `88baf86abd13e57a4d5c2d83c2660e3507b51284`. No product code, migrations, or deployment is claimed by this document.
+**Status: build plan, updated September 20, 2026.** This is the current implementation specification for Projects, Tasks & Deals. It combines the September 9 scope with the confirmed pipeline and AI-first requirements, and replaces the deprecated August 11 plan. Backend integration was reviewed at `88baf86abd13e57a4d5c2d83c2660e3507b51284`. The September 20 amendment adds personal ToDo tables, unit-preserving estimates and an explicit Suggested task state; it supersedes the earlier project-required rule. No product code, migrations, or deployment is claimed by this document.
 </Note>
 
 ## Outcome and confirmed scope
 
-Give users one workspace for goals, work, and opportunities. A **project** organizes the goal; **tasks** track committed work; a **pipeline** defines a process; **deals** are opportunities moving through that process. A Kanban board shows stages as columns and deals as cards.
+Give users one workspace for goals, work, and opportunities. A **project** organizes the goal; **tasks** track personal or project work, with AI proposals explicitly marked Suggested until accepted; a **pipeline** defines a process; **deals** are opportunities moving through that process. A Kanban board shows stages as columns and deals as cards.
 
 Agents should carry as much of the research, preparation, coordination, and authorized execution as possible. For each active deal, surface what would help it advance, why it matters now, the work already prepared, and the action the user can take or authorize. Record actual outcomes before changing the deal's stage.
 
 Confirmed requirements:
 
 - Build in **Go inside `orbiter-backend`, with AlloyDB as the sole database**. This is a 100% AlloyDB build: no Xano storage, FalkorDB dependency, or dual writes.
-- Projects can contain nested subprojects. Every task belongs to exactly one project.
-- Tasks support multiple assignees and distinct target-completion and committed due dates.
-- Subprojects and tasks inherit root-project visibility. Accepted members of a linked team can collaborate without joining another organization.
+- Projects can contain nested subprojects. A task belongs to one project **or**, when no project is selected, to exactly one user's private **ToDo** table. No project setup is required to capture a task.
+- Project tasks support multiple assignees. A personal ToDo is assigned to its owning user. Both support distinct target-completion and due dates, plus an editable estimate in minutes, hours, days, weeks or months.
+- Subprojects and project tasks inherit root-project visibility; personal ToDos are visible only to their owner. Accepted members of a linked team can collaborate without joining another organization.
 - Users define pipelines, ordered stages/statuses, and their suggested next steps and actions.
 - Users and agents operate on the same deals and transition rules. Agents create work when instructed; changes to existing work require user authorization.
-- Suggestions are optional. Users can adopt, edit, save, snooze, dismiss, or ignore them. Ignoring an idea never creates an obligation, task, or stage change.
+- Suggestions are optional. Users can adopt, edit, save, snooze, dismiss, or ignore them. AI-proposed tasks have **Suggested** status with **Accept** and **Delete** controls. Ignoring an idea never accepts work, creates a deadline obligation, or changes a deal stage.
+
+## Personal ToDo table
+
+Every user has a **ToDo** table from first use, even with no projects or organization membership. “ToDo” is the personal table's name; `todo` is also the ordinary not-started task status. The table contains that user's project-free task records in any lifecycle state, including a clearly separated Suggested section. The existing **My Tasks** view can aggregate accepted personal ToDos and readable project assignments; it is not a substitute for the dedicated personal table.
+
+**Example:** the user types “Buy milk” and saves without selecting a project. Create one task in their ToDo table, assigned to them, with status **To do**. Target date, due date and estimate start empty and can be edited independently. Creating a task directly, including an exact user instruction executed by an agent, is accepted work; merely being AI-created is not a reason to mark it Suggested.
+
+The table has inline-editable **Task**, **Status**, **Target date**, **Due date** and **Estimate** columns, plus the current user as assignee and an **Assign to project** action. Support quick capture, keyboard editing, clearing optional fields, filters for Active / Suggested / Completed, stable sorting and paginated loading. Keep Suggested visibly labeled and its count separate from committed work. Accepting a suggestion refreshes the active table without a duplicate row.
+
+| Field | Meaning and behavior |
+| --- | --- |
+| Target date | The date the user aims to finish. Optional date-only value. |
+| Due date | The committed deadline. Optional and independent of target; warn if target is later than due, without rewriting either. Personal reminders use the user's IANA timezone; project reminders use the root timezone. |
+| Estimate | An optional amount and unit: for example **15 minutes**, **1.5 hours**, **2 days**, **3 weeks** or **1 month**. Edit the number and unit together; preserve the entered unit and exact decimal value. |
+| Project | Empty means personal ToDo. Selecting a project explicitly moves the accepted task into that project's access boundary, with a visibility preview. It keeps the task ID, dates and estimate and disappears from the personal table; it can remain in My Tasks if still assigned to the user. |
+
+An estimate is expected effort/duration, **not** a scheduled block or a formula for the due date. Do not silently convert a month to 30 days, a day to eight working hours, or an estimate into a calendar booking. Cross-unit capacity totals require a separately disclosed working-time policy; absent that policy, show totals by unit. The [table design](/guides/open-work/roadmap/projects-tasks/table-design#3-projectstasks) defines exact storage and validation.
+
+Use the shared tasks table with a private owner scope. Do not create one physical SQL table per user, a duplicate ToDo task model, or a hidden project named ToDo. Empty personal tables require no provisioning row; the user's authenticated identity defines the view.
+
+## AI-suggested tasks: accept or delete
+
+A task proposed by AI without an instruction to create committed work starts as **Suggested** (`status: suggested`). Show its origin and a short rationale. A project-free proposal appears in the intended user's ToDo Suggested section; a proposal made within a readable project may remain in that project's scope. The user can edit its proposed title, target/due dates and estimate before deciding.
+
+- **Accept:** transition the same task to **To do**, recording who accepted it and when. A personal ToDo stays assigned to its owner. The user can then choose a project and eligible assignees through the ordinary controls. Accepting a task does not execute it, send a message or book a meeting.
+- **Delete:** remove a personal proposal from the table using recoverable archival plus dismissal of its stable suggestion intent. It is not canceled committed work, and paraphrasing/regenerating the idea must not resurrect it. In shared projects, retain the existing distinction between a user's private dismissal and an authorized withdrawal for everyone; label the audience of the action clearly.
+- **Ignore:** leave it Suggested. No due/overdue notification, assignment notification, automatic execution, workload commitment, dependency gate or project-completion blocker follows from an unaccepted proposal. Suggested dates remain proposals, even if in the past.
+
+Once accepted, normal task statuses apply: To do, In progress, Blocked, In review, Done or Canceled. AI cannot move an accepted task back to Suggested or mutate it merely because a new recommendation appeared. Proposed changes to existing work stay separate change requests. Two concurrent accepts, or accept racing delete, must converge through one versioned command and produce at most one accepted task.
+
+This extends the existing suggestion lifecycle: a new-task suggestion may own one draft task row, but acceptance and suggestion adoption are one atomic operation. Generic advice does not create a task row. The [API design](/guides/open-work/roadmap/projects-tasks/api-design#personal-todo-and-suggested-task-contract) specifies the commands, permissions and retry behavior.
 
 ## Detailed design
 
@@ -46,16 +87,17 @@ These decisions resolve the implementation choices from the earlier drafts.
 |---|---|
 | Ownership | One `projects` feature owns the workflow, its `projects.*` tables, domain commands, and workers. |
 | Database | AlloyDB stores all workflow state, relationships, criteria, suggestions, evidence references, durable jobs, permissions, and receipts. Existing entity/context reads must also use AlloyDB-backed services. |
-| Shared access | One root-project access boundary, one optional linked team, explicit organization grants, and no independently private children. |
-| Task completion | One shared task status. Any eligible editor can complete it when prerequisites are satisfied. Independent sign-offs use separate tasks. |
+| Shared access | Project work uses its root ACL; project-free ToDos use owner-only access. One optional linked team and explicit org grants apply only to project work. No independently private children. |
+| Task completion | Suggested must first be accepted. The personal owner or an eligible project editor can complete accepted work when prerequisites pass. Independent sign-offs use separate tasks. |
 | Deals | Every deal belongs to one project. Its tasks, stakeholders, actions, and history stay within that project/root. |
 | Pipelines | Each pipeline belongs to a root and can be used by projects inside that root. Reuse across roots is an explicit copy with new IDs; later edits do not propagate between copies. |
 | Starter definitions | Versioned JSON assets seed editable Investors/Sales pipelines on request. No template-management table or automatic hidden project. |
 | Stages and statuses | A deal's configurable stage is its workflow status. A stable semantic category derives `open`, `won`, or `lost`. Task/project statuses remain separate. |
-| Dates | Date-only target/due/expected-close dates. Root IANA timezone defines due-date boundaries; reminder times are UTC `TIMESTAMPTZ`. |
+| Dates | Date-only target/due/expected-close dates. Root IANA timezone defines project due-date boundaries; the user timezone applies to personal ToDos; reminder times are UTC `TIMESTAMPTZ`. |
+| Estimates | Nullable exact decimal amount plus minutes/hours/days/weeks/months; retain units and keep estimates independent of dates. |
 | Ordering | Feature-owned, tested text ranks for stages/cards; versioned board cursors. No new ranking dependency is required. |
 | Agent authority | Root opt-in permits bounded research and preparation. An exact authorized command is required for work mutations and external actions. V1 has no general external-agent credential system. |
-| Suggestions | One work-suggestion lifecycle across projects, tasks, and deals. Personal responses are keyed by stable intent so regeneration cannot bypass dismissal. |
+| Suggestions | One work-suggestion lifecycle across personal ToDos, projects, tasks, and deals; new-task proposals use Suggested until explicit acceptance. Personal responses are keyed by stable intent so regeneration cannot bypass dismissal. |
 | Reliability | Durable agent runs, action runs, follow-up occurrences, and command receipts; Pub/Sub is a wake-up mechanism, not the only record of work. |
 | Release scope | The first product release includes the board plus useful agent research, prepared next steps, and explicit execution. AI is part of the initial build. |
 
@@ -117,7 +159,7 @@ A draft is not sent outreach, a sent message is not a reply, and a calendar invi
 
 ### Bounded assistance
 
-Only the current root owner can enable background research delegation. Other admins may disable it or adjust its limits; they cannot delegate another user's identity. Ownership transfer disables assistance and cancels undispatched background runs until the new owner opts in. Revalidate the owner each run and pause scheduled assistance for on-hold, completed, canceled, or archived roots. An interactive editor can request a review under their own identity. Shared output must still be safe for every root reader.
+For project work, only the current root owner can enable background research delegation. Other admins may disable it or adjust its limits; they cannot delegate another user's identity. Ownership transfer disables assistance and cancels undispatched background runs until the new owner opts in. Revalidate the owner each run and pause scheduled assistance for on-hold, completed, canceled, or archived roots. An interactive editor can request a review under their own identity. Shared output must still be safe for every root reader.
 
 Initial operational limits are explicit configuration, persisted on each run: at most 20 deals examined per run, 5 model calls, 20 context/provider reads, 10,000 output tokens in total, 120 seconds wall time, and a configurable billed-cost ceiling of USD 0.50. Atomically reserve call/token/cost allowances before dispatch; account for actual usage afterward, and retain reservations when usage is unknown. Retries consume the same budget. A root has at most one queued/running background run, enforced by a partial unique index. Persist a `(created_at, id)` deal cursor on the root and advance it only after the bounded batch is accounted for; wrap at the end of a cycle so large roots do not repeatedly review only their first deals. These are starting engineering limits, not observed workload measurements.
 
@@ -128,6 +170,8 @@ The worker selects candidates from real due/stale/stage-change signals, obtains 
 Use the existing OpenRouter client with an explicit configured model and strict structured output. Store prompt/model/policy versions and actual usage. Put prompts in `assets/prompts/projects-*.md` with config path overrides. Model selection is a measured implementation deliverable: run fixed representative fixtures, compare quality/cost/latency, record the selected configuration, and do not claim a model winner before testing. Missing model configuration disables model work observably; deterministic board/work APIs remain available.
 
 Executable action types and their authorization requirements are defined in the [API action registry](/guides/open-work/roadmap/projects-tasks/api-design#registered-actions).
+
+Personal ToDo suggestions use the same bounded, durable machinery under the owner's identity, with a personal-scope key instead of a fake root. V1 permits an owner-requested review or an explicitly authorized import/proposal from an existing assistant flow; creating a ToDo does not enable periodic personal background research. Keep a maximum of one queued/running personal review per user, at most 20 tasks examined and five new proposals per review, and the same per-run model/read/token/time/cost caps. Validate the initiating user and source permissions before storing any personal proposal. Personal suggestions never enter a team/root review or budget automatically.
 
 ### Durable worker behavior
 
@@ -143,7 +187,7 @@ The emails extension must expose confirmed provider message IDs and meaningful e
 
 Create deterministic per-recipient occurrences with semantic dedupe keys. Recheck the recipient's access and eligibility, current work/deal stage, due/check-in basis, archive/terminal state, preferences, quiet hours, cooldown, and suggestion state immediately before sending. Cancel obsolete occurrences. An unrelated version bump is not sufficient reason to drop a valid due reminder.
 
-Task reminders go to eligible assignees; unassigned work falls back to its eligible accountable lead. Deal reminders go to the eligible deal owner, then project lead. Never notify an entire organization by default. Optional ideas have no overdue state or escalation. Suggestion snooze controls display and does not schedule a notification unless explicitly requested. Closing/adoption/expiry/dismissal prevents obsolete resurfacing.
+Accepted personal ToDo reminders go only to the owner; accepted project-task reminders go to eligible assignees, with unassigned project work falling back to its eligible accountable lead. Suggested tasks are excluded from assignment/due/overdue scans and committed workload counts. Deal reminders go to the eligible deal owner, then project lead. Never notify an entire organization by default. Optional ideas have no overdue state or escalation. Suggestion snooze controls display and does not schedule a notification unless explicitly requested. Closing/adoption/expiry/dismissal prevents obsolete resurfacing.
 
 ## Implementation layout and build slices
 
@@ -155,13 +199,13 @@ Table numbers below refer to [Projects & Tasks Table Design](/guides/open-work/r
 
 | Slice | Deliverable | Required exit evidence |
 |---|---|---|
-| 0. Contracts and fixtures | OpenAPI/DTO shapes, typed criteria/action JSON schemas, permission matrix, SQL-only dependency wiring, deterministic clocks/provider fakes, two-user/two-root fixtures. | Expected API/error/idempotency shapes and scope tests reviewed; current base revision recorded; no graph/Xano dependency. |
-| 1. Work and access | Tables 1–5, 10, and 16, project/task commands, grants, multiple assignees, dependencies, archive/reopen, activity, command receipts. | Disposable-DB tests prove ACL, cycle prevention, membership revocation, idempotency, and concurrent edits. |
+| 0. Contracts and fixtures | OpenAPI/DTO shapes, typed criteria/action JSON schemas, permission matrix, SQL-only dependency wiring, deterministic clocks/provider fakes, two-user/two-root fixtures plus owner-only ToDos, Suggested transitions and all six estimate units. | Expected API/error/idempotency shapes and scope tests reviewed; current base revision recorded; no graph/Xano dependency. |
+| 1. Work and access | Tables 1–5, 10, and 16, project/personal-task commands, owner-only ToDo queries, dates/unit estimates, controlled project placement, grants, assignees, dependencies, archive/reopen, activity and receipts. | Disposable-DB tests prove ACL, cycle prevention, membership revocation, idempotency, and concurrent edits. |
 | 2. Pipelines and deals | Tables 6–9, seed/copy configuration, stage criteria, targets/stakeholders, audited board commands, indexes/cursors. | Fundraising scenario works for a company and an angel; invalid moves fail; rank exhaustion and terminal paths pass. |
-| 3. Suggestions and research | Tables 11–13, bounded agent worker, personal intent state, typed output validation, explicit task/change adoption using existing command receipts. | Realistic research fixtures produce grounded useful steps; no private-data leak, invented evidence, duplicate adoption, or budget reset. |
+| 3. Suggestions and research | Tables 11–13, bounded agent worker, personal intent state, typed output validation, canonical Suggested task rows, Accept/Delete, intent suppression and atomic task/change adoption using existing command receipts. | Realistic research fixtures produce grounded useful steps; no private-data leak, invented evidence, duplicate adoption, or budget reset. |
 | 4. Authorized actions | Table 14, shared registry/service dispatch, emailspub draft/send contracts and receipt handling. | Exact-approval, grant ownership, crash/timeout/unknown-result, and duplicate-send controls pass before enabling live actions. |
 | 5. Follow-ups and worker lifecycle | Tables 15 and 17, acknowledged notifications adapter, due scans, scheduling, lease fencing, cancellation, preference handling. | DST/quiet hours, obsolete jobs, revocation, unconfigured providers, and recovery tests pass. |
-| 6. Kanban and end-to-end | Frontend consumes the same API commands; shows criteria gaps, prepared actions, adoption, receipts, and stale-state recovery. | Company and angel cases progress through real UI/service paths; optional ideas can be ignored; read-only roles cannot mutate. |
+| 6. Kanban and end-to-end | Frontend adds the personal ToDo table, editable dates/unit estimates and Suggested controls, and consumes the same API commands for board/work, adoption, receipts and stale-state recovery. | Company and angel cases progress through real UI/service paths; optional ideas can be ignored; read-only roles cannot mutate. |
 | 7. Release | Model evaluation receipt, migration order, full backend checks, measured query plans, staging acceptance, observability, feature flags. | Every acceptance gate below passes; provider-specific capabilities remain disabled until their own checks pass. |
 
 Follow the [migration sequence](/guides/open-work/roadmap/projects-tasks/table-design#migration-sequence). Backend routes, OpenAPI, SQL, sqlc output, and tests move together. Build the slices incrementally, but do not call the feature complete after only task tables or a passive board exists.
@@ -172,11 +216,13 @@ Follow the [migration sequence](/guides/open-work/roadmap/projects-tasks/table-d
 |---|---|
 | AlloyDB | All 17 tables and durable queues live in AlloyDB. Entity/context dependencies use SQL-backed public readers. Board, research, actions, and recovery work with Xano/FalkorDB/Universe graph credentials absent; lost Pub/Sub wake-ups are recovered from SQL. |
 | Access | Private root, explicit personal/business-org grants, accepted cross-org team, rejected/pending/inactive members, deleted org/account, revoked route with and without another surviving route. ACL applies to counts/cursors, imports, nodes, agent context, jobs, and artifacts. |
+| Personal ToDo | A user with no projects creates Buy milk and owns its sole assignment; another user/org admin cannot read it. Independent target/due editing, fractional unit estimates, no invented conversions, atomic project placement and removal from ToDo without duplicate tasks. |
+| Suggested tasks | Proposed task rows are visibly Suggested, excluded from committed counts/reminders/completion blockers, editable before Accept; Accept retains ID once; Delete suppresses regeneration; accept/delete races, project ACLs and no unauthorized execution. |
 | Work | Nested roots, cycles and simultaneous inverse dependencies, wrong-root references, zero/multiple/ineligible assignees, shared completion, blocked/canceled prerequisite, archive inheritance, explicit completion/reopen. |
 | Pipelines | Copy isolates edits and permissions; starters are idempotent; exactly one default and both terminal categories; names/order change without category drift; wrong-pipeline stage rejected; used-stage archive has an explicit replacement. |
 | Deals | Company/angel targets, duplicate warnings without false global uniqueness, supported stakeholder roles, optional money, currency default stability, criteria gaps/unknowns, human attestations, won/lost/reopen history. |
 | Concurrency | Two humans/agent moving one deal, stale configuration, root/access changes, midpoint exhaustion/rebalance, cursor invalidation, idempotent same-body retry, changed-body conflict, cross-user single adoption. |
-| Suggestions | Advice without payload, edit/adopt/link-existing, no task from ignore/save/snooze, private intent state, suppression across regenerated rows, no auto-completion from adoption, shared-safe source import. |
+| Suggestions | Advice without payload, edit/adopt/link-existing, no accepted task from ignore/save/snooze, private intent state, suppression across regenerated rows, no auto-completion from adoption, shared-safe source import. |
 | Agents | Current permitted evidence, structured-output failures, false references, unsupported actions, exhausted budgets, duplicate wakeups, stale-result rejection, no budget reset after crash, measured model quality/cost/latency. |
 | Side effects | Grant ownership, changed-content reapproval, expired authorization, provider unavailable, accepted-send/local-ack failure, unknown state, fencing after lease loss, no blind resend, no execution solely from a suggestion payload. |
 | Follow-ups | Date-only boundaries and DST, quiet hours, mute/cooldown, owner fallback, removed assignee, closed/archived deal, expired/adopted/dismissed suggestion, opt-in digests/reminders, missing provider config. |
@@ -204,11 +250,14 @@ Feature flags independently gate workflow APIs, background assistance, external 
 
 ## Boundaries and future work
 
-V1 does not include standalone tasks, private children, multiple teams per root, cross-root work moves, recurrence/subtasks, per-assignee sign-off, custom task workflows, billing, forecasting/FX rollups, arbitrary automation scripting, external-agent delegation, or live graph traversal/writes. SMS sending and calendar mutations remain unadvertised capabilities until an owned adapter is implemented and verified. Reuse existing email/files/calendar context through authorized AlloyDB-backed public readers as those actions require; do not build duplicate subsystems.
+V1 includes personal standalone ToDos and Suggested task acceptance. It does not include private project children, multiple teams per root, direct project-to-project cross-root moves, recurrence/subtasks, per-assignee sign-off, custom task workflows, billing, forecasting/FX rollups, arbitrary automation scripting, external-agent delegation, or live graph traversal/writes. SMS sending and calendar mutations remain unadvertised capabilities until an owned adapter is implemented and verified. Reuse existing email/files/calendar context through authorized AlloyDB-backed public readers as those actions require; do not build duplicate subsystems.
 
-This plan preserves the useful earlier ideas: reusable process configuration, stable stage semantics, explicit successful/unsuccessful exits, canonical people/company targets, stakeholder roles, board order, stage aging, and an append-only action history. It replaces the old Xano storage assumptions, org-wide visibility, standalone to-dos, eight-table limit, and deferred AI layer.
+This plan preserves the useful earlier ideas: reusable process configuration, stable stage semantics, explicit successful/unsuccessful exits, canonical people/company targets, stakeholder roles, board order, stage aging, and an append-only action history. It replaces the old Xano storage assumptions, org-wide visibility, the earlier standalone-task exclusion, eight-table limit, and deferred AI layer.
 
 ## Source record
+
+- **September 20 amendment:** user-confirmed personal ToDo table for project-free tasks, self-assignment, editable target/due dates, estimates in minutes/hours/days/weeks/months, and AI Suggested → Accept/Delete. This supersedes conflicting September 14 project-required and integer-minute-only rules; the main plan and both implementation subpages are updated together.
+
 
 - [September 9 scope in Basic Memory](https://app.basicmemory.com/notes?id=cloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110%7Cf55832a8-76eb-4e87-b415-000fc9eb175c&explorer=project%3Acloud%7Cff28d60c-fe10-40cb-8b13-5ce1fd2406b7%7C2fe7811d-03e2-4b25-870e-57976803f110), followed by the confirmed September 14 pipeline/AI-first scope and this consolidation.
 - [Backend conventions at the reviewed revision](https://github.com/Orbiterio/orbiter-backend/blob/88baf86abd13e57a4d5c2d83c2660e3507b51284/CLAUDE.md), plus the feature/service/migration paths named above. The older checkout at `27253e6` was not used as the current backend snapshot.

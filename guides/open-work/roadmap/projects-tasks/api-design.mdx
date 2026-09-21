@@ -6,14 +6,14 @@ icon: "code"
 ---
 
 <Note>
-**Go + 100% AlloyDB build design.** This is the API-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). It owns the API and command contracts for projects, tasks, pipelines, deals, and agent work. Storage fields and constraints live in [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design).
+**Go + 100% AlloyDB build design.** This is the API-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). Updated September 20, 2026 for personal ToDos, unit-preserving estimates and Suggested task acceptance. It owns the API and command contracts for personal and project work, pipelines, deals, and agents. Storage fields and constraints live in [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design).
 </Note>
 
 ## Transport and response conventions
 
 All routes are under `/v1`, authenticated at module registration. Use the existing `{data,error,meta}` envelope and typed middleware errors. Return nullable fields as null and arrays as empty arrays. A list's `data` carries `items`, `total`, and `next_cursor`; do not use offset pagination. Create/execute/adopt operations require an idempotency key; edits/transitions require expected versions. A 202 response means queued, not completed.
 
-Use `pmw.RequireWorkOS` and `pmw.OrbiterUserID` for authenticated routes. Wire DTOs and domain types remain separate, with explicit mappers. Use decimal strings for monetary values at the API boundary and exact decimal arithmetic.
+Use `pmw.RequireWorkOS` and `pmw.OrbiterUserID` for authenticated routes. Wire DTOs and domain types remain separate, with explicit mappers. Use decimal strings for monetary and estimate amounts at the API boundary and exact decimal arithmetic. Date-only fields use validated YYYY-MM-DD values; null explicitly clears an optional field, while omission from PATCH preserves it.
 
 ## Routes
 
@@ -23,7 +23,10 @@ Use `pmw.RequireWorkOS` and `pmw.OrbiterUserID` for authenticated routes. Wire D
 | `POST /projects/{id}/move`, `/archive`, `/reopen`, `/complete` | Explicit lifecycle/hierarchy commands. |
 | `PUT/DELETE /projects/{root_id}/organization-access/{org_id}` | Root admin grants/revocations. |
 | `PUT /projects/{root_id}/team`, `/owner`, `/agent-settings` | Root admin configuration; permission changes increment access version. Enabling background delegation requires the root owner. |
-| `GET/POST /projects/{id}/tasks`, `GET/PATCH /tasks/{id}` | Project tasks; `/tasks?assigned_to=me` provides the permission-filtered My Tasks view. |
+| `GET/POST /me/todos` | Read/create the signed-in user's catch-all of project-free tasks; no organization/project setup or owner ID supplied by the client. |
+| `GET/POST /tasks`, `GET/PATCH /tasks/{id}`, `GET/POST /projects/{id}/tasks` | Unified task commands. Generic create with absent/null project uses personal ToDo; project route supplies the explicit project. `GET /tasks?assigned_to=me` aggregates accepted personal tasks and readable project assignments. |
+| `POST /tasks/{id}/accept`, `/restore-suggestion`, `DELETE /tasks/{id}` | Accept a Suggested task on the same ID; Delete is the recoverable personal-proposal removal described below, not a hard-delete API. |
+| `PUT /tasks/{id}/project` | Explicit versioned placement into a project or into a named user's ToDo with the required access checks and visibility review. |
 | `PUT /tasks/{id}/assignees`, `PUT/DELETE /tasks/{id}/dependencies/{prerequisite_id}` | Versioned assignment and dependency changes. |
 | `POST /tasks/{id}/complete`, `/reopen`, `/archive`, `/progress` | Explicit work commands and delivery evidence. |
 | `GET/POST /projects/{root_id}/pipelines`, `GET/PATCH /pipelines/{id}` | Configure root-owned pipelines. |
@@ -34,22 +37,80 @@ Use `pmw.RequireWorkOS` and `pmw.OrbiterUserID` for authenticated routes. Wire D
 | `GET/POST /deals/{id}/stakeholders`, `PATCH/DELETE /deals/{id}/stakeholders/{link_id}` | Attributed stakeholder roles; delete is soft removal. |
 | `GET /pipelines/{id}/board`, `GET /pipelines/{id}/stages/{stage_id}/deals` | Stage metadata, counts, and separately paginated cards. |
 | `GET /projects/{id}/activity`, `/suggestions` | Safe activity and personalized suggestion visibility; optional task/deal filters. |
-| `POST /project-suggestions/{id}/adopt`, `/resolve`, `/withdraw` | Make/link task, apply change, or queue an authorized action. Typed adoption payload; no ambiguous generic acceptance. |
+| `POST /project-suggestions/{id}/adopt`, `/resolve`, `/withdraw` | Create/link task, accept an existing Suggested task, apply change, or queue an authorized action. Typed adoption payload; no ambiguous generic acceptance. |
 | `PUT /project-suggestions/{id}/my-state` | Save/snooze/dismiss/clear personal disposition only. |
 | `POST /projects/{id}/agent-runs`, `GET /project-agent-runs/{id}` | Request/read bounded research, with optional task/deal target. |
 | `POST /project-actions`, `GET /project-actions/{id}`, `POST /project-actions/{id}/cancel`, `/retry`, `/resolve-unknown` | Authorized execution and controlled recovery. Resolve-unknown requires evidence or a user-reported result and records the distinction. |
-| `GET/PUT /projects/{root_id}/my-preferences` | Private notification controls. |
+| `GET/PUT /projects/{root_id}/my-preferences`, `GET/PUT /me/todo-preferences` | Private notification controls for root or personal scope, stored in the same preferences table. |
+| `POST /me/todo-agent-runs` | Explicit owner-requested bounded ToDo review. No automatic personal background delegation. |
+
+## Personal ToDo and Suggested task contract
+
+### Create and edit a personal task
+
+A user can capture “Buy milk” with no project. The server takes the owner from authentication, inserts a personal task and its sole owner-assignment atomically, records acceptance/creation and returns the canonical task. Reject attempts to set another owner through this create path. `/me/todos` rejects non-null project/deal references; the generic create route dispatches to this command only when project is absent/null. An invalid supplied project is an error, not a fallback to private ToDo.
+
+```http
+POST /v1/me/todos
+Idempotency-Key: <client-generated-key>
+Content-Type: application/json
+
+{"title":"Buy milk"}
+```
+
+The resulting task has `project_id: null`, `root_project_id: null`, `personal_user_id` equal to the signed-in user, that user as its sole assignee, `status: "todo"`, and null target/due/estimate fields. It appears once in that user's ToDo table. Empty personal tables return an empty list; there is no fake project to create or authorize.
+
+Task DTOs include nullable project/root/personal-owner keys, ordinary content/status/version, assignees, acceptance/proposal provenance, `target_date`, `due_date` and `estimate`. The estimate wire shape is either null or `{amount: decimal-string, unit: minutes|hours|days|weeks|months}`. These are documented Go-validated values, not OpenAPI enums. For example:
+
+```json
+{
+  "expected_version": 1,
+  "target_date": "2026-09-21",
+  "due_date": "2026-09-22",
+  "estimate": {"amount": "1.5", "unit": "hours"}
+}
+```
+
+Apply this body through `PATCH /tasks/{id}`. `estimate: null` clears both storage fields; a supplied estimate must include both valid amount and unit. Reject invalid units, negative/non-finite/out-of-range values and excess decimal precision instead of rounding. Return a warning for target later than due. Changing an estimate never recalculates dates, completes a task or creates a calendar event. Both personal and project tasks use the same fields/validators.
+
+`GET /me/todos` returns only owner-matching project-free records. Active/Completed filters use accepted work; Suggested uses `status=suggested` and the owner's suppression state. Default rows exclude archived items. Counts, search, export and sorting apply the same scope and lifecycle filters before pagination. My Tasks may expose Suggested as a separate explicitly requested section, never count it as committed assigned workload. Clearing an assignee does not turn a project task into a ToDo; only removing project placement through the dedicated command does.
+
+### Accept or delete an AI proposal
+
+Only a validated, authorized AI proposal/import command creates `status=suggested`; ordinary create is accepted, even when an agent performs an exact user instruction. Create the proposed task and its suggestion/provenance atomically. Store at most one live proposed task per scope/intent. A Suggested row can have editable proposed title, dates and estimate, but no execution/progress/completion or commitment notifications. Editing is not acceptance; update the task and linked proposal versions/fingerprint together, and accept the reviewed current task fields rather than replaying the original AI payload.
+
+`POST /tasks/{id}/accept` takes `expected_version` and an idempotency key. The owner of a personal proposal, or an eligible editor of its project, can accept. Lock the proposal and task, validate current ownership/source/versions, set task `status=todo` and acceptance actor/time, mark the suggestion adopted with `adoption_type=accepted_task` and the same result task ID, then commit activity/receipt together. Accept returns the task; normal assignment and project-placement controls are available afterward. No action run or external side effect is implied.
+
+The existing `/project-suggestions/{id}/adopt` endpoint dispatches new-task proposals to this same service command; its historical route name does not require a personal proposal to have a project. Reject generic PATCH of status to bypass Accept, or of accepted work back to Suggested. Editing/suggesting changes to an existing accepted task uses an independent change request.
+
+`DELETE /tasks/{id}` takes an expected version via `If-Match` and an idempotency key and is supported for **personal Suggested tasks owned by the caller**. It archives the task, withdraws the proposal with a user-deleted reason, and records dismissal by stable intent in one transaction. The UI labels this **Delete** and can offer Undo through an explicit versioned restore command; it does not hard-delete provenance/receipts. `POST /tasks/{id}/restore-suggestion` clears that explicit dismissal and restores the same still-valid proposal to Suggested, never directly to accepted. Expired or invalid source context returns an actionable conflict instead. Accepted tasks continue to use the ordinary archive/cancel commands.
+
+For shared project suggestions, **Delete for me** uses personal dismissal (`/project-suggestions/{id}/my-state`); **Withdraw for everyone** requires the existing root-admin permission and closes the unaccepted row for all readers. Do not represent personal dismissal as a shared deletion. Ignore, save and snooze never accept work. Rephrasing the same dismissed intent does not recreate it.
+
+Concurrent Accept/Accept and Accept/Delete/withdraw use one task/suggestion lock order and expected-version rules. The winner commits once; retries with the same key/body return its existing result after reauthorization, while incompatible later decisions conflict. Archived/withdrawn/expired proposals cannot be accepted through a stale row. Accepting a Suggested task with a past proposed due date discloses that date and only then enters normal accepted-task reminder policy.
+
+### Assigning or removing a project
+
+`PUT /tasks/{id}/project` accepts expected task version, an idempotency key, the requested project ID (or null), and explicit destination-assignee choices. The command previews/discloses the resulting audience in the UI; this is the user's placement action, not a model-selected scope change.
+
+- **ToDo → project:** require the personal owner and editor access to the destination. Accept Suggested work first. Preserve ID/title/date/estimate, set project/root and clear personal ownership, validate assignees as destination editors, then remove the row from ToDo. Retaining the current user is the default when eligible; assigning others is explicit.
+- **Project → ToDo:** require a source-root admin and an explicitly chosen active recipient who currently has editor access to the source. Set both project/root to null, set that recipient as personal owner/sole assignee, and make the new state private. Do not interpret a generic PATCH null or project deletion as authorization to privatize shared work.
+- **Within one project root:** existing access/eligibility rules apply. Direct project-to-project cross-root moves remain outside V1; the explicit personal/project placement commands above are the scoped exception to the earlier project-only rule.
+
+Reject placement with unresolved deal/work-key links, dependencies that would cross scope, or dispatched/unknown actions. Resolve those explicitly first. Cancel undispatched stale jobs/notifications, invalidate prepared commands, and derive any new follow-ups only for accepted work and the new scope. Historical activity/receipts/provenance keep their original audience and cannot leak private source content into the destination. Record a safe placement event in both relevant histories; fetch task details only under its current ACL. Lock source/destination scope and task rows in a globally stable order and commit all current membership changes atomically, so a failed placement leaves the original ToDo/project row intact.
 
 ## Authorization and shared-content rules
 
-Effective access is the union of valid routes, ordered admin, editor, viewer:
+For a personal ToDo and its history/suggestions/preferences/jobs, only the active `personal_user_id` owner has access; organization/team/root-admin status confers none. An agent uses that owner's explicit authorized scope, never arbitrary supplied user IDs. Personal tasks do not require organization membership.
+
+For project-scoped work, effective access is the union of valid routes, ordered admin, editor, viewer:
 
 - An active root owner who is still an active member of the owning organization is an admin.
 - Active owners/admins of the non-deleted owning organization have recovery/admin access. Ordinary members require an explicit grant.
 - Accepted linked-team members are editors; accepted team admins are admins, independently of organization membership.
 - Active members of explicitly granted non-deleted organizations receive the grant's viewer/editor role.
 
-All routes require an active account. Pending/rejected/inactive membership confers nothing. Creator attribution, deal ownership, task assignment, stakeholder links, preferences, and suggestion targeting never grant visibility. Revoking one route removes it immediately for subsequent authorization checks, while other intentional routes remain valid.
+All routes require an active account. Pending/rejected/inactive membership confers nothing. Within project scope, creator attribution, deal ownership, task assignment, stakeholder links, preferences, and suggestion targeting never grant visibility; the personal-owner boundary is a separate explicit authorization rule. Revoking one route removes it immediately for subsequent authorization checks, while other intentional routes remain valid.
 
 Admins configure pipelines, sharing, hierarchy, root ownership, and archive. Editors create/edit work, attest criteria, assign eligible users, adopt suggestions, and move deals under the same transition rules. Viewers read and manage their own suggestion responses. Explicitly withdrawing a suggestion for everyone is an admin operation.
 
@@ -57,20 +118,20 @@ Apply ACL before filtering, counts, search, pagination, exports, board summaries
 
 `nodespub.Hydrate` can contain the caller's personal contact details and paths. Use it for that caller's response; do not persist the entire hydrated object into shared deal content or agent evidence. Use shared-safe entity facts for root-wide reasoning. Private email, attachments, relationship paths, or imported suggestion content require both source access and permission to disclose to the root audience. Personal feedback stays private.
 
-Organization/team deletion removes that route and nullable ownership/configuration references without deleting the work or making it public. If no admin remains, preserve content for explicit administrative recovery. Parent archive suppresses descendants without overwriting their independent archive state. Cross-root moves are not supported; a deliberate pipeline copy is configuration reuse, not a work transfer.
+Organization/team deletion removes that route and nullable ownership/configuration references without deleting the work or making it public. If no admin remains, preserve content for explicit administrative recovery. Parent archive suppresses descendants without overwriting their independent archive state. The explicit personal/project placement command is the only supported change between private ToDo and project audience; direct project-to-project cross-root moves are not supported; a deliberate pipeline copy is configuration reuse, not a work transfer.
 
 ## Commands, concurrency, and invariants
 
 For a state-changing command:
 
-1. Verify the caller and normalize the typed request. Begin a transaction, resolve idempotency, and acquire the root row lock.
-2. Recheck the live ACL. Hold shared locks on the authorizing user/org/membership rows for the short mutation so a concurrent revocation has a defined ordering.
+1. Verify the caller and normalize the typed request. Begin a transaction, resolve idempotency, and acquire the scope lock: the project root row or an owner-scoped transaction advisory lock for personal ToDos. Define one stable lock-key namespace/order; do not serialize unrelated ToDo owners on a global lock.
+2. Recheck the live project ACL or personal owner. Hold shared locks on the authorizing user/org/membership rows for the short mutation so a concurrent revocation has a defined ordering.
 3. Lock affected project/pipeline/deal/task/suggestion rows in stable ID order. Compare expected resource versions and pipeline configuration version where relevant.
 4. Validate hierarchy, dependencies, assignment eligibility, stage criteria, references, and action scope.
 5. Write state, activity, command receipt, and any durable run/follow-up intents atomically. Increment domain versions and relevant board/configuration versions.
 6. Commit. Optional Pub/Sub publication wakes the worker; the durable sweep also finds the work if publication fails.
 
-V1 serializes domain mutations within one root for clear hierarchy, permission, and transition guarantees. Worker claims are separate short transactions; never hold a job lock while waiting for a root lock or a provider. Contention is measured before introducing narrower lock partitions.
+V1 serializes domain mutations within one root or personal owner for clear hierarchy, permission, and transition guarantees. Worker claims are separate short transactions; never hold a job lock while waiting for a scope lock or a provider. Contention is measured before introducing narrower lock partitions.
 
 `last_progress_at` moves only on an explicit progress update, actual delivery, or evidenced advancement. Research scans, reminders, drafts, suggestions, priority/deadline changes, sharing, assignment, and rank changes do not reset it. Operational leases/schedules do not increment domain versions or `updated_at`.
 
@@ -99,7 +160,7 @@ Stage action guidance is a bounded list of stable rule IDs, titles, rationale te
 
 | Action family | Execution rule |
 |---|---|
-| Resolve people/companies, inspect permitted context, prepare a next-step explanation or draft text | Allowed by the run's bounded research delegation; produces suggestions/artifacts, not accepted work state. |
+| Resolve people/companies, inspect permitted context, prepare a next-step explanation or draft text | Allowed by bounded root delegation or an owner-requested personal review; may create Suggested proposal rows/artifacts, never accepted work solely from the model output. |
 | Create/link a task, edit work, add/remove a stakeholder, attest a criterion, move/archive/reopen a deal | An explicit typed human command or exact authorized action run calls the same projects service methods as the UI. Agents cannot self-attest human-confirmation criteria. |
 | Create/update a mailbox draft | Requires the mailbox owner's explicit action and a verified grant; uses the new `emailspub` service contract. Agent-prepared text can exist before mailbox creation. |
 | Send email | Exact sender/grant, recipients, subject, body, and related versions are authorized. Provider outcome is persisted; no automatic resend after uncertainty. |
@@ -110,7 +171,7 @@ The action registry lives in reviewed Go code. Pipeline JSON selects from that r
 
 ## Pagination
 
-Standard lists use existing creation-time/ID keyset pagination, default 50 and max 200. Board columns use a projects cursor carrying pipeline/stage, rank/ID, filters, and board order version. A move/reorder/archive invalidates old column cursors with 409; the UI refetches rather than silently skipping or duplicating cards. Counts remain permission-filtered.
+Standard lists use creation-time/ID keyset pagination, default 50 and max 200. ToDo cursors bind the authenticated owner, status/search filters and selected sort. For due/target sorting, use a validated date/null-bucket/ID cursor; do not sort only the current browser page. Mixed estimate units remain separate unless the user selects a disclosed conversion policy. Suggested counts are separate from accepted workload counts. Board columns use a projects cursor carrying pipeline/stage, rank/ID, filters, and board order version. A move/reorder/archive invalidates old column cursors with 409; the UI refetches rather than silently skipping or duplicating cards. Counts remain permission-filtered.
 
 Rank storage, rebalance rules, and the board version counter are defined in [Table Design](/guides/open-work/roadmap/projects-tasks/table-design#board-storage-and-ordering).
 
