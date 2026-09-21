@@ -48,6 +48,8 @@ tags:
     description: The caller's saved companies. Requires a verified WorkOS access token.
   - name: Connections
     description: Orbiter Connect — user-to-user connection requests and established connections. Requires a verified WorkOS access token.
+  - name: Copilot
+    description: Durable chat state for copilot surfaces — threads, leased runs, checkpointed messages — plus the Outcome Chat intake surface on suggestion requests. Trusted writes additionally require the harness signature headers (X-Copilot-Timestamp, X-Copilot-Signature). Requires a verified WorkOS access token.
   - name: Contacts
     description: The caller's saved contacts (CRM). Add contacts and list with detail. Requires a verified WorkOS access token.
   - name: Dates
@@ -99,6 +101,8 @@ tags:
       verified WorkOS access token.
   - name: MergeSuspects
     description: Suspected duplicate contacts for user review.
+  - name: Nodes
+    description: Public entity neighborhoods read through Universe.
   - name: Notes
     description: Notes CRUD. Requires a verified WorkOS access token.
   - name: NylasGrants
@@ -128,6 +132,60 @@ tags:
       Store the caller's X grant (from the command palette) and sync their
       X followers and DMs.
 paths:
+  /nodes/{id}/graph:
+    get:
+      operationId: getNodeGraph
+      tags:
+        - Nodes
+      summary: Read an entity's public relationships
+      description: |
+        Requires a verified, onboarded app user. Reads the attributed Universe
+        subgraph API using the backend's existing consumer credentials. Expands
+        breadth-first, excluding hidden nodes and geographic/expertise edges.
+        Missing graph entities return empty arrays; upstream failures return 500.
+        At most 64 neighborhoods are read, with at most 200 neighbors per read
+        and four times the node limit in edges. Truncated is true when any
+        bound omits results. No embeddings or private user graphs are returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Canonical entity UUID, or an alias resolved by Universe.
+          schema:
+            type: string
+            format: uuid
+        - name: hops
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 4
+            default: 1
+        - name: limit
+          in: query
+          description: Maximum number of displayed nodes, including the root.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        '200':
+          description: Bounded neighborhood with directed relationships.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
   /sign-up:
     post:
       tags:
@@ -4602,6 +4660,55 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
+  /calendar-events/sync-upcoming:
+    post:
+      tags:
+        - Calendars
+      summary: Refresh upcoming meetings for the authenticated user
+      description: Fetches all pages of recurring occurrences through 18 months. Replaces each successful calendar snapshot atomically, retains failed snapshots, and throttles repeated successful refreshes to once per minute. Does not create completed activity records.
+      operationId: syncUpcomingCalendarEvents
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Refresh counts; failed calendars may still have older cached meetings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - error
+                  - meta
+                properties:
+                  data:
+                    type: object
+                    required:
+                      - calendars
+                      - updated
+                      - failed
+                      - through_at
+                      - reconnect_required
+                    properties:
+                      reconnect_required:
+                        type: boolean
+                      calendars:
+                        type: integer
+                      updated:
+                        type: integer
+                      failed:
+                        type: integer
+                      through_at:
+                        type: string
+                        format: date-time
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
   /calendar-events/widget:
     get:
       tags:
@@ -4656,6 +4763,445 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /calendar/calendars:
+    get:
+      tags:
+        - Calendars
+      summary: List mirror calendars
+      description: |
+        The caller's calendars with account metadata (email account, provider,
+        grant expiry) for the account selector and calendar list.
+      operationId: listMirrorCalendars
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Calendars with account metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMirrorCalendarsEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/grants:
+    get:
+      tags:
+        - Calendars
+      summary: List connected calendar accounts
+      description: Connected Nylas grants with provider + expiry status.
+      operationId: listCalendarGrants
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Connected grants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListGrantsEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/events:
+    get:
+      tags:
+        - Calendars
+      summary: List mirror events in a range
+      description: |
+        Normalized events from the server-side mirror for [from, to). The
+        envelope meta carries `cursor` (change-log position for SSE resume)
+        and `coverage` (verified-sync windows per calendar); ranges outside
+        coverage are not yet synced and should not be read as "empty".
+      operationId: listMirrorEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Range start (RFC3339). Defaults to now-30d.
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Range end (RFC3339). Defaults to now+60d.
+        - name: calendar_ids
+          in: query
+          schema:
+            type: string
+          description: Comma-separated mirror calendar UUIDs; omit for all.
+      responses:
+        '200':
+          description: Events plus cursor + coverage meta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMirrorEventsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      tags:
+        - Calendars
+      summary: Create an event
+      description: |
+        Durable write: enqueues a command, waits up to ~8s for the provider
+        call, then returns 201 with the event or 202 with a pending command.
+        Send `Idempotency-Key` to make retries safe. `notify=true` sends
+        provider invitations.
+      operationId: createMirrorEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMirrorEventRequest'
+      responses:
+        '201':
+          description: Event created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MirrorEventEnvelope'
+        '202':
+          description: Write still in flight; poll /calendar/commands/{id}.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPendingEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/events/{event_id}:
+    patch:
+      tags:
+        - Calendars
+      summary: Update an event
+      description: |
+        Durable write; `scope` selects recurring-edit semantics
+        (`this` default, `following`, `all`). Same 201/202 contract as create.
+      operationId: updateMirrorEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum:
+              - this
+              - following
+              - all
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMirrorEventRequest'
+      responses:
+        '201':
+          description: Event updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MirrorEventEnvelope'
+        '202':
+          description: Write still in flight.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPendingEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      tags:
+        - Calendars
+      summary: Delete an event
+      description: |
+        Durable write; same `scope` semantics as PATCH. Completed deletes
+        return 200 with a null data payload; in-flight deletes return 202.
+      operationId: deleteMirrorEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum:
+              - this
+              - following
+              - all
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Event deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '202':
+          description: Delete still in flight.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPendingEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/events/{event_id}/rsvp:
+    post:
+      tags:
+        - Calendars
+      summary: RSVP to an event
+      description: Owner-bound RSVP via the durable command path.
+      operationId: rsvpMirrorEvent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RsvpMirrorRequest'
+      responses:
+        '200':
+          description: RSVP applied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MirrorEventEnvelope'
+        '202':
+          description: RSVP still in flight.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPendingEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/availability:
+    post:
+      tags:
+        - Calendars
+      summary: Compute busy blocks over the mirror
+      description: |
+        Merged busy intervals across the given calendars (all, when omitted).
+        Meta `coverage` marks which windows are verified-synced — treat
+        uncovered ranges as unknown, not free.
+      operationId: calendarAvailability
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvailabilityRequest'
+      responses:
+        '200':
+          description: Busy blocks plus coverage meta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/window:
+    post:
+      tags:
+        - Calendars
+      summary: Request sync for an additional window
+      description: |
+        Enqueues reconciliation so [from, to) becomes covered on every owned
+        calendar. Returns 202; poll range meta `coverage` for completion.
+      operationId: requestCalendarWindow
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WindowRequest'
+      responses:
+        '202':
+          description: Window queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindowQueuedEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/commands/{command_id}:
+    get:
+      tags:
+        - Calendars
+      summary: Poll a durable command
+      description: |
+        After a 202, poll here: `done` returns the command result payload,
+        other statuses return {command_id, status, error?}.
+      operationId: getCalendarCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: command_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Command result or status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandStatusEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /calendar/stream:
+    get:
+      tags:
+        - Calendars
+      summary: Server-sent event changes stream
+      description: |
+        SSE stream of mirror change events (`op`: upsert/delete) with
+        monotonically increasing `seq` cursors and immutable revision
+        payloads. Pass `cursor` to resume; a cursor older than the retained
+        log gets 410 — refetch a range snapshot and reconnect.
+      operationId: streamCalendarChanges
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: text/event-stream of change events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          description: Cursor expired; refetch snapshot and reconnect.
+        '500':
+          $ref: '#/components/responses/Internal'
+  /webhooks/nylas:
+    post:
+      tags:
+        - Calendars
+      summary: Nylas webhook ingress
+      description: |
+        Public, signature-verified Nylas webhook. Validates
+        `x-nylas-signature`, admits durable queue work only; all provider I/O
+        happens in the worker drain.
+      operationId: nylasWebhook
+      security: []
+      responses:
+        '200':
+          description: Event admitted.
+        '401':
+          description: Bad signature.
+        '503':
+          description: Webhook secret not configured.
+    get:
+      tags:
+        - Calendars
+      summary: Nylas webhook challenge
+      description: Echoes `?challenge=` for Nylas webhook verification.
+      operationId: nylasWebhookChallenge
+      security: []
+      parameters:
+        - name: challenge
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Challenge echoed.
   /contacts/imports:
     post:
       tags:
@@ -7231,6 +7777,49 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /phones/contacts/{contact_id}/primary:
+    put:
+      tags:
+        - Phones
+      operationId: setContactPrimaryPhone
+      summary: Set a contact's primary phone
+      description: Atomically makes a linked phone the caller-owned contact's only primary.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: contact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone_id
+              properties:
+                phone_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Selected primary phone, with the caller's note.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /phones:
     get:
       tags:
@@ -7527,6 +8116,52 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /email-addresses/contacts/{contact_id}/primary:
+    put:
+      operationId: setContactPrimaryEmail
+      tags:
+        - EmailAddresses
+      security:
+        - bearerAuth: []
+      summary: Set the primary email for an owned contact
+      description: |
+        Atomically attaches or creates the address and makes its contact join
+        the only primary. Other contacts are unchanged. Repeating the same
+        address is safe. Contact-scoped reads return the primary first.
+      parameters:
+        - name: contact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - address
+              properties:
+                address:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Saved primary email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailAddressEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /email-addresses:
     get:
       tags:
@@ -7534,7 +8169,7 @@ paths:
       summary: List email addresses for a person or company
       description: |
         Returns every caller-visible email for one master person or company
-        (exactly one of person_id / company_id), newest first. Emails are
+        (exactly one of person_id / company_id), contact primary first, then newest. Emails are
         read through the caller's contact join rows (contact_emails /
         company_emails); when the caller has no contact for the person yet,
         the fallback is the person's public emails plus the caller's own
@@ -7669,6 +8304,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /addresses/contacts/{contact_id}/primary:
+    put:
+      tags:
+        - Addresses
+      operationId: setContactPrimaryAddress
+      summary: Set a contact's primary address
+      description: Atomically makes a linked address the caller-owned contact's only primary.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: contact_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - address_id
+              properties:
+                address_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Selected primary address, with the caller's note.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddressEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -8447,6 +9125,55 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /discover-context-nodes/{context_node_id}/paths:
+    get:
+      tags:
+        - Discover
+      summary: Get direct context-to-response relationships
+      description: |
+        Owner-scoped. Resolves the context card's entity UUID and all response
+        nodes in the same answer (including follow-up answers), then reads
+        direct hops from the caller's saved path tables. Missing pairs are
+        looked up through Universe with max_hops=1. Does not overwrite network
+        introduction paths. Funding-round context cards are excluded.
+      operationId: getDiscoverContextPaths
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: context_node_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One-hop paths with direction, edge description and resolved endpoints. Empty if no direct relationships exist.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - error
+                  - meta
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NodePath'
+                  error:
+                    type: 'null'
+                  meta:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /discover-context-nodes:
     get:
       tags:
@@ -9036,6 +9763,525 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /copilot/threads/ensure:
+    post:
+      operationId: ensureCopilotThread
+      tags:
+        - Copilot
+      summary: Find or create the caller's thread for a surface key
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnsureThreadRequest'
+      responses:
+        '200':
+          description: The existing thread replayed for the same surface key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureThreadEnvelope'
+        '201':
+          description: The newly created thread.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnsureThreadEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/threads:
+    get:
+      operationId: listCopilotThreads
+      tags:
+        - Copilot
+      summary: List the caller's threads, newest activity first
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: surface
+          in: query
+          schema:
+            type: string
+            enum:
+              - outcome
+        - name: archived
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of threads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /copilot/threads/{id}:
+    patch:
+      operationId: updateCopilotThread
+      tags:
+        - Copilot
+      summary: Rename, archive, or restore a thread
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateThreadRequest-2'
+      responses:
+        '200':
+          description: The updated thread.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      operationId: archiveCopilotThread
+      tags:
+        - Copilot
+      summary: Soft-archive a thread; repeat archive succeeds
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Archived; the request row is unaffected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/threads/{id}/messages:
+    get:
+      operationId: listCopilotMessages
+      tags:
+        - Copilot
+      summary: Page the thread transcript under a pinned read window
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: One ascending page plus the pinned transcript version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    post:
+      operationId: checkpointCopilotMessages
+      tags:
+        - Copilot
+      summary: Commit a durable assistant checkpoint batch under the run's lease
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckpointRequest'
+      responses:
+        '200':
+          description: Per-action counts and the new transcript version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckpointResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/threads/{id}/runs:
+    post:
+      operationId: startCopilotRun
+      tags:
+        - Copilot
+      summary: Accept a user turn or retry the latest attempt
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRunRequest-2'
+      responses:
+        '200':
+          description: Identical replay of a terminal run's acquisition.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunAcquisitionEnvelope'
+        '201':
+          description: The acquired run lease and accepted input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunAcquisitionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/threads/{id}/runs/{run_id}:
+    patch:
+      operationId: updateCopilotRun
+      tags:
+        - Copilot
+      summary: Renew, finish, or pin execution metadata on a run
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRunRequest'
+      responses:
+        '200':
+          description: The run id, status and lease expiry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPatchEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/outcomes/classes:
+    get:
+      operationId: listOutcomeClasses
+      tags:
+        - Copilot
+      summary: Return the pinned outcome-intake class registry
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: registry_version
+          in: query
+          schema:
+            type: string
+            default: outcome-intake-v1
+      responses:
+        '200':
+          description: The registry version with its dispatchable classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassesEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/outcomes/drafts:
+    post:
+      operationId: createOutcomeDraft
+      tags:
+        - Copilot
+      summary: Create the unclassified draft bound to a conversation
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+      responses:
+        '200':
+          description: Identical receipt replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDraftEnvelope'
+        '201':
+          description: The created draft bound to the conversation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDraftEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/outcomes/drafts/{id}/context:
+    patch:
+      operationId: patchOutcomeContext
+      tags:
+        - Copilot
+      summary: Apply one typed intake change under the version guard
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchContextRequest'
+      responses:
+        '200':
+          description: The updated request plus committed checkpoint coordinates.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatchContextEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/outcomes/dispatch:
+    post:
+      operationId: submitOutcomeRequest
+      tags:
+        - Copilot
+      summary: Explicit user submission; durable only, no generation
+      description: Trusted write; requires the harness signature headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DispatchRequest'
+      responses:
+        '200':
+          description: The public submission receipt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionReceiptEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /copilot/outcomes/requests:
+    get:
+      operationId: listOutcomeRequests
+      tags:
+        - Copilot
+      summary: List the caller's outcome-chat requests
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: query
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutcomeRequestListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /copilot/outcomes/requests/{id}:
+    get:
+      operationId: getOutcomeRequest
+      tags:
+        - Copilot
+      summary: Get one outcome request with derived intake fields
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The request view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutcomeRequestEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
   /edge-sync/rebuild:
@@ -9867,7 +11113,7 @@ paths:
             type: string
         - name: query
           in: query
-          description: Case-insensitive name filter.
+          description: Case-insensitive search across the professional display name and stored full name parts.
           schema:
             type: string
         - name: node_uuid
@@ -9877,7 +11123,7 @@ paths:
             type: string
         - name: sort
           in: query
-          description: Sort order. `created_at` is newest-first; `name` is person full name A-Z.
+          description: Sort order. `created_at` is newest-first; `name` is professional display name A-Z.
           schema:
             type: string
             enum:
@@ -10308,6 +11554,100 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/Internal'
+  /contacts/table:
+    get:
+      operationId: listContactTableRows
+      tags:
+        - Contacts
+      summary: List contacts as table rows
+      description: |
+        The caller's live contacts by default as flat, denormalized rows for Contacts
+        View, keyset-paged on (created_at DESC, id DESC). There is no sort or
+        query param: sorting and text/column filtering happen client-side.
+        Optional team_id or organization_id selects one shared network; they are
+        mutually exclusive. Team scope requires accepted membership and returns
+        accepted members' visible contacts. Organization scope requires active
+        membership in a non-personal organization and returns visible contacts
+        assigned to that organization or contributed through its claimed email
+        domains. Shared scopes deduplicate by person, preferring the caller's
+        contact. Notes, custom fields, interaction details and private addresses
+        belonging to other users are excluded. can_edit is false for shared rows. meta.total
+        is the live-contact count observed at that page's read; meta.nextCursor
+        is an opaque cursor carrying the frozen page-1 upper bound plus the
+        last returned tuple; meta.fieldDefsVersion is the caller's monotonic
+        custom-field schema revision (it changes on any definition change,
+        including deletions). Merged-away contacts are never returned.
+        Optional collection_id loads people directly in an accessible collection and
+        people whose current company belongs to it. Existing contacts retain their
+        saved details. Other people have contact_id null and can_edit false, and
+        expose only public enrichment details. No contact records are created.
+        When combined with team_id or organization_id, results intersect that scope.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: collection_id
+          in: query
+          description: Collection owned by or shared with the caller.
+          schema:
+            type: string
+            format: uuid
+        - name: team_id
+          in: query
+          description: Accepted team membership required. Omit organization_id.
+          schema:
+            type: string
+            format: uuid
+        - name: organization_id
+          in: query
+          description: Active non-personal organization membership required. Omit team_id.
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: Opaque keyset cursor from a previous page's meta.nextCursor. Empty on the first call.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of contact table rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ContactTableRow'
+                  error:
+                    type:
+                      - object
+                      - 'null'
+                  meta:
+                    type: object
+                    properties:
+                      requestId:
+                        type: string
+                      total:
+                        type: integer
+                      nextCursor:
+                        type: string
+                      fieldDefsVersion:
+                        type: integer
+                        format: int64
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /contacts/{contact_id}:
     get:
       operationId: getContact
@@ -10661,6 +12001,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListCompanyFoundersEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /companies/{company_id}/people:
+    get:
+      operationId: listCompanyPeople
+      tags:
+        - Companies
+      summary: List known current company people, including founders
+      description: |
+        Universe company relationships, independent of the caller's contacts.
+        Includes current WORKS_AT, OFFICER_OF and BOARD_MEMBER_OF relationships
+        and all FOUNDED relationships. Ended employment and board roles are
+        excluded. Roles describe this company, even when a founder now works
+        elsewhere. Missing local person profiles are held so cards can open;
+        no contacts or enrichment jobs are created.
+        Pages scan up to 200 graph neighbours. A page may be empty and still
+        have next_cursor; continue until next_cursor is empty.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: company_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Opaque next_cursor from the previous page.
+      responses:
+        '200':
+          description: Known company people and the next graph page cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - error
+                  - meta
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CompanyPeoplePage'
+                  error:
+                    type: 'null'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -11334,6 +12729,85 @@ components:
           format: uuid
         status:
           type: string
+    DisplayProperties:
+      type: object
+      additionalProperties:
+        type:
+          - string
+          - number
+          - boolean
+          - 'null'
+    GraphNode:
+      type: object
+      required:
+        - id
+        - labels
+        - properties
+      properties:
+        id:
+          type: string
+          format: uuid
+        labels:
+          type: array
+          items:
+            type: string
+        properties:
+          $ref: '#/components/schemas/DisplayProperties'
+    GraphEdge:
+      type: object
+      required:
+        - id
+        - type
+        - sourceId
+        - targetId
+        - properties
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        sourceId:
+          type: string
+          format: uuid
+        targetId:
+          type: string
+          format: uuid
+        properties:
+          $ref: '#/components/schemas/DisplayProperties'
+    Graph:
+      type: object
+      required:
+        - rootUuid
+        - nodes
+        - edges
+        - truncated
+      properties:
+        rootUuid:
+          type: string
+          format: uuid
+        truncated:
+          type: boolean
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+    GraphEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Graph'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     SignUpRequest:
       type: object
       required:
@@ -15463,6 +16937,9 @@ components:
         end_time:
           type: integer
           format: int64
+        date:
+          type: string
+          description: Single all-day calendar date.
         start_date:
           type: string
         end_date:
@@ -15640,6 +17117,413 @@ components:
             - 'yes'
             - 'no'
             - maybe
+    MirrorCalendarView:
+      allOf:
+        - $ref: '#/components/schemas/CalendarResponse'
+        - type: object
+          required:
+            - email_account
+            - provider
+            - grant_expired
+          properties:
+            email_account:
+              type: string
+            provider:
+              type: string
+            grant_expired:
+              type: boolean
+    ListMirrorCalendarsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorCalendarView'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    GrantView:
+      type: object
+      required:
+        - id
+        - email_account
+        - provider
+        - expired
+      properties:
+        id:
+          type: string
+        email_account:
+          type: string
+        provider:
+          type: string
+        expired:
+          type: boolean
+    ListGrantsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/GrantView'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MirrorEventOrganizer:
+      type: object
+      required:
+        - email
+        - name
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+    MirrorEventParticipant:
+      type: object
+      required:
+        - email
+        - name
+        - status
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+    MirrorEvent:
+      type: object
+      required:
+        - id
+        - calendar_id
+        - title
+        - start
+        - end
+        - all_day
+        - status
+        - busy
+        - read_only
+        - recurring
+        - participants
+        - location
+        - html_link
+        - updated_at
+      description: Public event DTO; `id` is the internal mirror UUID.
+      properties:
+        id:
+          type: string
+          format: uuid
+        calendar_id:
+          type: string
+          format: uuid
+        master_event_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        title:
+          type: string
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        all_day:
+          type: boolean
+        start_date:
+          type:
+            - string
+            - 'null'
+        end_date:
+          type:
+            - string
+            - 'null'
+        timezone:
+          type:
+            - string
+            - 'null'
+        status:
+          type: string
+        busy:
+          type: boolean
+        read_only:
+          type: boolean
+        recurring:
+          type: boolean
+        organizer:
+          $ref: '#/components/schemas/MirrorEventOrganizer'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorEventParticipant'
+        location:
+          type: string
+        conference_url:
+          type:
+            - string
+            - 'null'
+        html_link:
+          type: string
+        description:
+          type:
+            - string
+            - 'null'
+        updated_at:
+          type: string
+          format: date-time
+    ListMirrorEventsEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      description: meta carries `cursor` (int64) + `coverage` (CoverageWindow[]).
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorEvent'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    EventWhenRequest:
+      type: object
+      required:
+        - object
+      properties:
+        object:
+          type: string
+          description: timespan | date | datespan
+        start_time:
+          type: integer
+          format: int64
+        end_time:
+          type: integer
+          format: int64
+        start_timezone:
+          type: string
+        end_timezone:
+          type: string
+        start_date:
+          type: string
+        end_date:
+          type: string
+        date:
+          type: string
+    CreateMirrorEventRequest:
+      type: object
+      required:
+        - calendar_id
+        - when
+      properties:
+        calendar_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        location:
+          type: string
+        when:
+          $ref: '#/components/schemas/EventWhenRequest'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorEventParticipant'
+        busy:
+          type: boolean
+        visibility:
+          type: string
+        recurrence:
+          type: array
+          items:
+            type: string
+        notify:
+          type: boolean
+          description: Send provider invitations.
+    MirrorEventEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/MirrorEvent'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CommandPending:
+      type: object
+      required:
+        - command_id
+        - status
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+    CommandPendingEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/CommandPending'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateMirrorEventRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        location:
+          type: string
+        when:
+          $ref: '#/components/schemas/EventWhenRequest'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/MirrorEventParticipant'
+        busy:
+          type: boolean
+        notify:
+          type: boolean
+    RsvpMirrorRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - 'yes'
+            - 'no'
+            - maybe
+    AvailabilityRequest:
+      type: object
+      required:
+        - from
+        - to
+      properties:
+        calendar_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+    BusyBlock:
+      type: object
+      required:
+        - start
+        - end
+        - busy
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        busy:
+          type: boolean
+    AvailabilityEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BusyBlock'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    WindowRequest:
+      type: object
+      required:
+        - from
+        - to
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+    WindowQueuedEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          type: object
+          required:
+            - queued
+          properties:
+            queued:
+              type: boolean
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CommandStatus:
+      type: object
+      required:
+        - command_id
+        - status
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        error:
+          type: string
+    CommandStatusEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/CommandStatus'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     ContactImportResponse:
       type: object
       required:
@@ -16856,17 +18740,31 @@ components:
         the authenticated user's own saved-contact nickname (the "my_person" link). Present only
         on the members-list endpoint, and omitted entirely when the member's user
         has no linked person. `name` is the three name parts concatenated.
-        No avatar — persons has no such column yet.
+        Nullable fields are always present (null when unknown).
       properties:
         person_id:
           type: string
           format: uuid
         name:
           type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+          format: uri
+        bio:
+          type:
+            - string
+            - 'null'
         title:
           type:
             - string
             - 'null'
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
         company_name:
           type:
             - string
@@ -18783,6 +20681,7 @@ components:
       type: object
       required:
         - id
+        - is_primary
         - person_id
         - company_id
         - phone_number
@@ -18797,6 +20696,9 @@ components:
         - created_at
         - updated_at
       properties:
+        is_primary:
+          type: boolean
+          description: Primary for the caller's contact; false for company or unlinked records.
         id:
           type: string
           format: uuid
@@ -18849,6 +20751,19 @@ components:
         updated_at:
           type: string
           format: date-time
+    PhoneEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Phone'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     ListPhonesEnvelope:
       type: object
       required:
@@ -18896,19 +20811,6 @@ components:
           type:
             - string
             - 'null'
-    PhoneEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/Phone'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
     UpdatePhoneRequest:
       type: object
       required:
@@ -19070,6 +20972,7 @@ components:
         - shared_publicly
         - connected_only
         - verified
+        - is_primary
         - source
         - created_by
         - created_at
@@ -19103,6 +21006,9 @@ components:
           type: boolean
         verified:
           type: boolean
+        is_primary:
+          type: boolean
+          description: The caller's contact-email join flag; false outside contact-scoped reads.
         source:
           type:
             - string
@@ -19119,6 +21025,19 @@ components:
         updated_at:
           type: string
           format: date-time
+    EmailAddressEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/EmailAddress-2'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     ListEmailAddressesEnvelope:
       type: object
       required:
@@ -19158,19 +21077,6 @@ components:
         email_type:
           type: string
           description: Email kind (work, personal, other).
-    EmailAddressEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/EmailAddress-2'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
     UpdateEmailAddressRequest:
       type: object
       required:
@@ -19186,6 +21092,7 @@ components:
       type: object
       required:
         - id
+        - is_primary
         - person_id
         - company_id
         - address_label
@@ -19209,6 +21116,9 @@ components:
         - created_at
         - updated_at
       properties:
+        is_primary:
+          type: boolean
+          description: Primary for the caller's contact; false for company or unlinked records.
         id:
           type: string
           format: uuid
@@ -19302,6 +21212,19 @@ components:
         updated_at:
           type: string
           format: date-time
+    AddressEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Address'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     ListAddressesEnvelope:
       type: object
       required:
@@ -19344,19 +21267,6 @@ components:
           type:
             - string
             - 'null'
-    AddressEnvelope:
-      type: object
-      required:
-        - data
-        - error
-        - meta
-      properties:
-        data:
-          $ref: '#/components/schemas/Address'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
     UpdateAddressRequest:
       type: object
       description: |
@@ -20002,11 +21912,13 @@ components:
             - 'null'
         processing:
           type: boolean
+          description: True while research or web enrichment is active.
     DiscoverListItem:
       type: object
       required:
         - id
         - query
+        - answer
         - archived
         - processing
         - discover_questions
@@ -20021,11 +21933,16 @@ components:
           format: uuid
         query:
           type: string
+        answer:
+          type:
+            - string
+            - 'null'
+          description: The quick answer when available while enrichment continues.
         archived:
           type: boolean
         processing:
           type: boolean
-          description: True while the research pipeline is in flight.
+          description: True until research and web enrichment finish and response cards are available.
         discover_questions:
           type: array
           items:
@@ -20070,7 +21987,9 @@ components:
           description: |
             Entity ids (the `node_uuid` values the node endpoints return) the
             caller already picked. When non-empty these replace the vector
-            search as the answer's context.
+            search as the answer's context. With `discover_id` and no explicit
+            selection, all saved response and context nodes from that parent
+            become the graph scope. Card filters and pagination do not narrow it.
           items:
             type: string
             format: uuid
@@ -20367,6 +22286,140 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    PathPerson:
+      type: object
+      required:
+        - id
+        - name
+        - avatar
+      description: |
+        A resolved person endpoint. avatar is the same picture the node read
+        shows on the card, empty when unknown.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar:
+          type: string
+    PathCompany:
+      type: object
+      required:
+        - id
+        - name
+        - logo
+      description: A resolved company endpoint. logo is null when unknown.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        logo:
+          type:
+            - string
+            - 'null'
+    PathEndpoint:
+      type: object
+      required:
+        - entity_type
+        - node_uuid
+      description: |
+        One end of a hop: its entity type and row id, plus the resolved person /
+        company. Both are absent for a kind we hold no table for — a path can
+        pass through one, and dropping the hop would break the chain.
+      properties:
+        entity_type:
+          type: string
+        node_uuid:
+          type: string
+        name:
+          type: string
+          description: Display name for other entity kinds.
+        image_url:
+          type:
+            - string
+            - 'null'
+        person:
+          $ref: '#/components/schemas/PathPerson'
+        company:
+          $ref: '#/components/schemas/PathCompany'
+    NodePathHop:
+      type: object
+      required:
+        - hop_index
+        - from_entity_type
+        - from_node_uuid
+        - to_entity_type
+        - to_node_uuid
+        - edge_type
+        - edge_weight
+      description: |
+        One hop along a path. Each endpoint carries its own entity type, so an
+        endpoint of any kind resolves to the right table.
+      properties:
+        hop_index:
+          type: integer
+          format: int32
+        from_entity_type:
+          type: string
+        from_node_uuid:
+          type: string
+        to_entity_type:
+          type: string
+        to_node_uuid:
+          type: string
+        edge_type:
+          type: string
+        edge_weight:
+          type: integer
+          format: int32
+        edge_description:
+          type:
+            - string
+            - 'null'
+        from:
+          $ref: '#/components/schemas/PathEndpoint'
+        to:
+          $ref: '#/components/schemas/PathEndpoint'
+    NodePath:
+      type: object
+      required:
+        - id
+        - source_entity_type
+        - source_node_uuid
+        - target_entity_type
+        - target_node_uuid
+        - hops_count
+        - total_weight
+        - hops
+      description: |
+        One of the authenticated user's computed graph paths to a node's entity
+        (graph.node_path), with its ordered hops. Each end is an entity type plus
+        that entity's row id — the same id the master graph uses for the node.
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_entity_type:
+          type: string
+        source_node_uuid:
+          type: string
+        target_entity_type:
+          type: string
+        target_node_uuid:
+          type: string
+        hops_count:
+          type: integer
+          format: int32
+        total_weight:
+          type: integer
+          format: int32
+        hops:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodePathHop'
     PersonCompany:
       type: object
       required:
@@ -21344,133 +23397,6 @@ components:
           type:
             - string
             - 'null'
-    PathPerson:
-      type: object
-      required:
-        - id
-        - name
-        - avatar
-      description: |
-        A resolved person endpoint. avatar is the same picture the node read
-        shows on the card, empty when unknown.
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        avatar:
-          type: string
-    PathCompany:
-      type: object
-      required:
-        - id
-        - name
-        - logo
-      description: A resolved company endpoint. logo is null when unknown.
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        logo:
-          type:
-            - string
-            - 'null'
-    PathEndpoint:
-      type: object
-      required:
-        - entity_type
-        - node_uuid
-      description: |
-        One end of a hop: its entity type and row id, plus the resolved person /
-        company. Both are absent for a kind we hold no table for — a path can
-        pass through one, and dropping the hop would break the chain.
-      properties:
-        entity_type:
-          type: string
-        node_uuid:
-          type: string
-        person:
-          $ref: '#/components/schemas/PathPerson'
-        company:
-          $ref: '#/components/schemas/PathCompany'
-    NodePathHop:
-      type: object
-      required:
-        - hop_index
-        - from_entity_type
-        - from_node_uuid
-        - to_entity_type
-        - to_node_uuid
-        - edge_type
-        - edge_weight
-      description: |
-        One hop along a path. Each endpoint carries its own entity type, so an
-        endpoint of any kind resolves to the right table.
-      properties:
-        hop_index:
-          type: integer
-          format: int32
-        from_entity_type:
-          type: string
-        from_node_uuid:
-          type: string
-        to_entity_type:
-          type: string
-        to_node_uuid:
-          type: string
-        edge_type:
-          type: string
-        edge_weight:
-          type: integer
-          format: int32
-        edge_description:
-          type:
-            - string
-            - 'null'
-        from:
-          $ref: '#/components/schemas/PathEndpoint'
-        to:
-          $ref: '#/components/schemas/PathEndpoint'
-    NodePath:
-      type: object
-      required:
-        - id
-        - source_entity_type
-        - source_node_uuid
-        - target_entity_type
-        - target_node_uuid
-        - hops_count
-        - total_weight
-        - hops
-      description: |
-        One of the authenticated user's computed graph paths to a node's entity
-        (graph.node_path), with its ordered hops. Each end is an entity type plus
-        that entity's row id — the same id the master graph uses for the node.
-      properties:
-        id:
-          type: string
-          format: uuid
-        source_entity_type:
-          type: string
-        source_node_uuid:
-          type: string
-        target_entity_type:
-          type: string
-        target_node_uuid:
-          type: string
-        hops_count:
-          type: integer
-          format: int32
-        total_weight:
-          type: integer
-          format: int32
-        hops:
-          type: array
-          items:
-            $ref: '#/components/schemas/NodePathHop'
     Node:
       type: object
       required:
@@ -22489,6 +24415,1023 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    EnsureThreadRequest:
+      type: object
+      required:
+        - surface
+        - surface_key
+      additionalProperties: false
+      properties:
+        surface:
+          type: string
+          enum:
+            - outcome
+        surface_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+        title:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 500
+    RunView:
+      type: object
+      description: Public run projection; lease credentials never appear here.
+      properties:
+        run_id:
+          type: string
+        input_message_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - complete
+            - failed
+            - cancelled
+        failure_reason:
+          type:
+            - string
+            - 'null'
+        retryable:
+          type: boolean
+        retry_block_reason:
+          type:
+            - string
+            - 'null'
+        lease_expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Thread:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        surface:
+          type: string
+        surface_key:
+          type: string
+        surface_ref_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        title:
+          type:
+            - string
+            - 'null'
+        transcript_version:
+          type: integer
+        latest_run:
+          $ref: '#/components/schemas/RunView'
+        archived_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EnsureThread:
+      type: object
+      properties:
+        conversation:
+          $ref: '#/components/schemas/Thread'
+        created:
+          type: boolean
+    EnsureThreadEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/EnsureThread'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ThreadListEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Thread'
+            next_cursor:
+              type: string
+            total:
+              type: integer
+              format: int64
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateThreadRequest-2:
+      type: object
+      additionalProperties: false
+      description: Nonempty subset of {title, archived}; null title clears it.
+      properties:
+        title:
+          type:
+            - string
+            - 'null'
+          maxLength: 500
+        archived:
+          type: boolean
+    ThreadEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Thread'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MessagePart:
+      type: object
+      description: One TanStack message part (text, tool-call, tool-result, lang).
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          maxLength: 128
+        sequence:
+          type: integer
+          format: int64
+        revision:
+          type: integer
+        status:
+          type: string
+          enum:
+            - streaming
+            - complete
+            - interrupted
+            - error
+        role:
+          type: string
+          enum:
+            - user
+            - assistant
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessagePart'
+        question_context:
+          type:
+            - object
+            - 'null'
+        ui_library_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        run_id:
+          type: string
+        turn_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    MessageListEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Message'
+            next_cursor:
+              type: string
+            total:
+              type: integer
+              format: int64
+            transcript_version:
+              type: integer
+            high_water_sequence:
+              type: integer
+              format: int64
+            latest_run:
+              $ref: '#/components/schemas/RunView'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CheckpointMessage:
+      type: object
+      required:
+        - message_id
+        - expected_revision
+        - revision
+        - status
+        - role
+        - parts
+        - ui_library_version
+        - turn_id
+      additionalProperties: false
+      properties:
+        message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expected_revision:
+          type: integer
+          minimum: 0
+        revision:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum:
+            - streaming
+            - complete
+            - interrupted
+            - error
+        role:
+          type: string
+          enum:
+            - assistant
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MessagePart'
+        question_context:
+          type:
+            - object
+            - 'null'
+        ui_library_version:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+    CheckpointRequest:
+      type: object
+      required:
+        - run_id
+        - lease_token
+        - expected_transcript_version
+        - messages
+      additionalProperties: false
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        lease_token:
+          type: string
+          format: uuid
+        expected_transcript_version:
+          type: integer
+          minimum: 0
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/CheckpointMessage'
+    CheckpointResponse:
+      type: object
+      properties:
+        stored_count:
+          type: integer
+        updated_count:
+          type: integer
+        replayed_count:
+          type: integer
+        transcript_version:
+          type: integer
+        last_message_id:
+          type: string
+    CheckpointResponseEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CheckpointResponse'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    InputMessage:
+      type: object
+      required:
+        - id
+        - role
+        - parts
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        role:
+          type: string
+          enum:
+            - user
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/MessagePart'
+    AnswerRef:
+      type: object
+      required:
+        - message_id
+        - question_id
+        - context_version
+      additionalProperties: false
+      properties:
+        message_id:
+          type: string
+          maxLength: 128
+        question_id:
+          type: string
+          maxLength: 128
+        context_version:
+          type: integer
+          minimum: 0
+    Answer:
+      type: object
+      required:
+        - kind
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - option
+            - multi_select
+            - free_text
+            - skip
+        values:
+          type: array
+          items:
+            type: string
+            maxLength: 200
+        text:
+          type:
+            - string
+            - 'null'
+          maxLength: 8000
+    StartRunRequest-2:
+      type: object
+      required:
+        - run_id
+      additionalProperties: false
+      description: Exactly one of message or retry_of_run_id; answer_to and answer pair or are both null.
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        message:
+          $ref: '#/components/schemas/InputMessage'
+        retry_of_run_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        answer_to:
+          $ref: '#/components/schemas/AnswerRef'
+        answer:
+          $ref: '#/components/schemas/Answer'
+    AcceptedInput:
+      type: object
+      properties:
+        message:
+          $ref: '#/components/schemas/Message'
+        answer_to:
+          $ref: '#/components/schemas/AnswerRef'
+        answer:
+          $ref: '#/components/schemas/Answer'
+        accepted_options:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              value:
+                type: string
+    CommittedEffect:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - route
+            - reroute
+            - context
+            - handoff
+        operation_id:
+          type: string
+        context_version:
+          type: integer
+    ExecutionMetadata:
+      type: object
+      required:
+        - schema_version
+        - routing_policy_version
+        - accepted_turn_index
+        - opening_turn_count
+        - stage
+        - gateway
+        - intake_model_id
+        - provider_policy_version
+        - prompt_version
+        - registry_version
+        - ui_library_version
+      additionalProperties: false
+      properties:
+        schema_version:
+          type: integer
+          enum:
+            - 1
+        routing_policy_version:
+          type: string
+          maxLength: 128
+        accepted_turn_index:
+          type: integer
+          minimum: 1
+        opening_turn_count:
+          type: integer
+          minimum: 1
+        stage:
+          type: string
+          enum:
+            - opening
+            - continuation
+        gateway:
+          type: string
+          enum:
+            - openrouter
+        intake_model_id:
+          type: string
+          maxLength: 256
+        classifier_model_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 256
+        provider_policy_version:
+          type: string
+          maxLength: 128
+        prompt_version:
+          type: string
+          maxLength: 128
+        registry_version:
+          type: string
+          maxLength: 128
+        ui_library_version:
+          type: string
+          maxLength: 128
+        evaluation_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        case_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+        variant_id:
+          type:
+            - string
+            - 'null'
+          maxLength: 128
+    RunAcquisition:
+      type: object
+      description: Signed-harness payload; never reaches a browser bundle.
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - complete
+            - failed
+            - cancelled
+        replayed:
+          type: boolean
+        failure_reason:
+          type:
+            - string
+            - 'null'
+        lease_token:
+          type: string
+          format: uuid
+        lease_expires_at:
+          type: string
+          format: date-time
+        transcript_version:
+          type: integer
+        accepted_message_id:
+          type: string
+        accepted_turn_index:
+          type: integer
+        accepted_input:
+          $ref: '#/components/schemas/AcceptedInput'
+        committed_effects:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommittedEffect'
+        execution_metadata:
+          $ref: '#/components/schemas/ExecutionMetadata'
+        conversation_execution_policy:
+          $ref: '#/components/schemas/ExecutionMetadata'
+    RunAcquisitionEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/RunAcquisition'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateRunRequest:
+      type: object
+      required:
+        - lease_token
+        - action
+      additionalProperties: false
+      properties:
+        lease_token:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum:
+            - renew
+            - complete
+            - fail
+            - cancel
+            - configure_execution
+        reason:
+          type:
+            - string
+            - 'null'
+          enum:
+            - provider_error
+            - checkpoint_error
+            - context_limit_reached
+            - cancelled
+            - internal_error
+            - 'null'
+        execution_metadata:
+          $ref: '#/components/schemas/ExecutionMetadata'
+    RunPatch:
+      type: object
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - complete
+            - failed
+            - cancelled
+        lease_expires_at:
+          type: string
+          format: date-time
+        execution_metadata:
+          $ref: '#/components/schemas/ExecutionMetadata'
+    RunPatchEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/RunPatch'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SlotSpec:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        question:
+          type: string
+        required:
+          type: boolean
+        can_skip:
+          type: boolean
+        allows_multiple:
+          type: boolean
+        required_if:
+          type:
+            - object
+            - 'null'
+          properties:
+            key:
+              type: string
+            equals:
+              type: string
+    ClassEntry:
+      type: object
+      properties:
+        slug:
+          type: string
+        label:
+          type: string
+        prompt_asset:
+          type: string
+        live:
+          type: boolean
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/SlotSpec'
+    ClassesEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            registry_version:
+              type: string
+            classes:
+              type: array
+              items:
+                $ref: '#/components/schemas/ClassEntry'
+            clarification_slug:
+              type: string
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CreateDraftRequest:
+      type: object
+      required:
+        - conversation_id
+        - run_id
+        - lease_token
+        - operation_id
+      additionalProperties: false
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        lease_token:
+          type: string
+          format: uuid
+        operation_id:
+          type: string
+          enum:
+            - draft-create
+        class_slug:
+          type:
+            - string
+            - 'null'
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        request_context:
+          type:
+            - string
+            - 'null'
+          maxLength: 8000
+        request_panel_title:
+          type: string
+          maxLength: 500
+    IntakeContext:
+      type: object
+      description: The versioned intake document. An uncertain outcome classification immediately resolves to get_advice with routing_source advice_fallback and confidence 0, indicating an application default rather than a model match. Existing saved clarifications remain answerable.
+    SubmissionReceipt:
+      type: object
+      description: The public receipt; the stored document also carries a private approved_snapshot.
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        approval_id:
+          type: string
+          format: uuid
+        approved_context_version:
+          type: integer
+        submitted_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - submitted
+        dispatch_started:
+          type: boolean
+    OutcomeRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversation_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        status:
+          type: string
+        copilot_mode:
+          type: string
+        person_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        phase:
+          type: string
+          enum:
+            - unrouted
+            - clarifying
+            - collecting
+            - awaiting_result_count
+            - ready
+            - submitted
+            - handed_off
+            - unavailable
+        ready:
+          type: boolean
+        missing_fields:
+          type: array
+          items:
+            type: string
+        skipped_fields:
+          type: array
+          items:
+            type: string
+        unavailable_reason:
+          type:
+            - string
+            - 'null'
+        class_slug:
+          type:
+            - string
+            - 'null'
+        request_panel_title:
+          type: string
+        request_header_title:
+          type: string
+        request_context:
+          type:
+            - string
+            - 'null'
+        number_of_results:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          maximum: 200
+        context_version:
+          type: integer
+        intake_context:
+          $ref: '#/components/schemas/IntakeContext'
+        submission_receipt:
+          $ref: '#/components/schemas/SubmissionReceipt'
+        latest_run:
+          $ref: '#/components/schemas/RunView'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateDraftResult:
+      type: object
+      properties:
+        request:
+          $ref: '#/components/schemas/OutcomeRequest'
+        created:
+          type: boolean
+    CreateDraftEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CreateDraftResult'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ContextChange:
+      type: object
+      required:
+        - kind
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - route
+            - slots
+            - reroute
+            - handoff
+        route:
+          type:
+            - object
+            - 'null'
+        slots:
+          type:
+            - object
+            - 'null'
+        reroute:
+          type:
+            - object
+            - 'null'
+        handoff:
+          type:
+            - object
+            - 'null'
+    ToolCheckpoint:
+      type: object
+      required:
+        - expected_transcript_version
+        - message_id
+        - expected_revision
+        - parts
+        - tool_call_id
+        - ui_library_version
+      additionalProperties: false
+      properties:
+        expected_transcript_version:
+          type: integer
+          minimum: 0
+        message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expected_revision:
+          type: integer
+          minimum: 0
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/MessagePart'
+        tool_call_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        ui_library_version:
+          type: string
+          maxLength: 128
+    PatchContextRequest:
+      type: object
+      required:
+        - conversation_id
+        - run_id
+        - lease_token
+        - operation_id
+        - context_version
+        - change
+        - checkpoint
+      additionalProperties: false
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        lease_token:
+          type: string
+          format: uuid
+        operation_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        context_version:
+          type: integer
+          minimum: 0
+        change:
+          $ref: '#/components/schemas/ContextChange'
+        checkpoint:
+          $ref: '#/components/schemas/ToolCheckpoint'
+    PatchContextResult:
+      type: object
+      properties:
+        request:
+          $ref: '#/components/schemas/OutcomeRequest'
+        transcript_version:
+          type: integer
+        message_revision:
+          type: integer
+        message:
+          $ref: '#/components/schemas/Message'
+        terminal_message:
+          $ref: '#/components/schemas/Message'
+        run_status:
+          type: string
+          enum:
+            - active
+            - complete
+    PatchContextEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/PatchContextResult'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DispatchRequest:
+      type: object
+      required:
+        - conversation_id
+        - request_id
+        - approval_id
+        - expected_context_version
+      additionalProperties: false
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+        approval_id:
+          type: string
+          format: uuid
+        expected_context_version:
+          type: integer
+          minimum: 0
+    SubmissionReceiptEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SubmissionReceipt'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    OutcomeRequestListEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/OutcomeRequest'
+            next_cursor:
+              type: string
+            total:
+              type: integer
+              format: int64
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    OutcomeRequestEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/OutcomeRequest'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     Rebuild:
       type: object
       required:
@@ -23244,6 +26187,7 @@ components:
           type: boolean
         name:
           type: string
+          description: Chosen public or professional name from the projection, including middle names when used publicly. Falls back to stored name parts when unavailable.
         avatar:
           type:
             - string
@@ -23658,6 +26602,7 @@ components:
           type: boolean
         name:
           type: string
+          description: Chosen public or professional name from the projection, including middle names when used publicly. Falls back to stored name parts when unavailable.
         avatar:
           type:
             - string
@@ -23770,6 +26715,9 @@ components:
         email_address_id:
           type: string
           format: uuid
+        is_primary:
+          type: boolean
+          description: Primary email for this contact.
         email_address:
           $ref: '#/components/schemas/EmailAddressRef'
     PersonNested:
@@ -23907,6 +26855,310 @@ components:
           type: integer
         cloned:
           type: integer
+    ContactTableEmail:
+      type: object
+      required:
+        - id
+        - address
+        - email_type
+        - is_active
+        - verified
+        - is_primary
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        email_type:
+          type: string
+        is_active:
+          type: boolean
+        verified:
+          type: boolean
+        is_primary:
+          type: boolean
+          description: Primary email for this contact.
+    ContactTablePhone:
+      type: object
+      required:
+        - id
+        - phone_number
+        - phone_extension
+        - phone_type
+        - is_primary
+      properties:
+        is_primary:
+          type: boolean
+        id:
+          type: string
+          format: uuid
+        phone_number:
+          type: string
+        phone_extension:
+          type:
+            - integer
+            - 'null'
+        phone_type:
+          type: string
+    ContactTableAddress:
+      type: object
+      required:
+        - id
+        - formatted_address
+        - label
+        - is_primary
+      properties:
+        id:
+          type: string
+          format: uuid
+        formatted_address:
+          type:
+            - string
+            - 'null'
+        label:
+          type:
+            - string
+            - 'null'
+        is_primary:
+          type: boolean
+    ContactPlannedActivity:
+      type: object
+      required:
+        - id
+        - kind
+        - title
+        - starts_at
+        - ends_at
+        - all_day
+        - start_date
+        - location
+        - url
+        - calendar_name
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          description: Currently meeting; reserved for future task integration.
+        title:
+          type: string
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        all_day:
+          type: boolean
+        start_date:
+          type:
+            - string
+            - 'null'
+          format: date
+        location:
+          type: string
+        url:
+          type: string
+        calendar_name:
+          type: string
+    ContactTableRow:
+      type: object
+      description: One flat contact row for GET /contacts/table.
+      properties:
+        can_edit:
+          type: boolean
+          description: True only for a contact owned by the caller; shared contacts are read-only.
+        contact_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+          description: Null for an unsaved collection person.
+        person_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        name:
+          type: string
+        first_name:
+          type:
+            - string
+            - 'null'
+        last_name:
+          type:
+            - string
+            - 'null'
+        nickname:
+          type:
+            - string
+            - 'null'
+        avatar:
+          type:
+            - string
+            - 'null'
+        orbiter_user:
+          type: boolean
+        current_title:
+          type:
+            - string
+            - 'null'
+        company_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        company_name:
+          type:
+            - string
+            - 'null'
+        company_logo:
+          type:
+            - string
+            - 'null'
+        location_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        location_formatted:
+          type:
+            - string
+            - 'null'
+        location_country_name:
+          type:
+            - string
+            - 'null'
+          description: Country of the person's stored primary location.
+        location_country_code:
+          type:
+            - string
+            - 'null'
+          description: ISO alpha-2 country code of the primary location.
+        location_country_flag:
+          type:
+            - string
+            - 'null'
+          description: Flag emoji stored on the primary location's country record.
+        primary_email:
+          type:
+            - string
+            - 'null'
+          description: Contact email marked is_primary, falling back to the first link by (created_at, id) when none is marked.
+        email_count:
+          type: integer
+        emails:
+          type: array
+          description: All contact-linked addresses, with the primary display address first.
+          items:
+            $ref: '#/components/schemas/ContactTableEmail'
+        primary_phone:
+          type:
+            - string
+            - 'null'
+          description: Primary contact phone, falling back to the earliest link when unset.
+        phones:
+          type: array
+          description: Contact-linked phones using the same access rules as the person detail panel.
+          items:
+            $ref: '#/components/schemas/ContactTablePhone'
+        primary_address:
+          type:
+            - string
+            - 'null'
+          description: Primary linked postal address.
+        addresses:
+          type: array
+          description: Caller-visible contact addresses, primary first.
+          items:
+            $ref: '#/components/schemas/ContactTableAddress'
+        connected_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        next_activity_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Earliest upcoming occurrence in the caller's cached calendars; null when none is available. Planned window is 18 months; calendar refresh failure is reported separately by sync-upcoming.
+        next_activity:
+          oneOf:
+            - $ref: '#/components/schemas/ContactPlannedActivity'
+            - type: 'null'
+        last_activity_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: Latest logged interaction, or the contact's added date when none is logged. Redacted for contacts owned by other users.
+        last_activity_kind:
+          type:
+            - string
+            - 'null'
+          description: Email, event, or added when the date falls back to contact creation. Redacted for contacts owned by other users.
+        last_email_activity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        last_calendar_event_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        total_email_activity:
+          type: integer
+        total_remote_events:
+          type: integer
+        total_emails:
+          type:
+            - integer
+            - 'null'
+          description: Interaction-log rollup; null when no rollup row exists.
+        total_meetings:
+          type:
+            - integer
+            - 'null'
+          description: Interaction-log rollup; null when no rollup row exists.
+        momentum:
+          type:
+            - string
+            - 'null'
+          description: Interaction-log rollup label; null when no rollup row exists.
+        note_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Distinct caller-owned notes naming this person, matching GET /notes?person_id. Company-only notes are excluded.
+        note:
+          type:
+            - string
+            - 'null'
+          description: Single relationship-context note (How I know them), separate from the notes collection.
+        visibility:
+          type: string
+          description: Go-validated value set (visible or private)
+        organization_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        organization_name:
+          type:
+            - string
+            - 'null'
+        custom_fields:
+          type: object
+          description: Raw JSONB values keyed by field-definition id.
+          additionalProperties: true
     PersonSummary-2:
       type: object
       properties:
@@ -24519,6 +27771,39 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    CompanyPeoplePage:
+      type: object
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required:
+              - person_id
+              - name
+              - avatar
+              - roles
+            properties:
+              person_id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              avatar:
+                type:
+                  - string
+                  - 'null'
+              roles:
+                type: array
+                items:
+                  type: string
+                description: Qualifying roles at this company.
+        next_cursor:
+          type: string
+          description: Empty when all company neighbours have been read.
     FinancialData:
       type: object
       description: |
@@ -25304,6 +28589,20 @@ components:
       schema:
         type: string
         format: uuid
+    SignatureTimestamp:
+      name: X-Copilot-Timestamp
+      in: header
+      required: true
+      description: Unix seconds when the harness signature was computed.
+      schema:
+        type: string
+    Signature:
+      name: X-Copilot-Signature
+      in: header
+      required: true
+      description: Hex HMAC-SHA256 over timestamp, method, path+query, body hash, bearer-token hash.
+      schema:
+        type: string
     SubscriptionID:
       in: path
       name: id
