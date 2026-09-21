@@ -6,6 +6,15 @@ icon: "diagram-project"
 ---
 
 <Check>
+**Updated September 21, 2026: storage layer built**
+
+- **All 17 tables are written.** `orbiter-backend` [PR #257](https://github.com/Orbiterio/orbiter-backend/pull/257) (APP-69, in review on September 21) adds the `projects` schema as four Goose migrations, plus the `projects` sqlc block, the depguard rule, a wired module scaffold and the Go enum sets. Commands, API routes, workers and the UI are still to be built.
+- **Built to the September 20 amendment:** the personal ToDo scope, amount-plus-unit estimates and the Suggested state are all in the schema.
+- **The schema arrived ahead of the slices.** Each build slice below now starts from existing tables and adds its commands, API and tests. The [as-built record](/guides/open-work/roadmap/projects-tasks/table-design#as-built-record) lists what was made concrete and where the build differs from the text.
+- **New prerequisite: account clean-up (APP-107).** The database now refuses to delete a user who still owns private ToDo data. That clean-up must ship before the first feature that can write a personal row. See [account deletion](/guides/open-work/roadmap/projects-tasks/api-design#account-deletion-and-personal-data).
+</Check>
+
+<Check>
 **Updated September 20, 2026**
 
 - **Personal ToDo table:** every user has a private catch-all for tasks without a project, assigned to that user. “Buy milk” can be captured without creating a project.
@@ -16,7 +25,7 @@ icon: "diagram-project"
 </Check>
 
 <Note>
-**Status: build plan, updated September 20, 2026.** This is the current implementation specification for Projects, Tasks & Deals. It combines the September 9 scope with the confirmed pipeline and AI-first requirements, and replaces the deprecated August 11 plan. Backend integration was reviewed at `88baf86abd13e57a4d5c2d83c2660e3507b51284`. The September 20 amendment adds personal ToDo tables, unit-preserving estimates and an explicit Suggested task state; it supersedes the earlier project-required rule. No product code, migrations, or deployment is claimed by this document.
+**Status: build plan, storage layer built September 21, 2026.** This is the current implementation specification for Projects, Tasks & Deals. It combines the September 9 scope with the confirmed pipeline and AI-first requirements, and replaces the deprecated August 11 plan. Backend integration was reviewed at `88baf86abd13e57a4d5c2d83c2660e3507b51284`. The September 20 amendment adds personal ToDo tables, unit-preserving estimates and an explicit Suggested task state; it supersedes the earlier project-required rule. The 17 tables, their sqlc block and a module scaffold are implemented in `orbiter-backend` PR #257, in review on that date. No commands, API routes, workers, UI or deployment are claimed by this document.
 </Note>
 
 ## Outcome and confirmed scope
@@ -50,7 +59,7 @@ The table has inline-editable **Task**, **Status**, **Target date**, **Due date*
 | Estimate | An optional amount and unit: for example **15 minutes**, **1.5 hours**, **2 days**, **3 weeks** or **1 month**. Edit the number and unit together; preserve the entered unit and exact decimal value. |
 | Project | Empty means personal ToDo. Selecting a project explicitly moves the accepted task into that project's access boundary, with a visibility preview. It keeps the task ID, dates and estimate and disappears from the personal table; it can remain in My Tasks if still assigned to the user. |
 
-An estimate is expected effort/duration, **not** a scheduled block or a formula for the due date. Do not silently convert a month to 30 days, a day to eight working hours, or an estimate into a calendar booking. Cross-unit capacity totals require a separately disclosed working-time policy; absent that policy, show totals by unit. The [table design](/guides/open-work/roadmap/projects-tasks/table-design#3-projectstasks) defines exact storage and validation.
+An estimate is expected effort/duration, **not** a scheduled block or a formula for the due date. Do not silently convert a month to 30 days, a day to eight working hours, or an estimate into a calendar booking. Cross-unit capacity totals require a separately disclosed working-time policy; absent that policy, show totals by unit. The [table design](/guides/open-work/roadmap/projects-tasks/table-design#3-projects-tasks) defines exact storage and validation.
 
 Use the shared tasks table with a private owner scope. Do not create one physical SQL table per user, a duplicate ToDo task model, or a hidden project named ToDo. Empty personal tables require no provisioning row; the user's authenticated identity defines the view.
 
@@ -197,10 +206,14 @@ Add `api/projects.openapi.yaml`, root OpenAPI references/tags, a `sqlc.yaml` blo
 
 Table numbers below refer to [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design#data-model-17-feature-owned-tables). Implement the [API contracts](/guides/open-work/roadmap/projects-tasks/api-design) alongside each slice.
 
+<Note>
+**Built so far (September 21, 2026).** APP-69 delivered every table in the list below in one pass, so a slice no longer creates its tables: it adds commands, queries, API, workers and tests on top of them. Already in place in `internal/features/projects`: `module.go` (no routes or workers yet, constructed in `internal/app/wire_content.go` and not mounted), the enum sets with their `ValidX()` functions in `types*.go`, two starter queries (`GetProject`, `GetTask`) with generated bindings in `db/`, the `sqlc.yaml` block and the depguard rule. Still to add: `api/projects.openapi.yaml`, handlers, services, repos, workers, `projectspub`, prompts and starter assets. Once PR #257 is merged, a schema change is a new additive migration, never an edit to those four.
+</Note>
+
 | Slice | Deliverable | Required exit evidence |
 |---|---|---|
 | 0. Contracts and fixtures | OpenAPI/DTO shapes, typed criteria/action JSON schemas, permission matrix, SQL-only dependency wiring, deterministic clocks/provider fakes, two-user/two-root fixtures plus owner-only ToDos, Suggested transitions and all five estimate units. | Expected API/error/idempotency shapes and scope tests reviewed; current base revision recorded; no graph/Xano dependency. |
-| 1. Work and access | Tables 1–5, 10, and 16, project/personal-task commands, owner-only ToDo queries, dates/unit estimates, controlled project placement, grants, assignees, dependencies, archive/reopen, activity and receipts. | Disposable-DB tests prove ACL, cycle prevention, membership revocation, idempotency, and concurrent edits. |
+| 1. Work and access | Tables 1–5, 10, and 16, project/personal-task commands, owner-only ToDo queries, dates/unit estimates, controlled project placement, grants, assignees, dependencies, archive/reopen, activity and receipts. **First, before any command can write a personal row: the account clean-up step (APP-107).** | Disposable-DB tests prove ACL, cycle prevention, membership revocation, idempotency, and concurrent edits. Deleting a user who owns personal ToDos succeeds on every deletion path and leaves no private rows. |
 | 2. Pipelines and deals | Tables 6–9, seed/copy configuration, stage criteria, targets/stakeholders, audited board commands, indexes/cursors. | Fundraising scenario works for a company and an angel; invalid moves fail; rank exhaustion and terminal paths pass. |
 | 3. Suggestions and research | Tables 11–13, bounded agent worker, personal intent state, typed output validation, canonical Suggested task rows, Accept/Delete, intent suppression and atomic task/change adoption using existing command receipts. | Realistic research fixtures produce grounded useful steps; no private-data leak, invented evidence, duplicate adoption, or budget reset. |
 | 4. Authorized actions | Table 14, shared registry/service dispatch, emailspub draft/send contracts and receipt handling. | Exact-approval, grant ownership, crash/timeout/unknown-result, and duplicate-send controls pass before enabling live actions. |
@@ -217,6 +230,7 @@ Follow the [migration sequence](/guides/open-work/roadmap/projects-tasks/table-d
 | AlloyDB | All 17 tables and durable queues live in AlloyDB. Entity/context dependencies use SQL-backed public readers. Board, research, actions, and recovery work with Xano/FalkorDB/Universe graph credentials absent; lost Pub/Sub wake-ups are recovered from SQL. |
 | Access | Private root, explicit personal/business-org grants, accepted cross-org team, rejected/pending/inactive members, deleted org/account, revoked route with and without another surviving route. ACL applies to counts/cursors, imports, nodes, agent context, jobs, and artifacts. |
 | Personal ToDo | A user with no projects creates Buy milk and owns its sole assignment; another user/org admin cannot read it. Independent target/due editing, fractional unit estimates, no invented conversions, atomic project placement and removal from ToDo without duplicate tasks. |
+| Account deletion | A user who owns personal ToDos, a Suggested proposal, an action run, a reminder and history, including a task moved from a project into their ToDo, can be deleted on all three paths (self-service, operator, WorkOS webhook). On the first two the clean-up runs before the WorkOS account is removed, so a failure leaves the account intact rather than half deleted. On the webhook path the account is already gone, so the clean-up is safe to retry. Shared project work survives with the person's name removed. |
 | Suggested tasks | Proposed task rows are visibly Suggested, excluded from committed counts/reminders/completion blockers, editable before Accept; Accept retains ID once; Delete suppresses regeneration; accept/delete races, project ACLs and no unauthorized execution. |
 | Work | Nested roots, cycles and simultaneous inverse dependencies, wrong-root references, zero/multiple/ineligible assignees, shared completion, blocked/canceled prerequisite, archive inheritance, explicit completion/reopen. |
 | Pipelines | Copy isolates edits and permissions; starters are idempotent; exactly one default and both terminal categories; names/order change without category drift; wrong-pipeline stage rejected; used-stage archive has an explicit replacement. |
@@ -256,6 +270,7 @@ This plan preserves the useful earlier ideas: reusable process configuration, st
 
 ## Source record
 
+- **September 21 implementation record:** APP-69 built the storage layer in `orbiter-backend` [PR #257](https://github.com/Orbiterio/orbiter-backend/pull/257), against the September 20 text. The main plan and both subpages now record what exists, the decisions the schema made concrete, and the one new prerequisite it created (APP-107, account clean-up). Nothing in the confirmed scope changed.
 - **September 20 amendment:** user-confirmed personal ToDo table for project-free tasks, self-assignment, editable target/due dates, estimates in minutes/hours/days/weeks/months, and AI Suggested → Accept/Delete. This supersedes conflicting September 14 project-required and integer-minute-only rules; the main plan and both implementation subpages are updated together.
 
 

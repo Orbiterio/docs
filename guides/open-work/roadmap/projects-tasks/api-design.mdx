@@ -9,6 +9,10 @@ icon: "code"
 **Go + 100% AlloyDB build design.** This is the API-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). Updated September 20, 2026 for personal ToDos, unit-preserving estimates and Suggested task acceptance. It owns the API and command contracts for personal and project work, pipelines, deals, and agents. Storage fields and constraints live in [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design).
 </Note>
 
+<Check>
+**Updated September 21, 2026.** The tables are written (`orbiter-backend` [PR #257](https://github.com/Orbiterio/orbiter-backend/pull/257), APP-69, in review on that date). None of the routes or commands on this page is built yet. Two sections are new, both consequences of the schema as built: [what the schema requires of a command](#what-the-schema-requires-of-a-command) and [account deletion and personal data](#account-deletion-and-personal-data). The second describes APP-107, which has to ship before the first command that can write a personal row.
+</Check>
+
 ## Transport and response conventions
 
 All routes are under `/v1`, authenticated at module registration. Use the existing `{data,error,meta}` envelope and typed middleware errors. Return nullable fields as null and arrays as empty arrays. A list's `data` carries `items`, `total`, and `next_cursor`; do not use offset pagination. Create/execute/adopt operations require an idempotency key; edits/transitions require expected versions. A 202 response means queued, not completed.
@@ -134,6 +138,36 @@ For a state-changing command:
 V1 serializes domain mutations within one root or personal owner for clear hierarchy, permission, and transition guarantees. Worker claims are separate short transactions; never hold a job lock while waiting for a scope lock or a provider. Contention is measured before introducing narrower lock partitions.
 
 `last_progress_at` moves only on an explicit progress update, actual delivery, or evidenced advancement. Research scans, reminders, drafts, suggestions, priority/deadline changes, sharing, assignment, and rank changes do not reset it. Operational leases/schedules do not increment domain versions or `updated_at`.
+
+### What the schema requires of a command
+
+The tables are built, and a few of their constraints decide the order or shape of the SQL a command can run. The constraint behind each point is tested in the backend, and so is the placement order. The commands themselves are not built, so each point needs its own test when the command lands. See the [as-built record](/guides/open-work/roadmap/projects-tasks/table-design#as-built-record) for the constraints themselves.
+
+- **Set `accepted_at` on every insert unless the status is `suggested`.** No CHECK reads the status value, so a null `accepted_at` is what the database treats as Suggested: such a row cannot hold a work key, a start, a completion, a completion summary or a progress time, and it is left out of the accepted-only due-scan index. A direct create that forgets `accepted_at`, and with it `accepted_by_user_id`, is stored without error, with `status=todo`, and then silently never gets a due reminder and cannot be started. The database rejects the insert only if the row also carries a column that depends on acceptance: `accepted_by_user_id`, a work key, a start, a completion, a completion summary or a progress time. Nothing in the database ties `status` to `accepted_at`, so add a service invariant test. Accept sets `status=todo` and `accepted_at` in the same statement.
+- **Placement runs as delete assignees, update the task, insert assignees.** An assignee row is tied to its task's current scope by foreign keys that are checked at the end of each statement, so updating the task's scope in place while assignee rows exist fails. Reject a dependency that would cross scope before the update; the database would reject it too, with a less useful error.
+- **Swapping a pipeline's default stage takes two statements**, clear the old default and then set the new one, inside the command's transaction. One live default per pipeline is a unique index, checked per row.
+- **Map a unique violation by constraint name.** tasks, agent_runs and agent_suggestions each hold several unique indexes, so a `23505` can mean a duplicate work key, a second open suggestion for the intent, a duplicate import, or a second active run. Do not collapse them into one conflict message.
+- **Claim and reclaim queries write the status value as a literal**, not as a parameter: `WHERE status = 'queued'`, `'running'`, `'pending'` or `'processing'`. The ready and expired-lease indexes are partial on those values and the planner uses them only when it can see the value. Every exit from a lease clears `lease_token` and `lease_until` together.
+- **Validate decimals in Go, before the write.** Reject a third decimal on an estimate and a fifth on a deal value, which Postgres would silently round. Reject an 11th integer digit on an estimate and a 17th on a deal value, which Postgres would refuse with a numeric overflow. Reject `NaN` and infinity with a typed validation error instead of letting the database answer with a 500: a CHECK rejects `NaN` on estimates, deal values and the agent budget, a CHECK rejects infinity only on the agent budget, and the two typed columns refuse infinity themselves with the same overflow. `1.5` reads back as `1.50`, so the DTO mapper trims the padding.
+- **On a personal agent run, suggestion or action run, the requesting, targeted, authorizing and on-behalf-of user is the owner or null.** The database enforces it, which matches the rule that an agent never acts on supplied user IDs.
+- **Placement receipts are root-scoped.** A receipt belongs to exactly one of a root or a personal owner, so a command that spans both records the root.
+
+## Account deletion and personal data
+
+**Tracked as APP-107. It must ship before the first command that can write a personal row, and the workflow API flag must not be enabled without it.**
+
+Table Design requires that a personal owner is never set to null and that work history is never cascaded away, so the database refuses to delete a user who still owns private ToDo data. The refusal is not clean today. Account deletion removes the WorkOS account first and the user row second. If the second step is refused, the person can no longer sign in but their data is still here. On the WorkOS `user.deleted` webhook the same refusal returns a 500 and WorkOS retries.
+
+Add an explicit clean-up step owned by the projects feature, exposed through `projectspub` and called by the users feature. The composition root only wires the two together. It runs on all three deletion paths: self-service, operator, and the WorkOS webhook. On the self-service and operator paths it runs **before** the WorkOS account is removed, so a failure leaves the account fully intact. On the webhook path WorkOS has already removed the account before the event arrives. There the clean-up runs before the local user delete, a failure still answers 500 so WorkOS retries, and the step must therefore be safe to run twice.
+
+In one transaction, as ordered statements:
+
+1. **Clear every nullable pointer at the owner's private rows.** That covers pointers held by rows that survive, such as project history, runs, actions and reminders that mention a task which was later placed into the owner's ToDo. It also covers pointers the private rows hold at each other. Tasks, suggestions, agent runs, action runs and history reference one another through blocking foreign keys, so no delete order exists until those are cleared.
+2. **Delete the private rows table by table, children first:** follow-ups, action runs, history, suggestions, agent runs, receipts, task dependencies, tasks.
+
+Deleting those rows is also what cancels the owner's pending personal jobs and reminders. One point is left for APP-107 to decide: what to do when a personal action is mid-dispatch to a provider at the moment the account is deleted. Nothing else needs handling: preferences, personal suggestion responses, reminders addressed to the user and task assignments already disappear with the user, and shared project work survives with the person's name removed.
+
+Test it on a real database with a user who owns personal tasks, a Suggested proposal for one of them, an action run, a reminder and history, including a task that was moved from a project into their ToDo. This is the Account deletion [acceptance gate](/guides/open-work/roadmap/projects-tasks#acceptance-gates-and-operational-checks).
 
 ## Stage criteria and suggested actions
 

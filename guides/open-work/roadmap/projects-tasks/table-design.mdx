@@ -9,6 +9,10 @@ icon: "table"
 **Go + 100% AlloyDB build design.** This is the table-design subpage of [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks). It owns the complete feature schema, including pipelines, deals, suggestions, and durable agent execution. **Updated September 20, 2026:** project-free tasks belong to a user's ToDo catch-all; Suggested is an unaccepted task state; estimates preserve the requested unit. Routes and command contracts live in [Projects & Tasks API Design](/guides/open-work/roadmap/projects-tasks/api-design).
 </Note>
 
+<Check>
+**Built September 21, 2026.** All 17 tables below are written in `orbiter-backend` [PR #257](https://github.com/Orbiterio/orbiter-backend/pull/257) (APP-69, in review on that date), as four Goose migrations. The [as-built record](#as-built-record) at the end of this page lists the migration split, how the scope rules became constraints, the delete behaviour, and the places the build differs from the text. Until that PR merges its migrations can still change, and they are re-timestamped at merge. Once it is merged, change the schema with a new additive migration, never by editing those four.
+</Check>
+
 ## Data model: 17 feature-owned tables
 
 These 17 tables form the complete feature-owned AlloyDB schema. Reused users, organizations, teams, entity records, email records, and notification records remain in their existing AlloyDB feature schemas.
@@ -65,6 +69,7 @@ Tasks and shared work are archived, not hard-deleted through ordinary product AP
 | `agent_review_cursor?`, `agent_review_cycle_started_at?` | Root-only operational cursor and cycle time, persisted independently of domain versions. |
 | `created_by_user_id?`, `created_by_agent_key?`, `created_by_agent_run_id?` | Trusted immutable creation provenance. Human attribution survives as null if the account is removed. |
 | `completed_at?`, `archived_at?`, `access_version` | Lifecycle and root authorization version. Access changes increment the root access version. |
+| Common mutable fields | `id`, `created_at`, `updated_at` and `version`, per the shared rule. `version` is the value a PATCH echoes as its expected version; `access_version` is separate. |
 
 Root-only settings are null on children; `agent_assistance_enabled` is false on children and their unused `access_version` remains 1. Expose resolved root settings in API responses. Serialize hierarchy changes under the root lock, reject cycles and cross-root moves, and cap nesting at 10 levels. Completing a project requires all non-archived descendant projects to be completed/canceled, accepted tasks done/canceled, and deals terminal; Suggested task rows do not block completion; report remaining blockers instead of silently closing them. Archived unfinished work is shown in the confirmation summary. Completion is an explicit command, not a count-derived mutation.
 
@@ -209,6 +214,78 @@ Initial load-test target: a root with 10,000 active deals, 100,000 tasks, and 50
 
 ## Migration sequence
 
+**Written, in PR #257:** the four migrations are `projects_001_work`, `projects_002_pipelines_deals`, `projects_003_suggestions_runs` and `projects_004_actions_followups`; the [as-built record](#as-built-record) has the table split. The rules they follow, which also apply to every later migration (the ordering recheck against main is repeated at merge):
+
 Generate migrations using `make migration name=projects_001_work`, then feature-owned sequential migrations for pipelines/deals, suggestions/reliability, and actions/follow-ups. The named slices are logical ordering, not hand-chosen timestamps. Add FKs for later-created dependencies in the later migration; do not introduce forward references to absent tables. Receipt/activity/run circular references are nullable and added after both tables exist. If a project-required or integer-minute schema already exists when implementation starts, use additive migrations for nullable project scope, personal ownership, estimate amount/unit and acceptance fields; backfill accepted task times from known creation provenance and existing estimates as minutes, then validate constraints/indexes before cutover. Never infer Suggested from an AI creator on historical accepted work. Extend nullable-root response/preferences keys before enabling personal suggestions. Recheck ordering against current main before merge; do not rewrite already-applied migrations.
 
 Table numbers in the [implementation build slices](/guides/open-work/roadmap/projects-tasks#implementation-layout-and-build-slices) refer to the schema above. Transaction and access invariants are defined in [Projects & Tasks API Design](/guides/open-work/roadmap/projects-tasks/api-design#commands-concurrency-and-invariants).
+
+## As-built record
+
+`orbiter-backend` [PR #257](https://github.com/Orbiterio/orbiter-backend/pull/257) (APP-69) built this schema on September 21, 2026, against the September 20 text. The tables, fields, keys and indexes described above are what the PR builds, except where this section says otherwise. It records what the build made concrete and the places it differs. It is schema and wiring only: no command, route or worker exists yet.
+
+### Migrations
+
+| Migration | Creates, in this order | Foreign keys it adds to earlier tables |
+|---|---|---|
+| `projects_001_work` | 1 projects, 2 project_organization_access, 3 tasks, 4 task_assignees, 5 task_dependencies, 16 command_receipts, 10 work_activity | none |
+| `projects_002_pipelines_deals` | 6 pipelines, 7 pipeline_stages, 8 deals, 9 deal_stakeholders | `tasks.deal_id`, `work_activity.deal_id` |
+| `projects_003_suggestions_runs` | 13 agent_runs, 11 agent_suggestions, 12 suggestion_user_state | `tasks.source_suggestion_id`; `created_by_agent_run_id` on projects, tasks and deals; `work_activity.agent_run_id` |
+| `projects_004_actions_followups` | 14 action_runs, 15 followups, 17 project_user_preferences | `work_activity.action_run_id`, `agent_suggestions.action_run_id` |
+
+Receipts are created before activity so `work_activity.command_id` is a real FK from the start. A column that points at a later table ships as a bare nullable UUID; the later migration adds the named FK and its index. That migration's Down drops the constraint, drops the index and empties the column, so rolling back and re-applying over existing rows re-adds the FK cleanly. Only `projects_001_work` creates and drops the `projects` schema.
+
+### How the scope rules became constraints
+
+- **One CHECK per task-capable table** (tasks, task_assignees, work_activity, agent_suggestions, agent_runs, action_runs, followups): either `project_id` and `root_project_id` are both set and `personal_user_id` is null, or the reverse. The root-or-personal tables (task_dependencies, suggestion_user_state, command_receipts, project_user_preferences) use a strict either-or of `root_project_id` and `personal_user_id`.
+- **Project integrity is a composite FK** from `(project_id, root_project_id)` to a unique key `(id, root_project_id)` on projects, so a row proves its project and its root belong together. Postgres skips a composite FK when any of its columns is null, which the CHECK makes exact. For the same reason the two scope columns never share one FK: one of them is always null, so that FK would never be enforced.
+- **Unique keys added only as FK targets:** projects `(id, root_project_id)`; tasks `(id, project_id)`, `(id, root_project_id)` and `(id, personal_user_id)`; pipelines `(id, root_project_id)`; pipeline_stages `(id, pipeline_id)`; deals `(id, project_id)`.
+- **A task's current scope is pinned in two places only.** task_assignees carries three composite FKs to tasks and task_dependencies carries four, so an assignee always matches its task's scope and both ends of a dependency share one root or one owner. History, runs, follow-ups and suggestions keep the audience they were written for and reference a task by plain `task_id`, because placement can move a task across scopes.
+- **Deals never change project**, so every table that holds a `deal_id` uses a composite FK `(deal_id, project_id)` to deals. Where the scope columns are nullable, a CHECK adds that a personal row carries no deal.
+- **Uniqueness over a nullable scope is always a pair of partial unique indexes**, one for the project root and one for the personal owner. `NULLS NOT DISTINCT` is used only on the two source-import indexes, so a second whole-suggestion import with no action reference is rejected.
+- **`accepted_at IS NULL` is the structural form of Suggested.** No CHECK names an enum value. A Suggested row cannot hold a work key, a start, a completion, a completion summary or a progress time, and the accepted-only due-scan index keys off `accepted_at`. Every insert must therefore set `accepted_at` unless the status is `suggested`.
+
+### Delete behaviour
+
+| Reference | On delete |
+|---|---|
+| Structural work and history: project, task, deal, pipeline, stage, run, suggestion, receipt | `RESTRICT` |
+| Personal owner, `personal_user_id` to users, on tasks, work_activity, command_receipts, agent_suggestions, agent_runs and action_runs | `RESTRICT` |
+| Human attribution and ownership: every `owner_`, `created_by_`, `granted_by_`, `assigned_by_`, `accepted_by_`, `adopted_by_`, `resolved_by_`, `requested_by_`, `on_behalf_of_`, `authorized_by_`, `added_by_`, `actor_` and `suggested_for_` user column | `SET NULL` |
+| `owning_organization_id`, `team_id`, `copied_from_pipeline_id`, `suggestion_user_state.last_suggestion_id` | `SET NULL` |
+| Pure joins: task_assignees (to its task and its user), `project_organization_access.organization_id`, `suggestion_user_state.user_id`, `project_user_preferences.user_id`, `followups.recipient_user_id` | `CASCADE` |
+| Canonical targets `(entity_type, node_uuid)` and the external `agent_suggestions.source_suggestion_id` and `source_action_ref` | No FK |
+
+Users are deleted by a single `DELETE FROM users.users`, so every action above really fires. The personal-owner `RESTRICT` means **a user who still owns private ToDo data cannot be deleted until an explicit clean-up step exists**. That step is APP-107 and must ship before any command can write a personal row. The contract is in [API Design](/guides/open-work/roadmap/projects-tasks/api-design#account-deletion-and-personal-data).
+
+### Where the build differs from the text above
+
+1. **`personal_user_id` has no FK on suggestion_user_state, project_user_preferences and followups.** Each of those rows also holds a `CASCADE` FK to the same user. A `RESTRICT` beside it would pass or fail depending on which trigger Postgres fires first. A CHECK pins `personal_user_id` to the user column (`recipient_user_id` on followups) instead, which also enforces the rule that a personal row belongs to its owner.
+2. **`work_activity.deal_id` is a composite FK.** The carve-out for history in the shared rules is about task IDs. A deal never moves, so its history can prove its project.
+3. **One task per source suggestion.** `tasks.source_suggestion_id` has a partial unique index. If adoption ever creates several tasks from one suggestion, drop it in a migration.
+4. **An inverse dependency pair is rejected by an index**, a unique index over the lesser and greater of the two task IDs, so "a needs b" and "b needs a" cannot both commit even when the inserts race. Longer cycles are still a service check under the scope lock.
+5. **Structural CHECKs the text implies but does not spell out:** a root must have a timezone; root-only settings are null, assistance is off and `access_version` is 1 on a child; a project cannot be its own parent; a work key needs a deal; a deal is not both won and lost, and `lost_at` and `lost_reason` are set together; `adopted_at` and `adoption_type` are set together, and a result task, an action run or an applied activity can exist only on an adopted suggestion; `lease_token` and `lease_until` are set together; `authorization_expires_at` is after `authorized_at`. On a personal agent run, suggestion or action run, the requesting, targeted, authorizing and on-behalf-of user can only be the owner. That last one would need a migration before delegated personal assistance could exist.
+6. **Non-negative numeric CHECKs also reject `NaN`**, and `Infinity` on the unconstrained `agent_daily_budget_usd`. Postgres accepts `NaN` in any NUMERIC column and `Infinity` in an unconstrained one, and both pass a plain `>= 0`. On `NUMERIC(12,2)` and `NUMERIC(20,4)` the type itself refuses `Infinity` with a numeric overflow.
+7. **Pure attribution columns are not indexed.** `created_by_user_id`, `assigned_by_user_id` and the like are `SET NULL` columns no query filters on. A rare user delete pays a scan instead of every write paying for the indexes. Owner, organization and team columns the access query filters on are indexed.
+8. **Indexes whose queries do not exist yet are not built:** a due index on `next_agent_review_at`, the check-in and blocked-too-long scans, and the suggestion expiry sweep. Each arrives in the additive migration that ships its query.
+9. **The personal owner/created-time index covers archived rows too.** The index list above asks for it on live personal rows. It is partial on the owner only, so the archived and restore views can use it and so can the probe Postgres runs on the personal-owner `RESTRICT` when a user is deleted. The owner/status/date index is limited to live rows as written.
+
+### Types, defaults and pinned values
+
+- **Ranks** are `position TEXT COLLATE "C" NOT NULL` on pipelines, pipeline_stages and deals, with a CHECK for exactly 12 characters of `0-9a-z`. They are not unique; IDs break ties. The explicit collation is what makes byte order equal numeric order whatever the database locale is.
+- **Money and estimates:** `deals.value NUMERIC(20,4)`, `tasks.estimate_amount NUMERIC(12,2)`, `agent_daily_budget_usd NUMERIC`. Postgres silently rounds a decimal beyond the scale, and raises an overflow on an 11th integer digit of an estimate or a 17th of a deal value, so the service is the only guard against both. `1.5` reads back as `1.50`; DTO mappers trim the padding.
+- **Other types:** `request_hash` and `input_hash` are `BYTEA`; `lease_token UUID`, `lease_until TIMESTAMPTZ`, `lease_fence BIGINT` default 0, `attempts INT` default 0; quiet hours are `TIME`; `source_template_version` is text.
+- **JSON shapes are fixed per column name.** Arrays: `evidence_refs`, `result_refs`. Objects: `payload`, `resource_versions`, `limits`, `usage`, `evidence_manifest`, `criteria`, `action_guidance`, `criterion_attestations`, `basis`, `input`, `authorization_scope`. `criteria` and `action_guidance` are versioned document envelopes, so the criterion list and the guidance list live inside the object. Nullable: `action_payload`, `agent_review_cursor`.
+- **Defaults kept:** project `planned` and `normal`, task `todo` and `normal`, pipeline kind `custom`, suggestion status `open`, disposition `undecided`. **No default, on purpose:** `work_activity.visibility`, `event_type` and `actor_type`; `pipeline_stages.category`; the grant `role`; the `status` of agent_runs, action_runs and followups; `action_runs.visibility`.
+- **Six enum values are pinned by partial-index predicates:** `open`, `queued`, `running`, `background`, `pending` and `processing`. Renaming one needs a migration. A Go test parses the four migrations and fails if a pinned value or a column default is not in its Go set, or if any CHECK names an enum value.
+
+### In the Go package
+
+`internal/features/projects` holds the enum sets with a `ValidX()` function each (`types.go`, `types_pipeline.go`, `types_agent.go`, `types_actions.go`). Only sets the spec closes are defined: the ones listed on this page, the stage categories listed in API Design, and the five pipeline kinds this page names, which Go treats as the whole set until one is added. `event_type`, `suggestion_type`, `action_type` and `trigger_type` stay open, apart from the one pinned trigger, `background`. sqlc maps NUMERIC to `pgtype.Numeric`, DATE to `pgtype.Date`, TIME to `pgtype.Time` and JSONB to bytes. There is no decimal library in the backend, and money or estimates must never pass through a float.
+
+### What was verified
+
+- Real Goose on Postgres 16: every migration up on an empty database, the four projects migrations down (schema gone), then up again.
+- A disposable Postgres 17 test with 77 subtests. Each rejection asserts the SQLSTATE and the constraint name, so a row rejected by the wrong rule fails the test. It covers the scope CHECKs, wrong-root and wrong-project references, cross-root and cross-owner dependencies, the inverse pair, estimate and value pairing, `NaN`, infinity, silent rounding and integer-digit overflow, the owner-only checks on personal runs, suggestions and actions, lease pairing on all three job tables, one default stage, one live task per deal and work key, one open suggestion per scope and intent, the second whole-suggestion import, rank format and order, user, organization and team deletion, and an exact `1.5 hours` plus date round-trip through generated code. It also shows that moving a task's scope in place fails while an assignee row exists, and that delete assignees, update the task, insert assignees succeeds.
+- Rollback over rows in all 17 tables, which the test asserts before it starts, with every deferred FK column populated: one more migration at a time until the `projects` schema is dropped, and back. CI applies only the Up half of a migration, so this test is the repeatable proof that the Downs work.
+- Not measured yet: the [load-test query plans](#indexes-and-query-plans). None of those queries exists; the only two so far are primary-key reads.
