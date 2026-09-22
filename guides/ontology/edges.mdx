@@ -5,23 +5,75 @@ description: "Source of truth for every FalkorDB edge in the Orbiter graph — p
 
 Core graph edge relationship types plus enrichment-specific edge sets, organized by logical group.
 
-**Video game contract synchronized September 9, 2026:** [game edge directions, weights, properties, ownership and real examples](#video-game-edges), including the [complete DEVELOPED_BY contract](#developed-by). These are Go/GCP build contracts, not deployed game writers.
+**Current audit: September 22, 2026.** The [current Universe reference](#current-universe-writers-and-parameters) below supersedes historical implementation/status claims. Game writers now exist; [game contracts](#video-game-edges) and [DEVELOPED_BY](#developed-by) retain the detailed evidence requirements.
 
-Most core entries on this page are generated from the live `util.template_engine` (and `api.lambda`-built) Cypher blocks inside Xano workspace 3. Compact enrichment inventories, such as MusicBrainz, point to the deeper pipeline-specific implementation pages. Entries include:
+The historical core entries on this page were generated from the then-live `util.template_engine` (and `api.lambda`-built) Cypher blocks inside Xano workspace 3. Compact enrichment inventories, such as MusicBrainz, point to the deeper pipeline-specific implementation pages. Entries include:
 
 - One-click copyable **function path + ID** so you can jump straight to the source.
 - For generated core sections, the **actual MERGE/CREATE Cypher snippet** that writes the edge — copied verbatim from the function (Twig templating preserved, so you can see exactly which properties are conditional).
 - The **edge pattern**, **weight** (lower = more important), and the **inputs** the writer reads.
 
-**Weight convention:** Lower numbers indicate stronger / more important relationships. Every edge uses the integer 1–100 scale (identity bridges at 1, hub damping at 100) — the IMDB film/TV edges' old sub-1 weights were raised to 30–40 by the §3.6 audit (2026-05-31); never write sub-1 weights.
+**Weight convention:** Lower numbers indicate stronger / more important relationships. Weighted edges use the integer 1–100 scale; explicitly unweighted meta/user-content edges omit `weight`. Identity bridges use 1 and hub damping uses 100 — the IMDB film/TV edges' old sub-1 weights were raised to 30–40 by the §3.6 audit (2026-05-31); never write sub-1 weights.
 
-**Deployment convention:** an edge name shown in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> is specified on this page but has no live writer yet — see [Person Relationship Edges](#person-relationship-edges) and [Enrichment Engine v1.2 Edges](#enrichment-engine-v12-edges). The colour comes off when the writer ships.
+**Status convention:** implementation is established by writer code; graph presence is established by a dated observation. Neither a registry `live` flag nor absence from one graph proves deployment everywhere. Green names mark remaining proposals; historical proposal text is retained where it defines a broader contract than the implemented writer.
 
-**Required description policy — September 9, 2026:** every edge must have a non-empty, evidence-grounded `description`. Reuse suitable existing/source text; when missing, generate with **GLM 5.3 FLASH (`z-ai/glm-5.3-flash`), reasoning effort `low`**, before creating the edge. Queue generation in queued waterfalls and retain actual provenance; failed generation leaves the relation pending. Historical writer extracts below describe their audited behavior and may predate this requirement; they do not establish compliance. See the [creation and description contract](#required-description-and-queued-creation) for the game implementation and its known runtime gap.
+**Required description policy — September 9, 2026:** every edge must have a non-empty, evidence-grounded `description`. Reuse suitable existing/source text; when missing, generate with **GLM 5.3 FLASH (`z-ai/glm-5.3-flash`), reasoning effort `low`**, before creating the edge. Queue generation in queued waterfalls and retain actual provenance; failed generation leaves the relation pending. Historical writer extracts below describe their audited behavior and may predate this requirement; they do not establish compliance. See the [creation and description contract](#required-description-and-queued-creation) for the game implementation and the current receipt behavior below.
 
 <Note>
-  **Historical writer audit: 2026-07-09** — the original patterns and quoted Cypher describe the legacy writers. **Theatre specification revised: 2026-09-06** — [Go theatre edges](#theatre-edges), endpoint rules and property examples are proposed development contracts, not deployed writers. This addition does not re-audit unrelated sections.
+  **Legacy extracts:** the Xano function IDs and quoted Cypher below are historical references, last audited July 9, 2026; they are not the current Go parameter schema. Theatre is partially implemented. Use the September 22 writer audit and endpoint-specific status notes before copying an old example. Synthetic contract examples are not observed graph records.
 </Note>
+
+
+## Current Universe writers and parameters
+
+Verified against [`orbiter-universe` revision `bb0fc045`](https://github.com/Orbiterio/orbiter-universe/tree/bb0fc045) and read-only aggregate queries against the graph configured by **dev Universe AlloyDB**, September 22, 2026. This did not inspect every environment or re-audit App/user-graph writers.
+
+The graph contained **24,755 edges across 56 relationship types**. Of those, **24,333 carry weights**; the **422 `HAS_INVESTMENT_THESIS` edges are intentionally unweighted**. **6,304 edges have missing/blank descriptions**; current writer policy does not retroactively repair existing data. All observed weighted edges are within 1–100. These counts include retained records regardless of `active`/scoring eligibility and are not counts of currently traversable relationships.
+
+[Current weights and endpoint variants](/guides/ontology/edge-weights#current-universe-reference) · [Weights CSV](/files/graph/edge-weights.csv) · [Observed property coverage CSV](/files/graph/edge-properties-observed.csv) · [Dated aggregate evidence](/files/graph/graph-audit-2026-09-22.json)
+
+<Warning>
+**Required scoring correction (Mark, September 22): lower weight = stronger; older work must have a HIGHER weight.** Current `AUTHORED` and `CONTRIBUTED_TO` code reverses that rule. Their values below report the bug, not the intended policy. Proposed reversal preserves the bands: project 15 →20 →25 →30 →35 →40 as age increases; publication 15 →18 →22 →25. Universe code and graph data remain unchanged pending developer implementation. [Developer change list](/files/graph/universe-developer-handoff.md).
+</Warning>
+
+### Corrected implementation differences
+
+| Area | Current writer / observed behavior | Difference from older text or registry |
+| --- | --- | --- |
+| Employment | `WORKS_AT` current seniority 5–20; `WORKED_AT` past seniority +20 (25–40); `WAS_ADVISOR_TO` 12 | Go uses distinct past-tense labels. Observed `WORKS_AT` still spans 5–40, so historical rows are not uniformly relabeled. |
+| Direct angel investment | Person:Angel → Company `INVESTED_IN` 25 | The former work-derived 15 branch is defunct; funding-round variants remain VC 20 / angel 25. |
+| Music | `IMPRINT_OF` 12, `DISTRIBUTED_BY` 40 and `FROM_AREA` 70 have writers and observed edges | These are not forward gaps. `ACQUIRED_BY` 25 accepts Company → Company, beyond music labels. `SAME_AS` remains a legacy identity contract; the registry explicitly says it was not ported. |
+| Game relationships | `MergeGameEdge` implements the registered endpoint allowlist; `MergeBasedOn` owns adaptation | Game relationships are no longer blanket “unbuilt.” The snapshot includes `DEVELOPED_BY`, `IN_GAME_SERIES`, `USES_ENGINE` and game publishing edges, but not every supported family. |
+| Theatre | `MergeProduced`: Person/Company → Stage_Production, 12/16/22/28/35. `MergeStageWorkedOn`: Person → Stage_Production, 30. Stage awards 40/30/35. | Registry `ProducedStage` still says planned / `Film_TV:stage`; actual writer uses `Stage_Production`. `WORKED_ON` stage variant is missing from `edges.All()`. Award recipient writer currently accepts **Person only**, not the proposed Company extension. No theatre edges were observed in this snapshot; implementation is not proof of deployed data. |
+| Person relations | Deep Bio person-relation writer implements the documented fixed/tiered costs; several families observed | The whole section is no longer “not deployed.” Missing families in this snapshot do not prove missing writers. |
+| Appearances | Deep Bio writes `SPOKE_AT` and `APPEARED_IN`; both observed | The expanded media ledger/session contract remains proposed. `SESSION_OF` 30 is the accepted replacement for unbuilt media `PART_OF`; registry still has the older name. |
+| Governance / donations | `OFFICER_OF` and `DONOR_TO` have writers; only `OFFICER_OF` observed here | Do not label the entire v1.2 lane set unbuilt. `POLITICAL_DONOR_TO` / `RELATED_PERSON_OF` remain proposals in the registry. |
+| Work recency | `AUTHORED`: age ≤1y =25, ≤3y =22, ≤6y =18, older =15; undated =25. `CONTRIBUTED_TO`: current/undated =40, then 35/30/25/20/15. | Current Go publication cutoffs differ from the old Xano snippet. Both formulas give older work a **lower traversal cost**; “newer = stronger” was incorrect. This is a confirmed implementation mismatch: required policy is older = higher cost. Developer correction is pending. |
+
+Source files: [`edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/kernel/edges/edges.go), [`person_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/person_edges.go), [`music_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/music_edges.go), [`game_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/game_edges.go), [`stage.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/stage.go), [`stage_award.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/stage_award.go), [`appearances.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/appearances.go).
+
+### Current property envelope and family-specific parameters
+
+There is **no universal flat edge schema**. Property names, optionality, merge keys and date formats vary by writer. The observed-property CSV reports **presence counts by type**, not requiredness or validity, and can combine several endpoint variants of the same type.
+
+| Fields | Current meaning / scope |
+| --- | --- |
+| `uuid`, `created_at`, `updated_at` | Stable relationship identity and writer timestamps. Do not recreate the UUID or creation timestamp on retry. Graph `timestamp()` and receipt timestamps use epoch milliseconds. |
+| `weight` | Endpoint-specific traversal cost. Omitted intentionally on `HAS_INVESTMENT_THESIS`; never interpret omission as zero. Some writers set weight only on creation (music credits, stage `WORKED_ON`); changing the registry alone does not reweight existing edges. |
+| `description`, `description_generated_at` | Non-empty evidence-grounded prose plus actual receipt time in the shared verified-description path. A timestamp alone does not prove LLM generation. |
+| `description_provenance`, `description_input_hash` | Shared writer stores the serialized receipt and input hash. Receipt includes provenance/model/prompt/verification data; do not invent those fields in examples. |
+| `description_source`, `description_upgrade_pending` | Distinguishes verified generated prose from an accepted-relation fallback. Current code can persist `accepted_relation_fallback` with upgrade pending and **no model claim**. This differs from the stricter proposed rule that model failure always holds the edge pending. |
+| `source` / `provider` | Writer-specific lane/provider names, not interchangeable universal keys. Deep Bio uses `provider`; games use `source=video_game`; stage uses `source=stage`. |
+| `source_urls`, `source_names`, `evidence`, `evidence_refs`, `source_published` | Deep Bio person-relation/appearance provenance. `valid_from` / `valid_to` there are optional **integer years**. Other families use strings or different temporal fields; do not universally convert them to timestamps. |
+| `relationship`, `via_key`, `via_entity_uuid`, `via_organization`, `via_domain`, `funding_round_uuid` | Person-relation scope. Organization-scoped merges include `via_key`; symmetric pairs are oriented lower UUID first. Optional fields depend on retained evidence. |
+| `evidence_ids`, `chosen_fact_ids`, `source_urls`, `projection_revision`, `policy_version`, `active`, `layer`, `excluded_from_scoring` | Game envelope: requires elected evidence and resolved endpoints; `policy_version=games-v1`, `layer=evidence`, scoring excluded. Extra family properties are strings/string lists; preserve correlated source claims relationally. |
+| `role`, `active`, `stage_credit_version`, `source_name`, `source_role`, `market` | Stage `PRODUCED`: endpoint-pair merge, revision-fenced updates. `WORKED_ON` instead keys on pair + `role` + `character_name`, with `billing`, `award_wins` and `award_nominations` as applicable. |
+
+The [shared description writer](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/edge_descriptions.go) requires a nonempty description and input hash before these guarded writes; the [registry](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/llm/registry.go) pins dedicated edge-description LLM calls to **`z-ai/glm-5.3-flash`, reasoning `low`**. The earlier `max` mismatch is resolved in this checkout. [Fallback receipt logic](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/llm/edge_fallback.go) records when the output is deterministic fallback rather than model-generated. This is a code inspection, not a claim that all stored edges have migrated to the receipt contract.
+
+### Keeping this reference current
+
+Refresh the registry-derived CSV and table with `scripts/sync-universe-edge-reference.py`; instructions are in `files/graph/README.md` in the docs repository. Review writer exceptions and accepted proposals when source changes. Keep a separately dated read-only graph snapshot: local code, registry status and observed graph data answer different questions. No graph writes, reweighting or description backfill are part of this documentation update.
 
 ---
 
@@ -202,6 +254,8 @@ FOREACH (x IN CASE WHEN g.is_advisor = true THEN [1] ELSE [] END |
 
 ---
 
+<a id="invested_in-person-company" />
+
 ### INVESTED_IN (Person → Company)
 
 Two variants exist on this pattern:
@@ -282,7 +336,7 @@ mvp/yc/process-yc-people — #12700
 | **Pattern** | `(Mentor:Person)-[MENTOR]->(Mentee:Person)` |
 | **Weight** | **14** |
 | **Writer (v1, production)** | `mvp/yc/process-yc-people` (#12700) — YC partner → batch founder |
-| **Full schema reference** | [Known — MENTOR edge](/guides/known/schema-design/edges#mentor-directed-coaching-relationship) |
+| **Full schema reference** | [Known — MENTOR edge](/guides/known/schema-design/edges) |
 
 ```cypher
 MATCH (mentor:Person {uuid: $ycPartnerUuid})
@@ -707,6 +761,8 @@ mvp/resolve/resolve-edges-projects-publications — #12579
 
 ### CONTRIBUTED_TO
 
+**Implementation mismatch:** the historical/current code ladder below is reversed. Required policy is older work = higher weight. Proposed corrected ladder: current 15, then 20/25/30/35/40 with increasing age. See the [developer change list](/files/graph/universe-developer-handoff.md).
+
 Person contributed to a project (work product).
 
 | | |
@@ -765,7 +821,7 @@ END
 
 ### AUTHORED
 
-Person authored a publication-shaped work.
+Person authored a publication-shaped work. **Current Go cutoffs:** age ≤1 year →25, ≤3 years →22, ≤6 years →18, older →15; undated →25. The Xano snippet below is historical and uses different boundaries. Both implementations currently assign lower cost to older work, **contrary to the required policy**. Developer correction is pending; this historical snippet must not be copied as the desired formula.
 
 | | |
 |---|---|
@@ -1224,10 +1280,12 @@ ON MATCH SET
 
 <a id="video-game-edges" />
 
-## Video game relationships — proposed Go contract
+<a id="video-game-relationships--proposed-go-contract" />
+
+## Video game relationships — Go contract
 
 <Info>
-**Baseline September 8, 2026; series developer extension locked September 9; game writers remain proposed.** This is the graph output reference for the [Go/GCP game waterfall](/guides/open-work/video-game-waterfall), with [node types and image examples](/guides/ontology/nodes#video-game-nodes). Every game-domain edge starts with `excluded_from_scoring: true`. Existing movie/music/publication edges keep their current behavior. Weights below are proposed endpoint-specific traversal values, not evidence of interpersonal closeness.
+**Baseline September 8–9; writer implementation verified September 22, 2026.** `MergeGameEdge` and the shared `MergeBasedOn` now implement the registered endpoint contracts. Graph presence is reported separately in the current audit. This is the graph output reference for the [Go/GCP game waterfall](/guides/open-work/video-game-waterfall), with [node types and image examples](/guides/ontology/nodes#video-game-nodes). Every game-domain edge starts with `excluded_from_scoring: true`. Existing movie/music/publication edges keep their current behavior. Weights below are proposed endpoint-specific traversal values, not evidence of interpersonal closeness.
 </Info>
 
 **Movie-credit handoff:** a stored person credit for a game queues the [same existing game identity into the game waterfall](/guides/open-work/video-game-waterfall#movie-to-game-handoff). Retain each role/character assertion and reconcile existing `WORKED_ON` credits through one elected game replay owner. The trigger is durable upstream evidence; creating or replaying the graph edge must not launch discovery. Pending game nodes and their incident edges remain internal until the [game publication gate](/guides/open-work/video-game-waterfall#game-publication-gate) succeeds; public readers enforce readiness on both endpoints.
@@ -1240,23 +1298,23 @@ ON MATCH SET
 
 ### Game edge inventory
 
-Rows reserve endpoint contracts; a reused edge name does not authorize its existing writer to accept a new node type. Green names are proposed new families. All rows involving new game endpoints require Go type registration, fact election, endpoint readiness and the owning queued replay before activation.
+Rows describe the game endpoint contracts implemented by the Go writer allowlist. A reused name still requires the correct endpoint-specific writer, elected evidence and endpoint readiness; implementation does not imply every family is populated in every graph.
 
 | Edge | Direction | Weight | Edge-specific evidence / properties | Delivery |
 | --- | --- | ---: | --- | --- |
 | `WORKED_ON` — extension | Person → Video_Game | 30 | `roles`, `role_labels`, `character_names`, `credit_record_ids`, `credit_coverage`; keep language/platform/edition scope | Core |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>DEVELOPED_BY</span> | Video_Game → Company | 35 | Named development credit; literal role and scope in relation records; no parent-company inference | Core |
+| DEVELOPED_BY | Video_Game → Company | 35 | Named development credit; literal role and scope in relation records; no parent-company inference | Core |
 | `DEVELOPED_BY` — series endpoint extension | Game_Series → Company | 35 | Elected direct series developer claim or an elected member development credit joined to that exact member's elected series membership; preserve the basis and member scope | Required when evidenced |
 | `PUBLISHED_BY` — extension | Video_Game → Company | 45 | Named publisher; correlated territory/platform/date records; no distribution-to-publishing inference | Core |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>BASED_ON</span> | Derivative → source, with at least one Video_Game endpoint | 55 | `source_property`, observed subject/object, normalized derivative/source QIDs, description evidence | Core cross-media bridge |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>SOUNDTRACK_FOR</span> | Release_Group or Music_Work → Video_Game | 55 | Explicit soundtrack/score relation and exact music identity; album and composition remain distinct | Music slice |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>USED_IN</span> | Recording → Video_Game | 60 | Exact recording use; optional scene, usage and game-version scope | Later music slice |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>IN_GAME_SERIES</span> | Video_Game → Game_Series | 75 | Typed series membership; ordinal when explicitly provided | Context slice |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>EDITION_OF</span> | Video_Game → Video_Game | 60 | Explicit edition/remake/remaster relation; `edition_kind` | Release slice |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>EXPANSION_OF</span> | Video_Game → Video_Game | 60 | Explicit expansion/DLC-to-base relation; separate verified identities | Release slice |
+| BASED_ON | Derivative → source, with at least one Video_Game endpoint | 55 | `source_property`, observed subject/object, normalized derivative/source QIDs, description evidence | Core cross-media bridge |
+| SOUNDTRACK_FOR | Release_Group or Music_Work → Video_Game | 55 | Explicit soundtrack/score relation and exact music identity; album and composition remain distinct | Music slice |
+| USED_IN | Recording → Video_Game | 60 | Exact recording use; optional scene, usage and game-version scope | Later music slice |
+| IN_GAME_SERIES | Video_Game → Game_Series | 75 | Typed series membership; ordinal when explicitly provided | Context slice |
+| EDITION_OF | Video_Game → Video_Game | 60 | Explicit edition/remake/remaster relation; `edition_kind` | Release slice |
+| EXPANSION_OF | Video_Game → Video_Game | 60 | Explicit expansion/DLC-to-base relation; separate verified identities | Release slice |
 | `RELEASE_OF` — extension | Game_Release → Video_Game | 30 | Exact release identity and scoped platform/territory/edition; distinct dispatch from music Release → Release_Group | Release slice |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>AVAILABLE_ON</span> | Video_Game or Game_Release → Game_Platform | 80 | Confirmed availability; retain release/version/date context | Optional context |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>USES_ENGINE</span> | Video_Game → Game_Engine | 80 | [Locked engine-use contract](#uses-engine): required use-record references and description; version strings only when evidenced | Optional context |
+| AVAILABLE_ON | Video_Game or Game_Release → Game_Platform | 80 | Confirmed availability; retain release/version/date context | Optional context |
+| USES_ENGINE | Video_Game → Game_Engine | 80 | [Locked engine-use contract](#uses-engine): required use-record references and description; version strings only when evidenced | Optional context |
 | `HAS_AWARD` — extension | Video_Game → Game_Award | 40 | [Locked recognition contract](#game-has-award): scoped award-evidence records, consistent current outcome and required description; separate same-game recipient entries | Awards slice |
 | `WON_AWARD` — extension | Explicit Person or Company → Game_Award:Winner | 30 | Named recipient evidence, independent of the game's award | Awards slice |
 | `NOMINATED_FOR` — extension | Explicit Person or Company → Game_Award:Nominee | 35 | Named nominee evidence; no credit-list fan-out | Awards slice |
@@ -1342,7 +1400,7 @@ The graph contains primitive scalars and lists. Evidence records with correlated
 
 **Description rule:** every game edge requires a non-empty factual `description`. Reuse an existing or source-provided sentence only if it still describes the elected endpoints and scope. Otherwise queue `describe` using **`z-ai/glm-5.3-flash`**, **`ReasoningEffortNested: "low"`** (`reasoning: {"effort": "low"}`). The model sees retained eligible facts only; it cannot create evidence or discover endpoints. Keep the shared provider routing, usage accounting, prompt validation, attempt logging and original root limits. No blank edge, fabricated description receipt or silent model substitution on failure. Existing edge-specific length rules still apply; the Game_Series node's 127-character limit is not an edge limit.
 
-**Runtime gap:** the inspected Universe shared `edgeDescriptionConfig` currently selects this model with effort `max`; it does not yet satisfy the requested `low` setting. The game build must configure and validate low effort through the shared registry, including factuality, embedded-source-instruction rejection and non-empty output. This documentation update does not change or certify existing movie/music writers.
+**Runtime update — September 22, 2026:** `edgeDescriptionConfig` now uses `z-ai/glm-5.3-flash` with nested effort `low`. The guarded graph writer requires a nonempty verification receipt. Current fallback handling may provide a deterministic accepted-relationship sentence marked `description_upgrade_pending=true`; it does not claim LLM generation. See the [current property envelope](#current-property-envelope-and-family-specific-parameters). Existing blank-description edges remain a separately measured data gap.
 
 1. **Retain and elect evidence.** Land the exact source assertion, revision, provider, qualifiers and entitlement/coverage outcome. Accept explicit development evidence; for member-derived series support require the developer credit and membership of the **same** admitted game. Publisher billing, employment, ownership and a display name alone cannot pass election.
 2. **Reserve the bounded work.** Only the original root coordinator admits endpoints and predeclared later jobs. Freeze the combined Company manifest and atomically reserve existing root/per-game limits with durable job/outbox records. The series evidence stage emits claims, never its own jobs.
@@ -1548,7 +1606,7 @@ The [complete example and its source records](/guides/archive/video-game-build-p
 
 ### Shared names and replay ownership
 
-**`PUBLISHED_BY`:** publication → company keeps its existing weight **20**; the proposed game → company variant is **45**. The registry, description dispatch and scoring reader must consider endpoint families. One source can support two regional publishing scopes without creating two uncorrelated territory/platform arrays. Elden Ring → FromSoftware has a Japan publishing scope; Elden Ring → Bandai Namco has a separate worldwide source assertion. Neither source scope is silently rewritten.
+**`PUBLISHED_BY`:** publication → company keeps its existing weight **20**; the implemented game → company variant is **45**. The registry, description dispatch and scoring reader must consider endpoint families. One source can support two regional publishing scopes without creating two uncorrelated territory/platform arrays. Elden Ring → FromSoftware has a Japan publishing scope; Elden Ring → Bandai Namco has a separate worldwide source assertion. Neither source scope is silently rewritten.
 
 **`RELEASE_OF`:** both game and music variants use 30, but a `Game_Release` is not a music `Release`. The owner resolves the appropriate release identity and writes only its allowed endpoint pair. Game snapshot jobs cannot invoke an artist/album catalog waterfall.
 
@@ -1556,7 +1614,7 @@ The [complete example and its source records](/guides/archive/video-game-build-p
 
 **`BASED_ON`:** this game build emits derivative → source with at least one `Video_Game` endpoint; the other endpoint may be an independently resolved `Film_TV`, `Work:Theatrical_Work`, `Stage_Production` (only when that exact production is evidenced) or `Video_Game`. P144 already points derivative → source; P4969 is inverted once. A source may have only one of those statements. An inverse lookup remains one bounded hop. The shared adaptation replay owner emits one semantic edge and preserves both statements if present.
 
-The older [theatre `ADAPTED_FROM` proposal](#stage-adapted-from) remains scoped to its non-game endpoints. A theatre work ↔ game relationship uses `BASED_ON`; it must not also be emitted as `ADAPTED_FROM`. Any broader name consolidation requires an explicit migration of non-game contracts. A production's already resolved underlying work can supply intake context without moving the adaptation edge or copying the production's cast to the game.
+The older [theatre `ADAPTED_FROM` proposal](#stage-adapted-from) was superseded by `BASED_ON` on September 7. The shared Go writer supports the allowed game, film and theatre endpoints; do not emit both names for the same adaptation. A production's already resolved underlying work can supply intake context without moving the adaptation edge or copying the production's cast to the game.
 
 **Awards and music:** game award endpoints extend the existing award families at 40/30/35, with named recipients required. Music owners retain their own internal relationships; the bridge writer adds only the exact elected soundtrack/use relation. All owners use the shared [Universe error-logging contract](/guides/open-work/video-game-waterfall#shared-universe-error-logging-required).
 
@@ -2076,7 +2134,7 @@ mvp/music/backfill-on-record-label-edges — #13131
 mb/resolve-and-link-label-owner — #13133
 ```
 
-These writers create the structural graph edges. Description generation is handled separately by the generic music edge description trio. (`mb/tool/backfill-genre-area-edges` #13103 is an excluded backfill sweep, not part of the forward-path writer set — genres are properties, and `FROM_AREA` remains a forward gap.)
+These writers create the structural graph edges. Description generation is handled separately by the generic music edge description trio. (`mb/tool/backfill-genre-area-edges` #13103 is an excluded backfill sweep, not part of the forward-path writer set — genres are properties, and `FROM_AREA` was a forward gap in this legacy Xano extract; the Go writer now exists and was observed in the September 22 audit.)
 
 </Card>
 
@@ -2133,7 +2191,7 @@ Recording relationship credits are type-aware in `mb/run-base-recording-enrich` 
 | `PERFORMED_AT` | `(Artist)->(Event:Music_*)` | **45** | `role` | "Mudhoney performed at the Reading Festival 1992." |
 | `HELD_AT` | `(Event:Music_*)->(Place)` | **30** | — | "The Reading Festival 1992 was held at Little John's Farm in Reading." |
 | `RECORDED_AT` | `(Recording)->(Place)` | **35** | — | "'Smells Like Teen Spirit' was recorded at Sound City Studios in Van Nuys." |
-| `FROM_AREA` | `(Artist / Company:Music_Label / Place)->(Country / Region / City)` | **70** | `area_type` | Forward gap. Example: "Nirvana is from the United States." |
+| `FROM_AREA` | `(Artist / Company:Music_Label / Place)->(Country / Region / City)` | **70** | `area_type` | Go writer implemented; observed. Example: "Nirvana is from the United States." |
 
 <a id="music-identity-ownership-bridges"></a>
 
@@ -2241,7 +2299,7 @@ mb/tool/backfill-music-edge-descriptions — #13097
 ## Live Events
 
 <Info>
-**Status:** Spec locked 2026-09-05 (proposal reviewed 2026-07-09; all open questions resolved — see [Design decisions](#design-decisions)) — companion to the [`Event:Live_*` node model](/guides/ontology/nodes#live_event). The node itself shipped on 2026-04-18; these edges are not yet implemented, with one exception: **`REGISTERED_FOR`** is live — `(Person)-[:REGISTERED_FOR]->(Live_Event)` at weight **65**, written by the LSI registration path (`temp/add-lsi-edges` #12864). Indexes for `SPONSORS` and `ATTENDED_EVENT` were materialized on 2026-07-06, but the full writers are pending.
+**Status:** Spec locked 2026-09-05 (proposal reviewed 2026-07-09; all open questions resolved — see [Design decisions](#design-decisions)) — companion to the [`Event:Live_*` node model](/guides/ontology/nodes#live_event). The node itself shipped on 2026-04-18; most of these edges remain proposed. **`SPOKE_AT` now has a Go Deep Bio writer and observed edges** (September 22 audit). The legacy App exception is: **`REGISTERED_FOR`** is live — `(Person)-[:REGISTERED_FOR]->(Live_Event)` at weight **65**, written by the LSI registration path (`temp/add-lsi-edges` #12864). Indexes for `SPONSORS` and `ATTENDED_EVENT` were materialized on 2026-07-06, but the full writers are pending.
 </Info>
 
 Live-event edges connect conferences, summits, trade shows, workshops, and similar real-world gatherings to the people, companies, and locations around them. Direction convention follows the rest of this page: subject-first when a person or company acts on the event (`HOSTS`, `SPONSORS`, `ATTENDED_EVENT`), event-first when the edge describes the event's own structure or context (`HELD_IN`, `SUCCEEDS`, `SUB_EVENT_OF`, `FOCUSES_ON`).
@@ -2889,7 +2947,7 @@ Every question raised by the original proposal, and how it was settled. Kept her
 ## Person Relationship Edges
 
 <Info>
-**Status: specified 2026-09-05, not deployed.** Edge names shown in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> on this page are in the spec but have no live writer yet — the colour is the deployment flag, and it comes off when a writer lands. Source: the Deep Bio relationship ledger (orbiter-universe `deep_bio` agent, prompt v4.26), which stamps every row with the edge it becomes and an `edge_status` of `live`, `planned` or `proposed`. The first 30-person production batch (2026-09-05) produced 405 ledger rows: 314 already map to live edges, 76 to planned edges the inventory carried but had never specified, 14 to edges the ontology had not named, and 1 carried a relationship the gate did not recognize (no edge). Of the 14, `REPORTED_TO` and `SUCCEEDED_BY` are specified here for the first time, and the talk and podcast rows were mapped onto edges other lanes had already specified (`SPOKE_AT`, `APPEARED_IN`). The gate (`deepbio/edges.go`) now stamps every edge specified on this page as `planned`. Weights follow the [Edge Weights](/guides/ontology/edge-weights#weight-scale) scale (lower = closer) and were derived against the deployed values, never guessed; the values this page introduces (`REPORTED_TO` 15/25, `COLLEAGUES_AT` 16/24 and 28, `SUCCEEDED_BY` 30, the `POLITICAL_DONOR_TO` rename, the hub-damped speaking tier) were set with Mark on 2026-09-05 and, like `DONOR_TO`, are **pending §3.6 ratification** with Denis.
+**Implementation checked September 22, 2026.** `internal/platform/graph/person_relations.go` implements the Deep Bio person relationships below. The dev graph contains `COFOUNDED_WITH`, `COLLEAGUES_AT`, `REPORTED_TO`, `COLLABORATORS`, `CO_INVESTORS`, `SUCCEEDED_BY`, `MARRIED_TO` and `MENTOR`; `PARENT_OF` is registered/implemented but was not observed. The original September 5 ledger batch and proposed weights are historical provenance, not current deployment counts. Remaining family/ledger proposals stay separately marked.
 </Info>
 
 Person-to-person relationships that a public source states outright — "X and Y co-founded Z", "X reported to Y", "X was succeeded by Y as CMO". They differ from the structural pairs the v1.2 lanes derive through a shared node (co-board, co-producer, co-donor) in one way that decides whether an edge is written: **a source names the two people together.** Structural co-tenure stays derived at score time; an attested tie is materialized.
@@ -2900,14 +2958,14 @@ What the Deep Bio gate emits per `people[].relationship` and `works[].type`. Liv
 
 | Ledger `relationship` / `type` | Edge | Direction (subject-relative) | Status |
 | --- | --- | --- | --- |
-| `co_founder` | <span style={{ color: "#16a34a", fontWeight: 600 }}>COFOUNDED_WITH</span> | symmetric | specified below |
-| `colleague`, `board_peer` | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLEAGUES_AT</span> | symmetric | specified below |
-| `manager` / `direct_report` | <span style={{ color: "#16a34a", fontWeight: 600 }}>REPORTED_TO</span> | subject → manager / report → subject | specified below |
-| `collaborator` | <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLABORATORS</span> | symmetric | specified below |
-| `co_investor` | <span style={{ color: "#16a34a", fontWeight: 600 }}>CO_INVESTORS</span> | symmetric | specified below |
-| `predecessor` / `successor` | <span style={{ color: "#16a34a", fontWeight: 600 }}>SUCCEEDED_BY</span> | predecessor → subject / subject → successor | specified below |
-| `spouse` | <span style={{ color: "#16a34a", fontWeight: 600 }}>MARRIED_TO</span> | symmetric | specified below |
-| `parent` / `child` | <span style={{ color: "#16a34a", fontWeight: 600 }}>PARENT_OF</span> | parent → subject / subject → child | specified below |
+| `co_founder` | COFOUNDED_WITH | symmetric | specified below |
+| `colleague`, `board_peer` | COLLEAGUES_AT | symmetric | specified below |
+| `manager` / `direct_report` | REPORTED_TO | subject → manager / report → subject | specified below |
+| `collaborator` | COLLABORATORS | symmetric | specified below |
+| `co_investor` | CO_INVESTORS | symmetric | specified below |
+| `predecessor` / `successor` | SUCCEEDED_BY | predecessor → subject / subject → successor | specified below |
+| `spouse` | MARRIED_TO | symmetric | specified below |
+| `parent` / `child` | PARENT_OF | parent → subject / subject → child | specified below |
 | `former_spouse` | `PREVIOUSLY_MARRIED_TO` (10) | symmetric | planned — [Family](/guides/ontology/edge-weights#family) |
 | `sibling`, `step_sibling`, `identical_twin` | `SIBLING` (3), `STEP_SIBLING` (5), `IDENTICAL_TWINS` (1) | symmetric | planned — [Family](/guides/ontology/edge-weights#family) |
 | `*_in_law`, `aunt_uncle`, `niece_nephew`, `cousin` | `RELATED_TO` (8) | symmetric | planned — [Family](/guides/ontology/edge-weights#family) |
@@ -2916,7 +2974,7 @@ What the Deep Bio gate emits per `people[].relationship` and `works[].type`. Liv
 | `advisor` / `advisee` | `ADVISOR_OF` | advisor → advisee | proposed by the ledger, not yet specified |
 | `partner`, `former_partner`, `step_parent` / `step_child`, `grandparent` / `grandchild` | `PARTNER_OF`, `FORMER_PARTNER_OF`, `STEP_PARENT_OF`, `GRANDPARENT_OF` | — | proposed by the ledger, not yet specified |
 | works `talk` | `SPOKE_AT` (15) | subject → `Event:Live_*` | reuses the Live Events [SPOKE_AT](#spoke_at) (decided 2026-09-05): `session_title` = the row's title, `role` = the row's role, the event resolved from `venue` / `url` — a webinar lands on `Event:Live_Webinar` |
-| works `podcast` | <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (15) | subject → `MediaAppearance` | adopts the v1.2 media lane's [APPEARED_IN](#appeared_in) (decided 2026-09-05); the ledger's interim `APPEARED_ON` name is retired |
+| works `podcast` | APPEARED_IN (15) | subject → `MediaAppearance` | adopts the v1.2 media lane's [APPEARED_IN](#appeared_in) (decided 2026-09-05); the ledger's interim `APPEARED_ON` name is retired |
 | works `patent`, locations `birthplace` | `INVENTOR_OF`, `BORN_IN` | — | proposed by the ledger, not yet specified |
 
 ### Shared contract for ledger-written edges
@@ -2954,7 +3012,7 @@ Every edge in this section carries the standard envelope plus the ledger's prove
 6. **Attested, not structural.** Two people who merely overlap at the same company are *not* given `COLLEAGUES_AT`; that pair is derived through the shared `Company` node at score time, exactly as the v1.2 lanes derive co-board and co-producer pairs. The edge is written only when the row's `evidence` names the counterpart **and** the source either states that the two worked together or lists both as members of one bounded, named group at the same time — a leadership team, a board, a founding team, a panel — of at most twelve people. A staff directory or a general team page does not qualify.
 7. **Writers re-derive the edge.** The `edge` / `edge_status` stamped on a stored ledger row are informational; the writer re-derives them from `relationship` / `type` through the gate vocabulary (`deepbio/edges.go`) at write time, so stored payloads never need a backfill when the vocabulary moves (the first thirty dev payloads still say `APPEARED_ON` and `proposed`).
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>COFOUNDED_WITH</span>
+### COFOUNDED_WITH
 
 Two people founded the same company. Identity-defining, so it takes the floor of the scale and never decays — a co-founding bond does not become "past" when one founder leaves. Pairs with each founder's own `FOUNDED` (5) edge to the company.
 
@@ -3000,7 +3058,7 @@ Two people founded the same company. Identity-defining, so it takes the floor of
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLEAGUES_AT</span>
+### COLLEAGUES_AT
 
 Two people a source names as working together at the same organization — the same leadership team in a press release, the same board in an appointment notice. Tiered by the kind of seat and by whether the overlap is current. The board-peer tier equals the derived co-board path (`BOARD_MEMBER_OF` 8 \+ 8 = 16), so an attested board pair never out-ranks the structural one — the same path-neutral rule `DONOR_TO` applies to its trustee bridge. The instructors-at-the-same-school case that the planned inventory already carried at **20** is the `colleague` tier with a `School` as `via_entity_uuid`.
 
@@ -3108,7 +3166,7 @@ SET r.created_at = coalesce(r.created_at, timestamp()),
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>REPORTED_TO</span>
+### REPORTED_TO
 
 A direct reporting line: the report worked under the manager at a named organization. Daily, assigned interaction — the closest working tie short of founding together. Sits one step behind `MENTOR` (14), a chosen developmental tie, and ahead of a peer `COLLEAGUES_AT` (20). Past reporting lines keep the Strong band because the relationship was direct, not incidental.
 
@@ -3181,7 +3239,7 @@ SET r.created_at = coalesce(r.created_at, timestamp()),
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLABORATORS</span>
+### COLLABORATORS
 
 Two people who produced something together — co-presented a session, co-wrote a paper, co-hosted a series, worked the same film. Project-scoped, so the tie runs through the work or the sponsoring organization rather than a shared employer. The planned value **15** is kept; the v1.2 media lane pegged its interview host↔guest pair to this class.
 
@@ -3227,7 +3285,7 @@ Two people who produced something together — co-presented a session, co-wrote 
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>CO_INVESTORS</span>
+### CO_INVESTORS
 
 Two people who both invested in the same company. Keeps the planned two-tier value: **20** when a source places both in the same round, **25** otherwise. The ledger rarely knows the round, so the default is the weaker tier — the same create-at-the-weakest-default rule `KNOWS` follows.
 
@@ -3281,7 +3339,7 @@ Two people who both invested in the same company. Keeps the planned two-tier val
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>SUCCEEDED_BY</span>
+### SUCCEEDED_BY
 
 One person took over another's seat at an organization. The seat is shared; the people often are not — a successor may never have overlapped with the predecessor — so the edge sits in the Moderate band with the shared-credit edges (`WORKED_ON` 30), weaker than a past colleague (28) and far weaker than a reporting line.
 
@@ -3330,7 +3388,7 @@ One person took over another's seat at an organization. The seat is shared; the 
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>MARRIED_TO</span>
+### MARRIED_TO
 
 Current spouses. Family bonds out-rank every professional tie except co-founding, per the scale's first principle; the planned value **4** is kept (`PREVIOUSLY_MARRIED_TO` stays 10). Written only when the ledger marks the relationship as part of the public professional record — see writer rule 5.
 
@@ -3371,7 +3429,7 @@ Current spouses. Family bonds out-rank every professional tie except co-founding
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>PARENT_OF</span>
+### PARENT_OF
 
 Parent and child. The strongest family bond after identical twins; the planned value **2** is kept. Same public-context gate as `MARRIED_TO`, and the same rule the Deep Bio prompt already enforces upstream: minors are never named in the ledger unless a source presents them in a professional capacity.
 
@@ -3412,10 +3470,12 @@ Parent and child. The strongest family bond after identical twins; the planned v
 
 ---
 
+<a id="enrichment-engine-v12-edges" />
+
 ## Enrichment Engine v1.2 Edges
 
 <Info>
-**Status: specified in the v1.2 build plans (2026-08-21 cross-lane §3.6 sitting; `DONOR_TO` 2026-08-25), not deployed.** Folded onto this page 2026-09-05 so the ontology has one inventory; the lane pages remain the build specs — [Broadway co-producers](/guides/open-work/roadmap/broadway-co-producers), [Media co-occurrence](/guides/open-work/orbiter-univers-standalone/social-media-enrichment), [990 / FEC / Form D](/guides/open-work/roadmap/990-fec-form-d), [Donors](/guides/open-work/roadmap/donors). <span style={{ color: "#16a34a", fontWeight: 600 }}>Green</span> names follow the same convention as the section above: in the spec, no live writer.
+**Status updated September 22, 2026:** partially implemented. Stage credits/awards, Deep Bio appearances, IRS governance and donor graph writers exist; expanded context/media/filing contracts remain proposed where noted. The original contracts came from the v1.2 build plans (August 21/25). Folded onto this page 2026-09-05 so the ontology has one inventory; the lane pages remain the build specs — [Broadway co-producers](/guides/open-work/roadmap/broadway-co-producers), [Media co-occurrence](/guides/open-work/orbiter-univers-standalone/social-media-enrichment), [990 / FEC / Form D](/guides/open-work/roadmap/990-fec-form-d), [Donors](/guides/open-work/roadmap/donors). <span style={{ color: "#16a34a", fontWeight: 600 }}>Green</span> names follow the same convention as the section above: in the spec, no live writer.
 </Info>
 
 Three design rules the lanes share, restated once here because every entry below assumes them:
@@ -3424,17 +3484,19 @@ Three design rules the lanes share, restated once here because every entry below
 - **Hub targets sit in the Moderate band or below — never stronger than 30.** Institutions, committees and conferences connect thousands of people, so their edges never compete with the structural bonds (`FOUNDED` 5, family 1–10) — the 2026-05-31 audit rule; `WON_AWARD` (30) is the ceiling and most hub edges land in Weak. Same wording as [Edge Weights → Principles](/guides/ontology/edge-weights) (aligned 2026-09-06). A **hub threshold** is a per-edge, measured count that flips the edge to its damped weight: `SPOKE_AT` / `APPEARED_IN {role: speaker}` use speaker count ≥ 50 (15 → 45); foundation `DONOR_TO` uses **> 200 grants in the 4-year filing window** (30 → 40, derived trustee edges 38 → 48; Donors lane default, Phase 0 may tune it).
 - **Evidence-layer edges carry `layer: "evidence"` and `excluded_from_scoring: true`** and a traversal weight in the Weak band. They exist for corroboration and research, not for closeness.
 
-Every edge carries the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — public-source variants require both and they are not interchangeable. The theatre submission-only pilot variant may omit public URLs, while retaining mandatory source names and immutable evidence/provenance references under its [specific contract](#theatre-edges). QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
+The proposed weighted v1.2 contracts use the 2026-07-04 envelope (`uuid`, `created_at`, `updated_at`, `weight`, `description`, `description_generated_at`) **plus `source`** — the writing lane or provider (`irs_990`, `deep_bio`, `media.youtube`, `fundable`, …; the live person-edge writer already stamps it on every `WORKS_AT` / `BOARD_MEMBER_OF` / `FOUNDED`). `source` says *who wrote this*; the per-edge `source_urls` say *where the evidence is* — public-source variants require both and they are not interchangeable. The theatre submission-only pilot variant may omit public URLs, while retaining mandatory source names and immutable evidence/provenance references under its [specific contract](#theatre-edges). QA queries scope a lane's edges by `r.source`. (Added to the envelope 2026-09-06, Mark.) `description` is the deterministic sentence given per edge. Property tables below list only the edge-specific fields.
 
 <a id="theatre-edges" />
 
-### Theatre relationships — proposed Go contract
+<a id="theatre-relationships--proposed-go-contract" />
+
+### Theatre relationships — Go implementation and remaining proposals
 
 <Info>
-  **Graph build contract — synchronized 2026-09-07; no theatre writer is built.** This replaces the earlier stage-as-`Film_TV` proposal. Endpoints follow [Node Types → Theatre](/guides/ontology/nodes#theatre-nodes); delivery follows the [Go build plan](/guides/open-work/roadmap/broadway-co-producers). The property examples below are synthetic contract examples, not records written to any graph.
+  **Implementation checked September 22, 2026:** `PRODUCED`, stage `WORKED_ON`, `BASED_ON` and stage award writers exist. `PRODUCTION_OF`, `STAGED_AT` and theatrical-work authorship remain proposals; the award recipient writer currently supports Person only. No theatre edges were observed in the dev snapshot. This replaces the earlier stage-as-`Film_TV` proposal. Endpoints follow [Node Types → Theatre](/guides/ontology/nodes#theatre-nodes); delivery follows the [Go build plan](/guides/open-work/roadmap/broadway-co-producers). The property examples below are synthetic contract examples, not records written to any graph.
 </Info>
 
-The [closed build output manifest](/guides/open-work/roadmap/broadway-co-producers#theatre-graph-output-manifest) is the developer checklist; every relationship below has complete property data, with reused endpoint ownership documented in Node Types.
+The [closed build output manifest](/guides/open-work/roadmap/broadway-co-producers) is the developer checklist; every relationship below has complete property data, with reused endpoint ownership documented in Node Types.
 
 **Three new relationship names are proposed:** `PRODUCTION_OF`, `STAGED_AT` and `BASED_ON` (which replaces the earlier `ADAPTED_FROM` proposal, 2026-09-07). Existing names cover producing, creative authorship and awards. Reusing a name does not make its current movie/music writer valid for new endpoint types.
 
@@ -3793,7 +3855,7 @@ If a source defines a transfer as a new production, create a separate canonical 
 
 <a id="based-on" />
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>BASED_ON</span>
+### BASED_ON
 
 **New, adaptation slice after Broadway 3b (Mark, 2026-09-07). Replaces the `ADAPTED_FROM` proposal below, which stays for history.** **Pattern:** `derivative work → BASED_ON → source work`, one direction only: the edge runs from the thing that was made later to the thing it was made from. Wikidata's "based on" (P144) is the same fact read from the derivative side and "derivative work" (P4969) the same fact read from the source side; the graph keeps one edge and reads it either way. **Proposed weight: 55; evidence layer, excluded from scoring.** Owner: an adaptation lane that reads Wikidata for the fact and the film gate for the film endpoint.
 
@@ -4340,7 +4402,7 @@ All three contracts below require this envelope. Examples show edge-specific pro
 }
 ```
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span>
+### APPEARED_IN
 
 <a id="appeared_in" />
 
@@ -4477,7 +4539,7 @@ Window expiry, identity corrections, publisher clustering changes and source rem
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>OFFICER_OF</span>
+### OFFICER_OF
 
 An officer or key employee of a nonprofit as filed on Form 990 Part VII. Trustee and director rows do **not** use this edge — they reuse the live `BOARD_MEMBER_OF` (8) with the same filing-provenance properties ([variant note](#board_member_of)), so nonprofit board service scores through existing machinery. Co-officer pairs derive through the shared node.
 
@@ -4584,7 +4646,7 @@ A person listed as a related person — executive officer, director or promoter 
 
 ---
 
-### <span style={{ color: "#16a34a", fontWeight: 600 }}>DONOR_TO</span>
+### DONOR_TO
 
 A named philanthropic gift from a person, couple, foundation or company to an institution (universities today; other nonprofits later). Recipient institutions are thousand-donor hubs, so every variant sits in the Moderate band or below and none competes with `INVESTED_IN` (15). Per-gift detail stays relational under `donation_mention`; the edge is the aggregate per donor–institution pair. Weight scheme derived 2026-08-25 — see [Edge Weights → philanthropy](/guides/ontology/edge-weights#person--company--institution-philanthropy) — pending §3.6 ratification.
 
@@ -4641,14 +4703,14 @@ A named philanthropic gift from a person, couple, foundation or company to an in
 
 ## Weight Reference
 
-Quick scan of all edge weights, sorted strongest → weakest. One integer scale (1–100, lower = stronger) — the film/TV edges' old sub-1 values were raised by the §3.6 audit. Rows in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> are specified, not deployed.
+Quick scan of all edge weights, sorted strongest → weakest. One integer scale (1–100, lower = stronger) — the film/TV edges' old sub-1 values were raised by the §3.6 audit. Green rows are remaining specifications; use the [current audit](#current-universe-writers-and-parameters) and generated CSV for endpoint-specific writer status.
 
 | Edge | Weight |
 |------|-------:|
 | `SAME_AS` (music label→company · music artist→person) | **1** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>COFOUNDED_WITH</span> (Person ↔ Person) | **1** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>PARENT_OF</span> (Person → Person) | **2** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>MARRIED_TO</span> (Person ↔ Person) | **4** |
+| COFOUNDED_WITH (Person ↔ Person) | **1** |
+| PARENT_OF (Person → Person) | **2** |
+| MARRIED_TO (Person ↔ Person) | **4** |
 | `FOUNDED` | **5** |
 | `HOSTS` (Organization\|Company → `Event:Live_*`) | **5** |
 | `MEMBER_OF` (music current) | **5** |
@@ -4670,7 +4732,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `EMCEED` (Person → `Event:Live_*`) | **12** |
 | `MEMBER_OF` (music past) | **12** |
 | `MENTOR` | **14** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>OFFICER_OF</span> (Person → nonprofit Company) | **14** officer · **20** key employee |
+| OFFICER_OF (Person → nonprofit Company) | **14** officer · **20** key employee |
 | `AUTHORED` | 15-25 (recency-tiered) |
 | `CONTRIBUTED_TO` | 15-40 (recency-tiered) |
 | `INVESTED_IN` (person→company, work-derived — defunct #2800 branch) | **15** |
@@ -4683,11 +4745,11 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `MODERATED` (Person → `Event:Live_*`) | **15** |
 | `PRESENTED_AT` (Person\|Company → `Event:Live_*`) | **15** |
 | `SPOKE_AT` (Person → `Event:Live_*`) | **15** · **45** hub-damped (speaker count ≥ 50) |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>REPORTED_TO</span> (Person report → Person manager) | **15** current · **25** past |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLABORATORS</span> (Person ↔ Person) | **15** |
+| REPORTED_TO (Person report → Person manager) | **15** current · **25** past |
+| COLLABORATORS (Person ↔ Person) | **15** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>RELATED_PERSON_OF</span> (Person → issuer Company) | **15** officer / director · **20** promoter |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>APPEARED_IN</span> (Person → `MediaAppearance`) | **15** interview · **20** panelist/moderator · **45** speaker (15 below a verified complete hub threshold; pair-aware policy required) |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>COLLEAGUES_AT</span> (Person ↔ Person) | **16 / 24** board peers · **20 / 28** colleagues (current / past) |
+| APPEARED_IN (Person → `MediaAppearance`) | **15** interview · **20** panelist/moderator · **45** speaker (15 below a verified complete hub threshold; pair-aware policy required) |
+| COLLEAGUES_AT (Person ↔ Person) | **16 / 24** board peers · **20 / 28** colleagues (current / past) |
 | `SUPPORTING_MUSICIAN_FOR` | **18** |
 | `JUDGED_AT` (Person → `Event:Live_*`) | **18** |
 | `PRODUCED` | **18** |
@@ -4698,7 +4760,7 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `INVESTMENT_PARTNER_AT` | **20** |
 | `PUBLISHED_BY` | **20** |
 | `MEMBER_OF` | **20** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>CO_INVESTORS</span> (Person ↔ Person) | **20** same round · **25** default |
+| CO_INVESTORS (Person ↔ Person) | **20** same round · **25** default |
 | `MENTORED_AT` (Person → `Event:Live_*`) | **20** |
 | `PLAYED_ON` | **20** |
 | `SPONSORS` (Company\|VC_Firm → `Event:Live_*`) | **20–32** by tier · **30** default |
@@ -4719,8 +4781,8 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `HELD_AT` | **30** |
 | `HELD_IN` (`Event:Live_*` → City) | **30** |
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>SESSION_OF</span> (`MediaAppearance` → `Event:Live_*`) | **30** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>SUCCEEDED_BY</span> (Person predecessor → Person successor) | **30** |
-| <span style={{ color: "#16a34a", fontWeight: 600 }}>DONOR_TO</span> (Person\|Company → institution) | **30 / 33 / 36** person by amount · **30–40** foundation · **35** corporate · **38 / 48** derived · **50** reserved |
+| SUCCEEDED_BY (Person predecessor → Person successor) | **30** |
+| DONOR_TO (Person\|Company → institution) | **30 / 33 / 36** person by amount · **30–40** foundation · **35** corporate · **38 / 48** derived · **50** reserved |
 | `HEADLINED` | **35** |
 | `RECORDED_AT` | **35** |
 | `NOMINATED_FOR` | **35** *(§3.6 — was 0.7)* |
@@ -4742,13 +4804,13 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `LOCATED_IN` | **70** to City / Region / State; **80** direct-to-Country *(§3.6)* |
 | `HAS_SUBDOMAIN` | **100** *(§3.6 hub damping)* |
 
-**Proposed theatre additions (2026-09-06):** endpoint-specific contracts; no live theatre writer. Only `PRODUCED` participates in the first-release co-credit scoring policy. These rows are also tracked in [Edge Weights → Theatre](/guides/ontology/edge-weights#theatre-weights).
+**Theatre endpoint additions (audited September 22, 2026):** partial implementation; see the [current writer differences](#corrected-implementation-differences). Only `PRODUCED` participates in the first-release co-credit scoring policy. These rows are also tracked in [Edge Weights → Theatre](/guides/ontology/edge-weights#theatre-weights).
 
 | Theatre family / target | Proposed weight | Initial scoring |
 | --- | --- | --- |
 | `PRODUCTION_OF` → `Theatrical_Work` | **50** | Excluded; evidence context |
 | `STAGED_AT` → `Place:Venue:Theatre` | **50** | Excluded; evidence context |
-| `ADAPTED_FROM` → resolved source work | **55** | Excluded; evidence context |
+| `BASED_ON` → resolved source work | **55** | Writer implemented; excluded, evidence context |
 | `WROTE` / `COMPOSED` / `WROTE_LYRICS` → `Theatrical_Work` | **10 / 8 / 12** | Excluded initially; authorship context |
 | `HAS_AWARD` / `WON_AWARD` / `NOMINATED_FOR` → `Stage_Award` | **40 / 30 / 35** | Excluded initially; recognition context |
 

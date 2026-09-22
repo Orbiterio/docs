@@ -10,12 +10,33 @@ description: "The master reference for edge weights in Orbiter.io."
 </Note>
 
 <Note>
-  **Last reviewed & updated: 2026-07-09** — write-side weights re-verified against the live edge-creator XanoScript (workspace 3, branch `v1`).
+  **Last audited: September 22, 2026** — Universe Go registry and writer code plus read-only aggregate queries of the graph configured by dev Universe AlloyDB. Current reference below; older Xano values remain explicitly historical.
 </Note>
 
 <Note>
-  **2026-09-05 — Planned inventory extended.** The Deep Bio relationship ledger's edges and the Enrichment Engine v1.2 lane edges are now specified on [Edge Types](/guides/ontology/edges#person-relationship-edges) and banded below. Edge names in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> are in the spec with no live writer yet.
+  **Historical planning baseline — September 5, 2026.** The Deep Bio relationship ledger's edges and the Enrichment Engine v1.2 lane edges are now specified on [Edge Types](/guides/ontology/edges#person-relationship-edges) and banded below. Some families since gained Go writers. Use the current reference and [writer audit](/guides/ontology/edges#current-universe-writers-and-parameters), not the historical color alone, for current status.
 </Note>
+
+import UniverseEdgeReference from '/snippets/ontology/universe-edge-reference.mdx';
+
+## Current Universe reference
+
+<Warning>
+**Required rule: older work = HIGHER weight; lower = stronger.** The current Go `AUTHORED` / `CONTRIBUTED_TO` ladders are reversed. Proposed corrected tiers preserve the existing bands: projects **15/20/25/30/35/40** and publications **15/18/22/25** as age increases. The generated reference records the inspected implementation; it does not approve those incorrect assignments. Universe code and graph data are unchanged. [Developer change list](/files/graph/universe-developer-handoff.md).
+</Warning>
+
+<UniverseEdgeReference />
+
+### Interpretation and known differences
+
+- Read `weight_kind` and CSV notes: discrete tiers are not continuous ranges. Endpoint matters (`PUBLISHED_BY` publication 20 vs game 45; music `PRODUCED` 18 vs stage 12–35).
+- `HAS_INVESTMENT_THESIS` is deliberately unweighted. User-graph platform/content edges are also unweighted by contract; their App writers were not inspected in this Universe audit.
+- Go emits past-tense `WORKED_AT` and `WAS_ADVISOR_TO`. Observed `WORKS_AT` still includes legacy costs up to 40.
+- `AUTHORED` Go age cutoffs are ≤1/≤3/≤6 years, then older, at 25/22/18/15. `CONTRIBUTED_TO` is 40 current, then 35/30/25/20/15. **Older work has lower cost in current code**, contrary to the earlier prose. This is a confirmed bug against the required older = higher rule, awaiting developer correction.
+- Stage `PRODUCED` targets `Stage_Production`; registry `Film_TV:stage` / planned status is stale. Stage `WORKED_ON` 30 exists outside the registry inventory. Media `PART_OF` remains a stale registry proposal; the accepted unbuilt name is `SESSION_OF` 30.
+- Observed award weights are 40/30/35, `LOCATED_IN` is 70 in this snapshot (80 country tier remains supported), and `HAS_SUBDOMAIN` is 100. No zero/sub-1 weighted edges were observed.
+
+See [current parameters, description receipts and writer sources](/guides/ontology/edges#current-universe-writers-and-parameters). The refresh script and audit method are documented in `files/graph/README.md`. Graph counts are a dated snapshot, not a deployment guarantee.
 
 ## Weight scale
 
@@ -37,12 +58,16 @@ Pick the band that matches how strong a signal the relationship is for connectin
 - **Hub nodes** (cities, awards, expertise, events, publications) connect huge numbers of entities. Their edges must sit in the **Moderate band or below — never stronger than 30** (`WON_AWARD` 30 is the ceiling, set by the §3.6 awards audit; most hub edges land in Weak: `LOCATED_IN` 70/80, `POLITICAL_DONOR_TO` 60, `CO_MENTIONED_WITH` 55), regardless of how "specific" they feel — a low weight on a hub edge makes every co-member spuriously close. *(Wording aligned with [Edges → v1.2 design rules](/guides/ontology/edges#enrichment-engine-v12-edges) 2026-09-06; this page previously said "Weak or below", which its own awards audit below contradicts.)*
 - Never use `0` or sub-`1` weights — they create near-free traversal and distort every path that touches them. The floor for a real edge is `1`.
 
-## Deployed
+<a id="deployed" />
+
+## Historical Xano and graph reference
+
+The tables in this section preserve earlier audits. They are **not current graph counts or the current Go schema**; use the current reference above for new implementations.
 
 Audited against the live FalkorDB graph on **2026-05-31**. Counts are summed across node sub-label variants (e.g. `Person` / `Person:C_Suite` / `Person:Angel` collapse to **Person**; `Company:VC_Firm` / `Company:School` / `Company:Organization` collapse to **Company**). Weights are the live `r.weight` values.
 
 <Note>
-  **Fix-forward changed the *write* values on 2026-05-31 (§3.6 audit).** The weights in the tables immediately below are the **live-graph snapshot as audited** — several are now superseded by the canonical values in [Weight audit — applied adjustments](#weight-audit--applied-adjustments). New edges are already written at the canonical values (fix-forward landed on branch `v1`, shared across data sources); the existing rows shown here are reweighted by the held live backfill `tool/backfill-edge-weights` (#13063). Snapshot rows that change after backfill: `LOCATED_IN` (10/50 → 70/80), `LEAD_INVESTED_IN` (30 → 15), `FOLLOW_ON_INVESTED_IN` (25 → 20), `WORKED_ON` / `HAS_AWARD` / `WON_AWARD` / `NOMINATED_FOR` (sub-1 → 30–40), `HAS_SUBDOMAIN` (`null` → 100 plus required metadata envelope), and `WAS_FOUNDED` (being removed).
+  **Fix-forward changed the *write* values on 2026-05-31 (§3.6 audit).** The weights in the tables immediately below are the **live-graph snapshot as audited** — several are now superseded by the canonical values in [Weight audit — applied adjustments](#weight-audit--applied-adjustments). New edges are already written at the canonical values (fix-forward landed on branch `v1`, shared across data sources); the existing rows shown here are reweighted by the held live backfill `tool/backfill-edge-weights` (#13063). Snapshot rows that change after backfill: `LOCATED_IN` (10/50 → 70/80), `LEAD_INVESTED_IN` (30 → 15), `FOLLOW_ON_INVESTED_IN` (25 → 20), `WORKED_ON` / `HAS_AWARD` / `WON_AWARD` / `NOMINATED_FOR` (sub-1 → 30–40), `HAS_SUBDOMAIN` (`null` → 100 plus required metadata envelope), and `WAS_FOUNDED` (later retained at 1 by the July 2 decision below).
 </Note>
 
 <Check>
@@ -172,6 +197,8 @@ Music label bridges use the shared company model: `Company:Music_Label` can link
 | `[:RECEIVED_HONOR]` | `(Person)→(Honor)` | — | 20 *(`#4574`)* |
 | `[:ISSUED_BY]` | `(Honor)→(Organization)` | — | 25 *(`#4574`)* |
 
+<a id="content-work-products--events" />
+
 ### Content, work products & events
 
 | Edge | Pattern | Live edges | Weight |
@@ -181,7 +208,7 @@ Music label bridges use the shared company model: `Company:Music_Label` can link
 | `[:CONTRIBUTED_TO]` | `(Person)→(Project)` | — | 15–40 *(recency; `#12579`)* |
 | `[:REGISTERED_FOR]` | `(Person)→(Event:Live_*)` | 1,982 | 65 |
 
-Both work-product edges are **recency-graded** (newer work = stronger = lower weight). `CONTRIBUTED_TO`: **40** current/ongoing, **35 / 30 / 25 / 20** for ending ≤1 / ≤2 / ≤3 / ≤4 years ago, **15** older. `AUTHORED`: **25** current-year, **22** ≤2y, **18** ≤4y, **15** older.
+Both work-product edges are **recency-graded**, but these values give **older work lower cost**. This is the historical Xano mapping; current Go `AUTHORED` cutoffs are documented above. `CONTRIBUTED_TO`: **40** current/ongoing, **35 / 30 / 25 / 20** for ending ≤1 / ≤2 / ≤3 / ≤4 years ago, **15** older. `AUTHORED`: **25** current-year, **22** ≤2y, **18** ≤4y, **15** older.
 
 ### Other / artifacts
 
@@ -195,6 +222,8 @@ Both work-product edges are **recency-graded** (newer work = stronger = lower we
 - `[:HAS_EXPERTISE]` spans **22–50** (a relevance / confidence gradient) and is the highest-volume edge by far (16,695).
 - `[:INVESTED_IN]` weight is pattern-dependent: **15** Person→Company (work-derived — a defunct #2800 branch since v2.5; legacy edges linger), **25** Person→Company (the live direct angel-portfolio edge, `#12830`), **20** VC_Firm→Funding_Round, **25** Person/Angel→Funding_Round.
 - `[:LOCATED_IN]` snapshot is mostly **10** (11,925 edges); 373 carry **50** — both now superseded by the §3.6 write values **70 / 80** (creators `#4528` / `#4690`). `VOLUNTEERED_AT` is **38** ongoing / **50** ended (`#4575`). `AUTHORED` is **15–25**, recency-graded — see [Content, work products & events](#content-work-products--events).
+
+<a id="weight-audit--applied-adjustments" />
 
 ### Weight audit — applied adjustments
 
@@ -284,6 +313,8 @@ So a current C-suite role is the strongest `WORKS_AT` (5) and a past individual-
 
 ## Planned
 
+**Historical inventory with partial implementation since:** the current reference above records registry status and writer exceptions. Do not treat every row in this older planning section as still unbuilt.
+
 Designed edges that are **not yet built** in the live graph. Edges that turned out to be deployed under a different name, and obsolete / competing designs, have been removed. Names in <span style={{ color: "#16a34a", fontWeight: 600 }}>green</span> have a full specification (pattern, properties, `description` template, worked example) on [Edge Types](/guides/ontology/edges#person-relationship-edges); plain names are banded here only.
 
 ### Person → Person
@@ -349,6 +380,8 @@ Attested ties only — a source names the two people together. Structural co-ten
 | --- | --- | --- |
 | `[:REPRESENTED_BY]` | 10 | Person A is represented by Company (law firm, agency) |
 
+<a id="person--school" />
+
 ### Person → School
 
 | Edge | Weight | Description |
@@ -364,6 +397,8 @@ Attested ties only — a source names the two people together. Structural co-ten
 | <span style={{ color: "#16a34a", fontWeight: 600 }}>[:COLLEAGUES_AT]</span> | 20 | Two instructors taught at same school with overlapping years — now the `colleague` tier of the general edge above (28 once either tenure ends) |
 
 <Note>`[:ATTENDED_TOGETHER]` (35 / 50 / 70) and `[:STUDIED_UNDER]` (10) are **deployed** by #1898 — see [Education](#education).</Note>
+
+<a id="person--company--institution-philanthropy" />
 
 ### Person / Company → Institution (philanthropy)
 
@@ -460,6 +495,8 @@ Set 2026-08-21; folded from [990 / FEC / Form D](/guides/open-work/roadmap/990-f
 <a id="video-game-weights" />
 
 ## Video game weights — proposed Go contract
+
+**Historical specification title:** the September 22 audit confirms Go game writers now exist. Use the current reference above for implementation status; these weights remain the endpoint contract.
 
 **Synchronized September 8, 2026.** These endpoint-specific proposals match [Edge Types → Video games](/guides/ontology/edges#video-game-edges) and the [Go build output manifest](/guides/open-work/video-game-waterfall#relationship-output-manifest). No game writer is claimed deployed. **All game-domain outputs are excluded from scoring in the pilot**, including reused edge names; existing non-game edges retain their current settings.
 
