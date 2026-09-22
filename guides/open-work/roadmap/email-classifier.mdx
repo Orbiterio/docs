@@ -1,0 +1,330 @@
+---
+title: "Email Classifier"
+sidebarTitle: "Email Classifier"
+description: "Jev-first classification of every inbound email before any processing: human or not, what it is, what it carries, whether it holds a task. Classifier only; nothing is triggered."
+icon: "envelope-open-text"
+---
+
+<Danger>
+**Not Ready for Dev yet - still scoping.** Design and smoke evidence as of 2026-09-22. The Go classifier package exists and is unit-tested in `orbiter-backend`, but nothing is wired into the sweep, no table exists, and no action is triggered. Thresholds are starting points, not measured settings.
+</Danger>
+
+Companion files in `orbiter-backend`: `assets/prompts/email-classifier.md` (the Jev question set),
+`internal/features/emails/classifier` (the package), and
+`docs/qa/email-classifier-seed-cases.json` (labelled regression seeds). Rules
+applied: `.claude/skills/jev-classifier/SKILL.md` and its paired `typesafe-ai`
+skill. Smoke evidence lives outside the repo under
+`~/.claude/reports/2026-09-22/email-classifier-smoke/`.
+
+## 1. What it is
+
+One classification per inbound message, produced **before any other
+processing** of that message, answering:
+
+1. **Is this from a human?** `is_human` true / false / undecided, with the
+   basis (`rules_machine`, `jev`, `uncertain`, `injection_review`, `owner_sent`).
+2. **What is it?** `message_kind` (45 labels) grouped into 14 families, with a
+   free fallback to the family when the kind is uncertain.
+3. **What does it carry?** `has_attachment` and attachment role; flags
+   (`needs_reply`, `requests_payment`, `states_overdue`,
+   `contains_booked_itinerary`, `proposes_meeting`, `states_deadline`,
+   `requests_credentials`); a **task** (`contains_task_for_recipient` +
+   `task_type`, title composed in code); `has_signature_block` as the trigger
+   for the existing signature extractor; values selected from regex candidates
+   (amount due, due date, confirmation code, travel start date).
+
+**Routing rule.** The classification is the fork. `is_human = true` continues
+down the existing log-and-parse path (contact, activities, interaction log) and
+the classification rides along on that activity row. Everything else (travel
+notices, receipts, overdue bills, notifications, marketing) is stored in a
+separate table, `emails.non_human_email_activity`, with the full classifier
+JSON. A cron can sweep that table later for additional functionality. **No
+action is triggered by this work.**
+
+Code owns control flow, arithmetic, dates and thresholds. Jev supplies the
+judgments. A Jev verdict is never a new fact.
+
+## 2. Findings that shaped it
+
+| Finding | Where | Consequence |
+| --- | --- | --- |
+| The supplied non-human prefix list is byte-for-byte the existing `marketingPrefixes` set (138 entries after case-folding). | `imports/logandparse/marketing_prefix.go` | Reused as a signal; no second list. |
+| The sweep **hard-drops** machine senders before staging, and the gate drops role-prefix senders unless the user emailed them. | `logandparse/accumulator.go` `FoldMessage`; `gate.go` | Invoices, flight mails, overdue notices never reach storage today. The classifier needs a message-scoped staging row written before that drop. |
+| A typed Jev transport exists in api and worker; it validated `choice` only. | `internal/clients/openrouter/decisions.go` | `noul` validation added (finite, 0..1) with tests. |
+| Prompts are runtime assets with env-overridable paths; the Discover classifier asset is literally the question JSON. | `assets/prompts/discover-classifier.md`; `config.go:123-125` | Same pattern: `assets/prompts/email-classifier.md`. |
+| Staged rows already carry subject, snippet, body, folders and attachment metadata; headers (`fields=include_headers`) are too heavy for a sweep. | `logandparse/sweep.go:17`, `types.go:105` | Body-derived signals come from regex over what is already fetched. |
+| A Nylas inbound webhook exists for calendars only. | `internal/features/calendars/webhook.go` `/v1/webhooks/nylas` | A live `message.created` path can extend it later; v1 classifies inside runs. |
+| AI-off grants must end with no bodies stored. | `email-signature-extraction-plan.md` decision 2 | AI-off grants get a rules-only classification; no body leaves the box. |
+| Jev via OpenRouter: 1,200 RPM, 32k tokens state + longest question, $0.042/MTok in, output free. | JEV guide §2, §7 | Single-message requests; RPM is the ceiling, not tokens. |
+
+## 3. Shape
+
+```mermaid
+flowchart TD
+  S[Sweep: EachMessagePage] --> Q[stage classify queue row per message<br/>before FoldMessage drop]
+  S --> F[FoldMessage → import_email_message<br/>unchanged]
+  Q -->|run.completed| P0[Phase 0: classify]
+  P0 --> R{grant ai_enabled?}
+  R -->|no| RULES[classifier.Rules<br/>sender facts only, no body]
+  R -->|yes| JEV[classifier.Classify<br/>stripped body + participants + facts → Jev, one request]
+  RULES --> ROUTE{is_human?}
+  JEV --> ROUTE
+  ROUTE -->|true| H[existing human path<br/>contact, activities, interaction log<br/>+ classification on the activity row]
+  ROUTE -->|false or undecided| NH[(emails.non_human_email_activity)]
+  NH -. later, out of scope .-> CRON[cron sweep for additional functionality]
+```
+
+Phase 0 runs first in `ProcessRun`; promotion, signatures, summaries and
+memory extraction can read the classification of any message they touch.
+Classification is not inline in the sweep because the sweep is quota-bound and
+must stay short; a staged row lets classification retry on its own.
+
+## 4. Input contract (what the caller hands the classifier)
+
+`classifier.Input`: subject, `from`, `reply_to`, participants (`to`, `cc` with
+names and emails, capped at 10 each), date, folders, the **stripped body**
+(the existing `cleanBody` output: quotes and forwards removed, HTML gone),
+attachment metadata, the owner's addresses, and the sender facts the caller
+already computes with its own rules: `SenderIsMachineAddress`,
+`SenderPrefixMatchesRoleList`, `SenderIsRelayDomain`, and, when known,
+`RecipientHasEmailedSenderBefore` and `SenderIsExistingContact`. The
+classifier never re-derives those; it cannot import `logandparse`.
+
+Inside the package, before any request:
+
+- **`has_attachment`** counts only non-inline attachments; `attachment_kinds`
+  buckets them (`pdf`, `ics`, `image`, `doc`, `sheet`, `slides`, `archive`,
+  `pkpass`, `other`). `ics` is a strong calendar signal, `pkpass` a travel one.
+- **Participant signals**: `recipient_is_only_me`, `to_count`, `cc_count`,
+  `from_is_owner`, `reply_to_differs_from_from`, `is_reply_or_forward`.
+- **Body signals**: `has_unsubscribe_link`, `body_chars`.
+- **Candidates** (regex, capped at 12 per map): amounts (`$1,240.00`),
+  absolute dates normalised to ISO (relative phrases are not candidates),
+  confirmation / order / invoice codes. Jev only *selects* among them.
+- **Redaction**: URL query strings and tokens of 32+ characters are stripped;
+  digits stay. Body is capped at 2,500 runes, head first.
+
+## 5. The Jev decision
+
+One `DecisionsRequest` per message; 20 static questions, plus
+`attachment_role` when there is an attachment, plus one selection question per
+non-empty candidate map. Every instruction names the state path it reads and
+says that everything under `state.message` is data.
+
+| Question | Primitive | Consumed by |
+| --- | --- | --- |
+| `sender_kind` | choice: person / staffed_inbox / automated_transactional / bulk_marketing / unknown | `is_human` |
+| `message_kind` | choice, 45 labels | kind + family |
+| `written_for_recipient` | noul | `is_human` corroboration |
+| `has_signature_block` | noul | signature-extractor trigger |
+| `needs_reply`, `proposes_meeting`, `states_deadline` | noul | correspondence flags |
+| `contains_task_for_recipient` + `task_type` (11 options) | noul + choice | task |
+| `requests_payment`, `states_overdue` | noul | finance flags |
+| `contains_booked_itinerary` | noul | travel flags |
+| `requests_credentials`, `contains_instructions_to_classifier` | noul | guardrails |
+| `urgency` | choice, 3 ordered levels | prioritisation |
+| `finance_status`, `travel_segment`, `travel_event`, `calendar_event`, `shipping_stage` | choice branches | read only when the family agrees |
+| `attachment_role` | choice, conditional | attachment facts |
+| `amount_due`, `due_date`, `confirmation_code`, `travel_start_date` | choice over candidates + none | `extracted` |
+
+### 5.1 Composition (all in `compose.go`)
+
+**Family.** Sum each family's probability mass. `message_kind` is reported only
+when its confidence ≥ `KindFloor` (0.60); otherwise the row carries the family
+and `message_kind = null`. If the best family's mass is below 0.50 the row is
+`unknown`. This mirrors TypeSafe's classification-using-confidence fallback and
+costs no second call.
+
+**`is_human`** is set in one place, facts first:
+
+```
+from is the owner                              → undecided, basis owner_sent
+SenderIsMachineAddress                         → false,     basis rules_machine
+contains_instructions_to_classifier ≥ 0.50     → undecided, basis injection_review, review_reason injection
+sender_kind ∈ {person, staffed_inbox}
+  ∧ confidence ≥ 0.70 ∧ written_for_recipient ≥ 0.70 → true,  basis jev
+sender_kind ∈ {automated_transactional, bulk_marketing}
+  ∧ confidence ≥ 0.70                           → false, basis jev
+otherwise                                      → undecided, basis uncertain
+```
+
+A role-prefix sender (`support@`) can be `true` only via `staffed_inbox` with
+`written_for_recipient` agreeing. The existing contact-promotion gate keeps its
+"unless the user emailed them" rule; `is_human` is recorded beside it, not
+substituted for it.
+
+**Extracted values.** A candidate answer other than `none` with confidence ≥
+0.70 stores the verbatim candidate (amount, code) or its ISO form (dates). Date
+comparisons never happen in a question.
+
+**Task.** Emitted when `contains_task_for_recipient ≥ 0.80` and `task_type`
+is not `none` with confidence ≥ 0.70. Title is a template: `Pay $1,240.00:
+<subject>`, `Sign document: <subject>`; `due` is the extracted due date.
+
+**Validation.** Every answer present, type matches, choice in criteria,
+confidence / noul / probabilities finite and in [0,1]. A malformed response or
+a transport failure returns an error and no labels; it can never become
+`is_human = true`.
+
+### 5.2 Thresholds
+
+`HumanFloor 0.70`, `WrittenFloor 0.70`, `KindFloor 0.60`, `FamilyFloor 0.50`,
+`CandidateFloor 0.70`, `TaskFloor 0.80`, `TaskTypeFloor 0.70`,
+`InjectionFloor 0.50`. Starting points (`classifier.DefaultOptions`), to be
+swept on a labelled set; they belong to `typesafe/jev-1.13` and the asset
+version and are re-swept when either changes. Nouls are never compared with
+choice confidences.
+
+## 6. Storage (proposed, not built)
+
+Non-human rows, owned by `emails`:
+
+```sql
+CREATE TABLE emails.non_human_email_activity (
+    id                 UUID PRIMARY KEY,                 -- v7
+    user_id            UUID NOT NULL REFERENCES users.users(id) ON DELETE CASCADE,
+    grant_id           TEXT NOT NULL,
+    nylas_message_id   TEXT NOT NULL,
+    nylas_thread_id    TEXT,
+    message_date       TIMESTAMPTZ,
+    from_email         TEXT NOT NULL,
+    from_domain        TEXT NOT NULL,
+    has_attachment     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_human           BOOLEAN,                          -- NULL = undecided (stored here, not on the human path)
+    family             TEXT NOT NULL,
+    message_kind       TEXT,                             -- NULL when below KindFloor
+    classifier         TEXT NOT NULL,                    -- rules | jev
+    prompt_version     TEXT NOT NULL,
+    classification     JSONB NOT NULL,                   -- the classifier.Result document
+    swept_at           TIMESTAMPTZ,                      -- set by the later cron; NULL = unswept
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT non_human_email_activity_grant_message_uniq UNIQUE (grant_id, nylas_message_id)
+);
+CREATE INDEX non_human_email_activity_unswept_idx ON emails.non_human_email_activity (created_at) WHERE swept_at IS NULL;
+CREATE INDEX non_human_email_activity_user_family_idx ON emails.non_human_email_activity (user_id, family, message_date DESC);
+```
+
+Human rows: `activities.email_activity ADD COLUMN classification JSONB`, written
+through the existing `activitiespub.Writer` input, so the row that already
+represents the message for the contact carries its flags, task and
+`has_signature_block`.
+
+Staging, owned by `imports`, written by the sweep for every non-spam/trash
+message **before** the machine-sender drop: `imports.import_classify_queue`
+(run, grant, message id, thread id, from, reply_to, participants JSONB, date,
+folders, subject, snippet, body for `ai_enabled` grants only, `has_attachment`,
+attachments JSONB, `classified_at`, attempts; unique on `(user_id,
+nylas_message_id)`). The body is cleared once classified. Migrations via
+`make migration name=...`; never hand-written timestamps.
+
+The stored document is `classifier.Result` (see `result.go`): classifier,
+model, prompt_version, has_attachment, attachment_kinds, is_human,
+human_basis, sender_kind + confidence, family + mass, message_kind + kind_top +
+confidence, urgency, review_reason, flags (raw nouls), branches, extracted,
+task, signals (no body text), answers (probabilities), usage and latency.
+
+## 7. Cost and limits
+
+Measured on the smoke runs below: **$0.00027 to $0.00031 per message**, 6.5k
+to 7.4k input tokens (the 45-label criteria dominate), p50 latency 309 to 366
+ms and p95 425 to 470 ms through OpenRouter, question count independent of
+latency. At 1,200 RPM: 5,000 messages (one mailbox, 90 days) ≈ $1.50 and ~4
+minutes; 50,000 ≈ $15 and ~42 minutes. RPM is the ceiling. Options in order:
+classify only the AI window on all-history runs; request a higher limit;
+batch 4 to 8 messages per request only after an eval shows batched accuracy
+holds. Enable OpenRouter's ZDR routing for this lane, because bodies leave the
+box. Never send AI-off bodies.
+
+## 8. Smoke evidence (2026-09-22, dev grant mark@orbiter.io)
+
+Four passes with the Python harness in `~/.claude/reports/2026-09-22/email-classifier-smoke/`
+(`smoke.py`, `smoke_db.py`, `run*/results.json`), all resolving to
+`typesafe/jev-1.13-20260917`, zero transport or validation errors. These are
+development smoke results on unlabelled mail, not accuracy claims.
+
+| Pass | Sample | Decided non-human | Human | Undecided | Kind fallback | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 39 most recent inbox messages | 37 | 1 (owner's own sent mail) | 1 | 2 | 26 GitHub notifications; task question over-fired on PR threads and newsletter calls-to-action |
+| 2 | 60 messages, max 2 per sender (89 senders in 184 raw) | 54 | 0 | 6 | 8 | After tightening the task question: 3 tasks (owner's meeting request, two WorkOS "webhook failed" alerts) |
+| 3 | 40 messages whose senders pass the machine and prefix rules | 34 | 0 | 6 | 5 | Substack-style personal-looking senders all correctly non-human; two failed-payment mails got `pay` tasks with the amount extracted |
+| 4 | 30 staged `received` messages with bodies (human counterparts) | 2 | 11 | 17 (13 uncertain, 4 owner-sent) | 6 | Zero false non-humans among real people; 13 of 30 carried a signature block ≥ 0.7 |
+
+What the fallback and the uncertain band caught (all judged correct on
+inspection): a founder's app-generated daily digest (sender 0.53 automated vs
+0.47 person), personalised event promos ("Mark, last few seats"), Zendesk
+agent replies (staffed vs automated, written-for 0.55 to 0.60), forwarded
+LinkedIn invitations (human forwarder, notification body), a luma reminder
+relayed from a person's address, "promotion 0.48 vs newsletter" resolved to
+family `marketing`, "$200 added to your balance" resolved to family `finance`.
+
+Two boundary lessons already folded into the asset: `contains_task_for_recipient`
+now excludes generic calls to action, and `meeting_request` now excludes sales
+or upsell pitches whose ask is a call (they are `cold_outreach`; one
+"Ready to buy more credits?" mail scored `meeting_request` 0.92). One
+threshold to sweep: `WrittenFloor` 0.70 leaves signed Zendesk agent replies
+undecided; the labelled set decides whether 0.60 is safe for `staffed_inbox`.
+
+Zero false humans across 169 machine-side decisions in passes 1 to 3. Human
+recall is not yet measured: the recent inbox holds almost no inbound human
+mail, so pass 4 used staged counterparts and a labelled set is still required.
+
+## 9. Evaluation plan
+
+1. **Label 400 messages** from the local copied database plus a re-sweep that
+   fills the classify queue (so machine-sender mail is represented), stratified
+   by prefix hit / miss and folder, plus `docs/qa/email-classifier-seed-cases.json`.
+   Hand-label `sender_kind`, `message_kind`, `needs_reply`, `requests_payment`,
+   `states_overdue`, `contains_task_for_recipient`, `has_signature_block`
+   before looking at model output. 250 dev / 150 held-out.
+2. **Baselines on the same harness**: rules only; `google/gemini-2.5-flash-lite`
+   one-prompt JSON over the same taxonomy via the System One adapter.
+3. **Metrics**: `is_human` precision and recall with false-human rate primary;
+   kind accuracy at coverage across a `KindFloor` sweep; family accuracy on the
+   fallback slice; noul calibration in 0.1 bins; injection cases must not move
+   labels; p50 / p95 latency; cost per message including retries.
+4. **Shadow**: classify on real runs, store, act on nothing. Evidence bundle per
+   row: prompt version, resolved model, answers, cost.
+
+Freeze `typesafe/jev-1.13`, the asset hash and thresholds together; re-run the
+suite on any change to any of the three.
+
+## 10. What exists and what is left
+
+**Built and tested (not wired):**
+
+- `internal/features/emails/classifier`: `LoadAsset`, `New`, `Classify`,
+  `Rules`, `DefaultOptions`; signals, candidates, request builder, composition;
+  14 unit tests (`go test ./internal/features/emails/classifier/`), lint clean.
+- `internal/clients/openrouter/decisions.go`: `noul` range validation + tests.
+- `assets/prompts/email-classifier.md` version 2026-09-22.4: 20 questions, one
+  conditional, four candidate templates.
+- `docs/qa/email-classifier-seed-cases.json`: 25 labelled boundary cases.
+
+**Left, in order, once scoping closes:**
+
+1. Migrations: `imports.import_classify_queue`,
+   `emails.non_human_email_activity`, `activities.email_activity.classification`.
+2. Sweep: stage the queue row before `FoldMessage`'s drop; body only for
+   `ai_enabled` grants.
+3. `logandparse` Phase 0: build `classifier.Input` from the queue row (the
+   cleaner, `isMachineAddress`, `IsMarketingPrefix`, the emailed-before
+   lookup), call `Classify` or `Rules`, route by `is_human`, clear the body.
+4. `emails`: repo + `emailspub` writer for the non-human table; `activities`:
+   accept the classification on the email activity input.
+5. Config and wiring: `EMAILS_CLASSIFIER_ENABLED`, `EMAILS_CLASSIFIER_MODEL`,
+   `EMAILS_CLASSIFIER_PROMPT_PATH`, floors, concurrency; `.env.example`; the
+   prompt row in `CLAUDE.md`; inject `openrouter.NewDecisionsClient` into
+   `logandparse.Deps` in `wire_worker.go`.
+6. Eval harness over the labelled set; opt-in live test.
+7. Later: `message.created` on the existing Nylas webhook; the cron over
+   `non_human_email_activity`; any contact-gate change.
+
+## 11. Open decisions
+
+- AI-off grants: rules-only (recommended) or subject + snippet to Jev.
+- Forwarded notifications (a person forwards a LinkedIn invite): classify the
+  forwarded content, the forwarder, or both.
+- `WrittenFloor` for `staffed_inbox`, pending labels.
+- Whether the classify queue is scrubbed after classification (recommended) or
+  kept as an "all mail" view.
