@@ -788,6 +788,7 @@ says that everything under `state.message` is data.
 | `requests_payment`, `states_overdue` | noul | finance flags |
 | `contains_booked_itinerary` | noul | travel flags |
 | `requests_credentials`, `contains_instructions_to_classifier` | noul | guardrails |
+| `mentions_legal_action`, `reports_security_incident`, `press_or_media_inquiry` | noul | red flags for prioritisation |
 | `urgency` | choice, 3 ordered levels | prioritisation |
 | `finance_status`, `travel_segment`, `travel_event`, `calendar_event`, `shipping_stage` | choice branches | read only when the family agrees |
 | `attachment_role` | choice, conditional | attachment facts |
@@ -812,8 +813,13 @@ sender_kind ∈ {person, staffed_inbox}
   ∧ confidence ≥ 0.70 ∧ written_for_recipient ≥ 0.70 → true,  basis jev
 sender_kind ∈ {automated_transactional, bulk_marketing}
   ∧ confidence ≥ 0.70                           → false, basis jev
+sender_kind machine ∧ written_for_recipient ≥ 0.70 → undecided, basis uncertain, review_reason conflict
 otherwise                                      → undecided, basis uncertain
 ```
+
+The undecided band gets an optional second opinion from the cheap generative
+model with the same closed vocabulary, never shown Jev's pick (the Discover
+`reviewDecisions` pattern); both answers are recorded.
 
 A role-prefix sender (`support@`) can be `true` only via `staffed_inbox` with
 `written_for_recipient` agreeing. The existing contact-promotion gate keeps its
@@ -965,7 +971,7 @@ suite on any change to any of the three.
   request builder, composition; 16 unit tests
   (`go test ./internal/features/emails/classifier/`), lint clean.
 - `internal/clients/openrouter/decisions.go`: `noul` range validation + tests.
-- `assets/prompts/email-classifier.md` version 2026-09-22.5: 20 questions, one
+- `assets/prompts/email-classifier.md` version 2026-09-22.6: 23 questions, one
   conditional, four candidate templates.
 - `docs/qa/email-classifier-seed-cases.json`: 25 labelled boundary cases.
 
@@ -978,14 +984,18 @@ suite on any change to any of the three.
 3. `logandparse` Phase 0: build `classifier.Input` from the queue row (the
    cleaner, `isMachineAddress`, `IsMarketingPrefix`, the emailed-before
    lookup), call `Classify` (`ai_enabled` grants only), route by `is_human`, clear the body.
-4. `emails`: repo + `emailspub` writer for the non-human table; `activities`:
+4. `emails`: repo + `emailspub` writer for the non-human table (a row
+   already decided keeps its `prompt_version`; only new messages use the
+   current asset); `activities`:
    accept the classification on the email activity input.
 5. Config and wiring: `EMAILS_CLASSIFIER_ENABLED`, `EMAILS_CLASSIFIER_MODEL`,
    `EMAILS_CLASSIFIER_PROMPT_PATH`, floors, concurrency; `.env.example`; the
    prompt row in `CLAUDE.md`; inject `openrouter.NewDecisionsClient` into
    `logandparse.Deps` in `wire_worker.go`.
 6. Eval harness over the labelled set; opt-in live test.
-7. Later: `message.created` on the existing Nylas webhook; the cron over
+7. Uncertainty review for the undecided band (cheap model, closed vocabulary,
+   both answers kept).
+8. Later: `message.created` on the existing Nylas webhook; the cron over
    `non_human_email_activity`; any contact-gate change.
 
 ## 11. Open decisions
@@ -1056,3 +1066,20 @@ Five things the classifications should enable later, and what each needs. None i
 ### Consolidated classifier changes
 
 Eight new questions (`travel_end_date`, `origin`, `destination`, `stay_location`, `traveler_is_recipient`, `is_recurring_charge`, `amount_paid`, `billing_period`, `next_billing_date`, `merchant_name`, `bill_to`; several only when candidates exist) add roughly 700 input tokens per message, about $0.00003. Code-side additions: IATA and city candidate extraction, merchant and plan candidates, unsubscribe URL capture. Suggested order once scoping closes: foundation, then E and D (cheap, non-destructive), then B, then A, then C.
+
+## 13. Borrowed from the field (reviewed 2026-09-22)
+
+Four outside sources were read against this design: the `vynnlee/jev-mail` Gmail classifier (a working Apps Script + Jev tool), Beam's Jev-in-agents article (Fredrik Falk, 2026-09-22), and two third-party sites, `jevtypesafeai.com` and `shipwithjev.com`, which are not affiliated with TypeSafe and mostly restate the launch material. Their cost figures (500 emails for $0.035; ~$0.07 per 100 with escalation) match ours. What was worth taking:
+
+| Idea | Source | Landed where |
+| --- | --- | --- |
+| **No reclassification on policy change.** Existing rows keep the `prompt_version` they were decided under; only new messages (or a new reply in a thread) are classified under the current asset. Backfills are explicit evals, never a side effect of editing the asset. | jev-mail "policy fingerprint" | §6 writer rule (replaces "re-run when the version changes") |
+| **Two-sided bands, not one floor.** Accept above a high mark, reject below a low mark, hold the middle for review. Applied to the human decision: a machine-looking sender whose body scores as written for this recipient is now **held** (`review_reason=conflict`) instead of recorded as a confident non-human. | jev-mail thresholds (`actionRequired` 0.55 / `actionNotRequired` 0.20) | `compose.go` + test; §5.1 |
+| **Escalate the held band.** 5 to 15 percent of mail lands in the uncertain band (13 of 30 human counterparts in pass 4). Give it a second opinion from the cheap generative model with the same closed vocabulary, never shown Jev's pick, the way Discover's `reviewDecisions` already works. Record both answers. | shipwithjev cascade; Deep Discover pattern | §5.1, §10 left list |
+| **Red flags as independent nouls.** `mentions_legal_action`, `reports_security_incident`, `press_or_media_inquiry` feed prioritisation and never touch `is_human` or `message_kind`. | shipwithjev "red flags" | asset v2026-09-22.6 (23 questions) |
+| **LLM proposes, Jev verifies.** For values regex cannot pre-parse (merchant, plan name, hotel city), let `gemini-2.5-flash-lite` extract, then ask one noul per field whether the extracted value matches the source. Also a quality gate on the clean step: one noul asking whether `clean_message` kept everything but salutation, sign-off and signature. | Beam article; TypeSafe SDE cascade | §12 A/E; sub-page phase 3b |
+| **Re-check provider state before acting.** Before any later action, re-read the thread: if the owner already replied, a needs-reply task is stale. | jev-mail | §12 B, foundation |
+| **Body cap as a cost lever.** jev-mail sends at most 1,000 characters; we send 2,500. Sweep the cap on the labelled set before choosing. | jev-mail | §9 eval plan |
+| **Priority as a Score** with four concrete levels (whenever, this week, today, immediately) instead of the three-option `urgency` choice. Needs `score` support in the Decisions client first. | jevtypesafeai.com | option, not adopted |
+
+Not taken: Gmail label-writing and archiving (our output is a stored row, not mailbox mutation), bounded in-script receipts (Postgres holds the unique key), thread-level classification (we classify messages and join by thread).
