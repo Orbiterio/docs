@@ -2,6 +2,21 @@
 
 Inspected Universe `bb0fc045` on September 22, 2026. No Universe code or graph data was modified. Documentation and exports were updated separately.
 
+## Status (2026-09-22, Universe change built, awaiting merge)
+
+Done in `internal/kernel/edges` and its callers, tests green (`go test ./internal/kernel/edges ./internal/features/enrichment/person ./internal/features/enrichment/stage ./internal/platform/graph`), `golangci-lint` clean:
+
+- Recency direction reversed with the proposed values: `CONTRIBUTED_TO` 15/20/25/30/35/40, `AUTHORED` 15/18/22/25. Tests cover every boundary, ongoing work, future dates and a monotonic invariant.
+- Reference year replaced by an injected clock (`person.Deps.Now`, default `time.Now`); tests pin 2026. Edges re-grade whenever a person is re-enriched.
+- Undated policy (Denis 2026-09-22): an ongoing project stays strongest; a finished project with no end year and a publication with no year take the weakest tier (`undated` = 40 / 25). Missing evidence is not recent evidence.
+- `ProducedStage` → `Stage_Production`, live; the stage lane's `TierWeight` now reads the registry instead of its own table. `StageWorkedOn` 30 added. `PartOf` replaced by `SessionOf` 30 (planned). `SameAs` note reworded to "legacy Xano writer only".
+
+Still open:
+
+- Existing-data reconciliation (349 `AUTHORED` / 206 `CONTRIBUTED_TO` in the dev snapshot): planned as a bounded admin action that recomputes each row's weight from its stored dates and updates only `r.weight` by edge uuid, dry-run first. Not run.
+- Description backfill: separate work, not started.
+- Regenerate this folder's CSV/snippet with `scripts/sync-universe-edge-reference.py` once the Universe change is committed (the script refuses a dirty registry).
+
 ## Required: correct recency direction
 
 Mark confirmed: **lower weight = stronger; older work must have higher weight**. Two current registry ladders implement the opposite. Preserve existing age boundaries and weight sets, but reverse the tier assignment:

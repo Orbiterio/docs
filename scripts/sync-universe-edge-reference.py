@@ -44,22 +44,18 @@ def main():
             weight, kind = "10–50", "formula range"
             note = "New node=10; matched=min(round(10 + distance*160),50), assuming nonnegative vector distance."
         if edge["Type"] == "AUTHORED":
-            note = "IMPLEMENTATION BUG: age <=1y:25; <=3y:22; <=6y:18; older:15. Undated:25. Required direction: older work has HIGHER cost. Proposed corrected tiers:15/18/22/25. Code unchanged."
+            note += "; age cutoffs <=1y / <=3y / <=6y / older; undated = weakest tier (corrected 2026-09-22)"
         if edge["Type"] == "CONTRIBUTED_TO":
-            note += "; IMPLEMENTATION BUG: current/undated or age<=0:40; required direction is older=HIGHER cost. Proposed corrected tiers:15/20/25/30/35/40. Code unchanged."
+            note += "; ongoing or ending this year = current, then one tier per year since the end; undated = weakest tier (corrected 2026-09-22)"
         rows.append(dict(edge_type=edge["Type"], from_type=edge["From"], to_type=edge["To"], weight=weight,
                          is_range="yes" if tiers else "no", weight_kind=kind, status="registry:" + edge["Status"],
                          scope="Universe registry", notes=note,
                          source=BASE + revision + "/internal/kernel/edges/edges.go"))
 
     # Explicit, reviewed corrections: registry flags are not deployment evidence.
+    # (The 2026-09-22 PRODUCED / PART_OF overrides are gone: the registry now
+    # carries ProducedStage → Stage_Production, StageWorkedOn and SessionOf itself.)
     for row in rows:
-        if row["edge_type"] == "PRODUCED" and row["to_type"] == "Film_TV:stage":
-            row.update(to_type="Stage_Production", status="writer implemented; registry stale",
-                       notes=row["notes"] + "; MergeProduced uses Stage_Production, not Film_TV:stage.",
-                       source=BASE + revision + "/internal/platform/graph/stage.go")
-        if row["edge_type"] == "PART_OF":
-            row.update(status="superseded registry proposal", notes="Media proposal was renamed SESSION_OF in the accepted 2026-09-18 docs; no media PART_OF/SESSION_OF writer found in this audit.")
         if row["edge_type"] == "KNOWS":
             row["scope"] = "Legacy App contract in Universe registry"
             row["notes"] += "; not the newer User→Person KNOWS formula; App writer not audited"
@@ -69,15 +65,12 @@ def main():
                          is_range="yes" if "range" in kind or kind == "tiered" else "no", weight_kind=kind,
                          status=status, scope=scope, notes=notes, source=source))
 
-    add("WORKED_ON", "Person", "Stage_Production", "30", "fixed", "writer implemented", "Universe writer",
-        "MergeStageWorkedOn; endpoint pair + role + character key; weight stamped on creation.", BASE + revision + "/internal/platform/graph/stage.go")
     for edge, source_type, target, weight in [
         ("PRODUCTION_OF", "Stage_Production", "Theatrical_Work", "50"),
         ("STAGED_AT", "Stage_Production", "Place:Venue:Theatre", "50"),
         ("WROTE", "Person|Music_Group", "Theatrical_Work", "10"),
         ("COMPOSED", "Person|Music_Group", "Theatrical_Work", "8"),
         ("WROTE_LYRICS", "Person|Music_Group", "Theatrical_Work", "12"),
-        ("SESSION_OF", "MediaAppearance", "Event:Live", "30"),
     ]:
         add(edge, source_type, target, weight, "fixed", "documented proposal", "Documentation only",
             "No matching endpoint-specific writer found in this audit; do not infer deployment.", "guides/ontology/edges.mdx")
