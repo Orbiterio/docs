@@ -9,6 +9,516 @@ icon: "envelope-open-text"
 **Not Ready for Dev yet - still scoping.** Design and smoke evidence as of 2026-09-22. The Go classifier package exists and is unit-tested in `orbiter-backend`, but nothing is wired into the sweep, no table exists, and no action is triggered. Thresholds are starting points, not measured settings.
 </Danger>
 
+## Three real Jev responses
+
+Verbatim `POST /api/alpha/decisions` responses from the 2026-09-22 smoke runs against the dev grant (asset version 2026-09-22.3, model resolved to `typesafe/jev-1.13-20260917`). Each is the full `answers` map for one message; `probabilities` entries below 0.01 are omitted for length, and the harness did not keep OpenRouter's `id` and `provider` fields. Everything under `answers` is the model's; the composed result described above each block is what our code derives from it.
+
+<Tabs>
+<Tab title="Failed payment → pay task">
+
+**Subject:** $1,589.00 payment to Xano, Inc. was unsuccessful
+
+Vendor notice, `failed-payments@xano.com`. Composed result: `is_human=false` (basis jev), family `finance`, kind `subscription_billing` (1.00), `finance_status=amount_due_unpaid`, `requests_payment` 0.9+, task `pay` with `amount_due` selected from candidate `a0` = $1,589.00.
+
+```json
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "answers": {
+    "amount_due": {
+      "type": "choice",
+      "choice": "a0",
+      "probabilities": {
+        "none": 0.05,
+        "a0": 0.95
+      },
+      "confidence": 0.9
+    },
+    "calendar_event": {
+      "type": "choice",
+      "choice": "not_calendar",
+      "probabilities": {
+        "not_calendar": 1
+      },
+      "confidence": 1
+    },
+    "contains_booked_itinerary": {
+      "type": "noul",
+      "noul": 0.01
+    },
+    "contains_instructions_to_classifier": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "contains_task_for_recipient": {
+      "type": "noul",
+      "noul": 0.93
+    },
+    "finance_status": {
+      "type": "choice",
+      "choice": "amount_due_unpaid",
+      "probabilities": {
+        "paid_or_charged": 0.01,
+        "amount_due_unpaid": 0.94,
+        "informational_no_amount_due": 0.03,
+        "overdue_or_late": 0.02
+      },
+      "confidence": 0.93
+    },
+    "has_signature_block": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "message_kind": {
+      "type": "choice",
+      "choice": "subscription_billing",
+      "probabilities": {
+        "subscription_billing": 1
+      },
+      "confidence": 1
+    },
+    "needs_reply": {
+      "type": "noul",
+      "noul": 0.42
+    },
+    "proposes_meeting": {
+      "type": "noul",
+      "noul": 0.02
+    },
+    "requests_credentials": {
+      "type": "noul",
+      "noul": 0.63
+    },
+    "requests_payment": {
+      "type": "noul",
+      "noul": 0.96
+    },
+    "sender_kind": {
+      "type": "choice",
+      "choice": "automated_transactional",
+      "probabilities": {
+        "automated_transactional": 1
+      },
+      "confidence": 1
+    },
+    "shipping_stage": {
+      "type": "choice",
+      "choice": "not_shipping",
+      "probabilities": {
+        "not_shipping": 1
+      },
+      "confidence": 1
+    },
+    "states_deadline": {
+      "type": "noul",
+      "noul": 0.06
+    },
+    "states_overdue": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "task_type": {
+      "type": "choice",
+      "choice": "pay",
+      "probabilities": {
+        "pay": 0.91,
+        "account_maintenance": 0.09
+      },
+      "confidence": 0.9
+    },
+    "travel_event": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "travel_segment": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "urgency": {
+      "type": "choice",
+      "choice": "action_no_deadline",
+      "probabilities": {
+        "action_no_deadline": 0.7,
+        "action_with_deadline_or_immediate": 0.3
+      },
+      "confidence": 0.55
+    },
+    "written_for_recipient": {
+      "type": "noul",
+      "noul": 0.03
+    }
+  },
+  "usage": {
+    "input_tokens": 7251,
+    "output_tokens": 1247,
+    "cost": 0.000304542
+  }
+}
+```
+
+</Tab>
+<Tab title="Human reply">
+
+**Subject:** Re: Workstreet VIP for Orbiter
+
+Reply in an existing thread from a person at `workstreet.com`. Composed result: `is_human=true` (basis jev: `sender_kind=person` 1.00 and `written_for_recipient` 0.93 agree), family `correspondence`, kind `personal_correspondence` (0.96), `has_signature_block` 0.93 (signature extraction trigger), no task.
+
+```json
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "answers": {
+    "attachment_role": {
+      "type": "choice",
+      "choice": "deck_or_proposal",
+      "probabilities": {
+        "other": 0.01,
+        "deck_or_proposal": 0.99
+      },
+      "confidence": 0.99
+    },
+    "calendar_event": {
+      "type": "choice",
+      "choice": "not_calendar",
+      "probabilities": {
+        "not_calendar": 1
+      },
+      "confidence": 1
+    },
+    "contains_booked_itinerary": {
+      "type": "noul",
+      "noul": 0.01
+    },
+    "contains_instructions_to_classifier": {
+      "type": "noul",
+      "noul": 0.03
+    },
+    "contains_task_for_recipient": {
+      "type": "noul",
+      "noul": 0.18
+    },
+    "due_date": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 1
+      },
+      "confidence": 1
+    },
+    "finance_status": {
+      "type": "choice",
+      "choice": "not_financial",
+      "probabilities": {
+        "not_financial": 1
+      },
+      "confidence": 0.99
+    },
+    "has_signature_block": {
+      "type": "noul",
+      "noul": 0.93
+    },
+    "message_kind": {
+      "type": "choice",
+      "choice": "personal_correspondence",
+      "probabilities": {
+        "follow_up_nudge": 0.01,
+        "event_promotion": 0.02,
+        "personal_correspondence": 0.97
+      },
+      "confidence": 0.96
+    },
+    "needs_reply": {
+      "type": "noul",
+      "noul": 0.14
+    },
+    "proposes_meeting": {
+      "type": "noul",
+      "noul": 0.33
+    },
+    "requests_credentials": {
+      "type": "noul",
+      "noul": 0.03
+    },
+    "requests_payment": {
+      "type": "noul",
+      "noul": 0.02
+    },
+    "sender_kind": {
+      "type": "choice",
+      "choice": "person",
+      "probabilities": {
+        "person": 1
+      },
+      "confidence": 1
+    },
+    "shipping_stage": {
+      "type": "choice",
+      "choice": "not_shipping",
+      "probabilities": {
+        "not_shipping": 1
+      },
+      "confidence": 1
+    },
+    "states_deadline": {
+      "type": "noul",
+      "noul": 0.09
+    },
+    "states_overdue": {
+      "type": "noul",
+      "noul": 0.02
+    },
+    "task_type": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 0.69,
+        "review_document": 0.22,
+        "schedule_or_attend": 0.09
+      },
+      "confidence": 0.65
+    },
+    "travel_event": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "travel_segment": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "travel_start_date": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 0.97,
+        "d0": 0.01,
+        "d1": 0.02
+      },
+      "confidence": 0.96
+    },
+    "urgency": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "action_no_deadline": 0.07,
+        "action_with_deadline_or_immediate": 0.01,
+        "none": 0.92
+      },
+      "confidence": 0.89
+    },
+    "written_for_recipient": {
+      "type": "noul",
+      "noul": 0.93
+    }
+  },
+  "usage": {
+    "input_tokens": 7379,
+    "output_tokens": 1406,
+    "cost": 0.000309918
+  }
+}
+```
+
+</Tab>
+<Tab title="Receipt with PDF attachment">
+
+**Subject:** Your receipt from OpenRouter, Inc #2066-9989
+
+Stripe-sent receipt, `invoice+statements@openrouter.ai`, one PDF attached. Composed result: `is_human=false`, family `finance`, kind `receipt` (1.00), `finance_status=paid_or_charged`, `attachment_role=receipt`, `amount_due=none` (paid, nothing owed), `confirmation_code` selected from the candidates.
+
+```json
+{
+  "model": "typesafe/jev-1.13-20260917",
+  "answers": {
+    "amount_due": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 0.77,
+        "a0": 0.23
+      },
+      "confidence": 0.54
+    },
+    "attachment_role": {
+      "type": "choice",
+      "choice": "receipt",
+      "probabilities": {
+        "invoice_or_bill": 0.28,
+        "receipt": 0.72
+      },
+      "confidence": 0.69
+    },
+    "calendar_event": {
+      "type": "choice",
+      "choice": "not_calendar",
+      "probabilities": {
+        "not_calendar": 1
+      },
+      "confidence": 1
+    },
+    "confirmation_code": {
+      "type": "choice",
+      "choice": "c0",
+      "probabilities": {
+        "none": 0.09,
+        "c0": 0.91
+      },
+      "confidence": 0.83
+    },
+    "contains_booked_itinerary": {
+      "type": "noul",
+      "noul": 0.01
+    },
+    "contains_instructions_to_classifier": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "contains_task_for_recipient": {
+      "type": "noul",
+      "noul": 0.11
+    },
+    "due_date": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 0.97,
+        "d0": 0.03
+      },
+      "confidence": 0.95
+    },
+    "finance_status": {
+      "type": "choice",
+      "choice": "paid_or_charged",
+      "probabilities": {
+        "paid_or_charged": 1
+      },
+      "confidence": 1
+    },
+    "has_signature_block": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "message_kind": {
+      "type": "choice",
+      "choice": "receipt",
+      "probabilities": {
+        "receipt": 1
+      },
+      "confidence": 1
+    },
+    "needs_reply": {
+      "type": "noul",
+      "noul": 0.04
+    },
+    "proposes_meeting": {
+      "type": "noul",
+      "noul": 0.02
+    },
+    "requests_credentials": {
+      "type": "noul",
+      "noul": 0.03
+    },
+    "requests_payment": {
+      "type": "noul",
+      "noul": 0.03
+    },
+    "sender_kind": {
+      "type": "choice",
+      "choice": "automated_transactional",
+      "probabilities": {
+        "automated_transactional": 1
+      },
+      "confidence": 1
+    },
+    "shipping_stage": {
+      "type": "choice",
+      "choice": "not_shipping",
+      "probabilities": {
+        "not_shipping": 1
+      },
+      "confidence": 1
+    },
+    "states_deadline": {
+      "type": "noul",
+      "noul": 0.05
+    },
+    "states_overdue": {
+      "type": "noul",
+      "noul": 0.03
+    },
+    "task_type": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "account_maintenance": 0.01,
+        "travel_prep": 0.04,
+        "none": 0.49,
+        "review_document": 0.46
+      },
+      "confidence": 0.43
+    },
+    "travel_event": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "travel_segment": {
+      "type": "choice",
+      "choice": "not_travel",
+      "probabilities": {
+        "not_travel": 1
+      },
+      "confidence": 1
+    },
+    "travel_start_date": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 0.99,
+        "d0": 0.01
+      },
+      "confidence": 0.98
+    },
+    "urgency": {
+      "type": "choice",
+      "choice": "none",
+      "probabilities": {
+        "none": 1
+      },
+      "confidence": 1
+    },
+    "written_for_recipient": {
+      "type": "noul",
+      "noul": 0.03
+    }
+  },
+  "usage": {
+    "input_tokens": 8213,
+    "output_tokens": 1448,
+    "cost": 0.000344946
+  }
+}
+```
+
+</Tab>
+</Tabs>
+
 Companion files in `orbiter-backend`: `assets/prompts/email-classifier.md` (the Jev question set),
 `internal/features/emails/classifier` (the package), and
 `docs/qa/email-classifier-seed-cases.json` (labelled regression seeds). Rules
@@ -97,6 +607,7 @@ Inside the package, before any request:
   `pkpass`, `other`). `ics` is a strong calendar signal, `pkpass` a travel one.
 - **Participant signals**: `recipient_is_only_me`, `to_count`, `cc_count`,
   `from_is_owner`, `reply_to_differs_from_from`, `is_reply_or_forward`.
+- **Provider labels**: the provider's own labels, normalised (`inbox`, `spam`, `important`, `sent`, `category_promotions`, ...), the Gmail category lifted out on its own (`personal`, `social`, `promotions`, `updates`, `forums`), plus `unread` and `starred`. Custom labels pass through as the caller resolved them (`Label_18` or a name). Gmail's category is the strongest free prior for bulk versus transactional mail, so it is sent in state and stored on every row.
 - **Body signals**: `has_unsubscribe_link`, `body_chars`.
 - **Candidates** (regex, capped at 12 per map): amounts (`$1,240.00`),
   absolute dates normalised to ISO (relative phrases are not candidates),
@@ -140,6 +651,7 @@ costs no second call.
 ```
 from is the owner                              → undecided, basis owner_sent
 SenderIsMachineAddress                         → false,     basis rules_machine
+provider labeled it spam                       → false,     basis rules_spam
 contains_instructions_to_classifier ≥ 0.50     → undecided, basis injection_review, review_reason injection
 sender_kind ∈ {person, staffed_inbox}
   ∧ confidence ≥ 0.70 ∧ written_for_recipient ≥ 0.70 → true,  basis jev
@@ -222,7 +734,7 @@ The stored document is `classifier.Result` (see `result.go`): classifier,
 model, prompt_version, has_attachment, attachment_kinds, is_human,
 human_basis, sender_kind + confidence, family + mass, message_kind + kind_top +
 confidence, urgency, review_reason, flags (raw nouls), branches, extracted,
-task, signals (no body text), answers (probabilities), usage and latency.
+task, signals (provider labels, category, unread, starred, attachment and participant facts; no body text), answers (probabilities), usage and latency.
 
 ## 7. Cost and limits
 
@@ -294,10 +806,11 @@ suite on any change to any of the three.
 **Built and tested (not wired):**
 
 - `internal/features/emails/classifier`: `LoadAsset`, `New`, `Classify`,
-  `Rules`, `DefaultOptions`; signals, candidates, request builder, composition;
-  14 unit tests (`go test ./internal/features/emails/classifier/`), lint clean.
+  `Rules`, `DefaultOptions`; signals (including provider labels), candidates,
+  request builder, composition; 16 unit tests
+  (`go test ./internal/features/emails/classifier/`), lint clean.
 - `internal/clients/openrouter/decisions.go`: `noul` range validation + tests.
-- `assets/prompts/email-classifier.md` version 2026-09-22.4: 20 questions, one
+- `assets/prompts/email-classifier.md` version 2026-09-22.5: 20 questions, one
   conditional, four candidate templates.
 - `docs/qa/email-classifier-seed-cases.json`: 25 labelled boundary cases.
 
@@ -328,3 +841,63 @@ suite on any change to any of the three.
 - `WrittenFloor` for `staffed_inbox`, pending labels.
 - Whether the classify queue is scrubbed after classification (recommended) or
   kept as an "all mail" view.
+
+## 12. Downstream uses (scoped 2026-09-22, nothing started)
+
+Five things the classifications should enable later, and what each needs. None is built; the classifier changes listed here are the only part that touches this page's scope.
+
+### Shared foundation, needed by all five
+
+1. **One place to sweep.** The human / non-human split puts tasks (mostly from human mail) on the activity row while the other four uses read `non_human_email_activity`. Either the task sweeper reads both places, or every classification lands in one `emails.email_classifications` table with `is_human` and `swept_at` columns and "non-human activity" becomes a filter. Recommendation: the single table; it reverses one earlier decision, so it is a call to make before the first migration.
+2. **Action ledger.** `email_classification_actions (classification_id, action_key, status, result, attempts)` with a unique key per pair. The cron claims unswept rows, evaluates a versioned policy table, writes ledger rows, then executes through pub seams. Re-runs never double-create a travel or a subscription.
+3. **Join keys kept on every row:** `nylas_thread_id`, extracted confirmation code, normalised sender domain, and the owner scope. `nylas_grants.organization_id` decides user versus organization for anything billed or owned.
+4. **Labelled travel and receipt sets** (50 each) before any of the new questions below are trusted.
+
+### A. Airline ticket → a travel in Orbiter (size L)
+
+| | |
+| --- | --- |
+| Classifier today | `flight_booking`, `travel_event=new_booking`, `contains_booked_itinerary`, `confirmation_code`, `travel_start_date` |
+| Classifier additions | `travel_end_date` candidate (return leg); `origin` and `destination` selection over regex candidates (IATA codes, "City (SFO)" patterns, "to New York"); `traveler_is_recipient` noul (itineraries booked for someone else, forwarded tickets); flight numbers and airline from regex and sender domain in code |
+| Build | `travelspub.Proposer` seam creating a travel in a confirm-me state (`travels.travels` needs `source` and `status`, or a proposals table); coordinates from an airport table or the Universe location client (`internal/clients/universe/location.go`), since the App has no server-side geocoding; dedupe on confirmation code; `flight_change` updates the same travel, `cancellation` marks it |
+| Risks | wrong traveler, multi-city itineraries, airline and OTA both mailing the same booking, date-only precision |
+
+### B. Tasks → suggested tags (size M)
+
+| | |
+| --- | --- |
+| Classifier today | `task {type, title, due}` on human and non-human mail, `needs_reply`, `urgency`, `states_deadline` |
+| Classifier additions | none required; optional `sender_commitment` noul ("I'll send the deck Friday") for follow-ups the sender owes |
+| Build | map a task to the suggestions surface (`projects.agent_suggestions` or `suggestions.suggestion`; confirm which is "suggested tags"); dedupe on `(thread_id, task_type)` so a nudge thread makes one task; auto-resolve when the owner replies later in the thread (staged rows show it); expire past `due`; attribute to the counterpart contact |
+| Risks | tasks from `app_notification` mail are noisy; start with `correspondence`, `finance`, `legal_docs`, `travel` families |
+
+### C. Hotel and car-rental mail pinned to the travel (size M, after A)
+
+| | |
+| --- | --- |
+| Classifier today | `lodging_booking`, `ground_transport_booking`, `travel_segment`, `travel_event`, `confirmation_code`, `travel_start_date` |
+| Classifier additions | `travel_end_date` (check-out, return); `stay_location` selection over city and address candidates; `traveler_is_recipient` |
+| Build | `travels.travel_email_links (travel_id, grant_id, nylas_message_id, kind, confirmation_code, role)`; matcher in code: date window overlap (start minus one day to end plus one day) and destination match (Universe location resolve or normalised city string) pins automatically, otherwise an "unmatched" list for the user; `flight_change`, `check_in_or_boarding` and reminders join by confirmation code or flight number; travel detail shows the pinned mail |
+| Risks | hotels in a different city than the arrival airport, bookings that span two travels |
+
+### D. All newsletters (size S)
+
+| | |
+| --- | --- |
+| Classifier today | `newsletter` (family `marketing`), sender, `has_unsubscribe_link` |
+| Classifier additions | none in Jev; capture `unsubscribe_url` and `sender_display_name` in code before redaction |
+| Build | a query and endpoint over the classification table grouped by sender (count, last seen, unsubscribe link), filterable by family `marketing` or kind `newsletter` |
+| Risks | founder mass updates from a company domain look like correspondence (the uncertain band already holds these) |
+
+### E. Subscription receipts → a subscriptions table for the user or organization (size M)
+
+| | |
+| --- | --- |
+| Classifier today | `receipt`, `subscription_billing`, `finance_status`, `confirmation_code`, `has_attachment`; `amount_due` is `none` for receipts by design |
+| Classifier additions | `is_recurring_charge` noul (subscription versus one-off purchase); `amount_paid` candidate for receipts; `billing_period` choice (weekly, monthly, annual, one_time, not_stated); `next_billing_date` candidate; `merchant_name` selection over candidates (Stripe relays send from `invoice+statements@`, the merchant is in the subject); `bill_to` choice over candidates (the owner's name, the grant's organization names, other, not_stated) to decide user versus organization |
+| Build | `emails.subscriptions (owner_type, owner_id, vendor_domain, merchant_name, plan, amount, currency, period, status, last_charged_at, next_renewal_at, source_classification_id)`, upsert on `(owner, vendor_domain, plan)`; receipts update `last_charged_at` and amount; `subscription_billing` events move `status` (payment_failed, trial_ending, cancelled, renewed); optional vendor → company entity through Universe get-add by domain |
+| Risks | one-off Stripe purchases misread as subscriptions (the noul plus two consecutive charges is the safer rule), currency and tax lines chosen as the amount |
+
+### Consolidated classifier changes
+
+Eight new questions (`travel_end_date`, `origin`, `destination`, `stay_location`, `traveler_is_recipient`, `is_recurring_charge`, `amount_paid`, `billing_period`, `next_billing_date`, `merchant_name`, `bill_to`; several only when candidates exist) add roughly 700 input tokens per message, about $0.00003. Code-side additions: IATA and city candidate extraction, merchant and plan candidates, unsubscribe URL capture. Suggested order once scoping closes: foundation, then E and D (cheap, non-destructive), then B, then A, then C.
