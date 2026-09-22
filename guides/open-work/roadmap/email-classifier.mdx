@@ -9,6 +9,10 @@ icon: "envelope-open-text"
 **Not Ready for Dev yet - still scoping.** Design and smoke evidence as of 2026-09-22. The Go classifier package exists and is unit-tested in `orbiter-backend`, but nothing is wired into the sweep, no table exists, and no action is triggered. Thresholds are starting points, not measured settings.
 </Danger>
 
+<Info>
+**AI accounts only.** The classifier runs **only** on email accounts with AI features enabled (`nylas_grants.ai_enabled = true`). Accounts with AI off are not classified at all: no queue row, no Jev call, no rules-only fallback. Their mail follows today's log-and-parse path unchanged.
+</Info>
+
 <Warning>
 **Attachments policy.** We do **not** download, extract or save files from non-human email. The one exception is receipts: a file on a message classified `receipt` (or whose `attachment_role` is `receipt`) may be pulled for the subscription and expense work. Everything else non-human keeps attachment **metadata only** (`has_attachment`, `attachment_kinds`, filenames). Human email attachments continue through the existing log-and-parse attachment ingestion for promoted contacts.
 </Warning>
@@ -710,7 +714,7 @@ judgments. A Jev verdict is never a new fact.
 | Prompts are runtime assets with env-overridable paths; the Discover classifier asset is literally the question JSON. | `assets/prompts/discover-classifier.md`; `config.go:123-125` | Same pattern: `assets/prompts/email-classifier.md`. |
 | Staged rows already carry subject, snippet, body, folders and attachment metadata; headers (`fields=include_headers`) are too heavy for a sweep. | `logandparse/sweep.go:17`, `types.go:105` | Body-derived signals come from regex over what is already fetched. |
 | A Nylas inbound webhook exists for calendars only. | `internal/features/calendars/webhook.go` `/v1/webhooks/nylas` | A live `message.created` path can extend it later; v1 classifies inside runs. |
-| AI-off grants must end with no bodies stored. | `email-signature-extraction-plan.md` decision 2 | AI-off grants get a rules-only classification; no body leaves the box. |
+| AI-off grants must end with no bodies stored. | `email-signature-extraction-plan.md` decision 2 | The whole lane is gated on `nylas_grants.ai_enabled`; AI-off accounts are not classified at all, so no body leaves the box. |
 | Jev via OpenRouter: 1,200 RPM, 32k tokens state + longest question, $0.042/MTok in, output free. | JEV guide §2, §7 | Single-message requests; RPM is the ceiling, not tokens. |
 
 ## 3. Shape
@@ -721,14 +725,15 @@ flowchart TD
   S --> F[FoldMessage → import_email_message<br/>unchanged]
   Q -->|run.completed| P0[Phase 0: classify]
   P0 --> R{grant ai_enabled?}
-  R -->|no| RULES[classifier.Rules<br/>sender facts only, no body]
+  R -->|no| SKIP[not classified<br/>existing log-and-parse path unchanged]
   R -->|yes| JEV[classifier.Classify<br/>stripped body + participants + facts → Jev, one request]
-  RULES --> ROUTE{is_human?}
-  JEV --> ROUTE
+  JEV --> ROUTE{is_human?}
   ROUTE -->|true| H[existing human path<br/>contact, activities, interaction log<br/>+ classification on the activity row]
   ROUTE -->|false or undecided| NH[(emails.non_human_email_activity)]
   NH -. later, out of scope .-> CRON[cron sweep for additional functionality]
 ```
+
+Phase-by-phase walkthrough: [Pre and Post Classifier](/guides/open-work/roadmap/email-classifier/pre-and-post-classifier).
 
 Phase 0 runs first in `ProcessRun`; promotion, signatures, summaries and
 memory extraction can read the classification of any message they touch.
@@ -892,7 +897,7 @@ minutes; 50,000 ≈ $15 and ~42 minutes. RPM is the ceiling. Options in order:
 classify only the AI window on all-history runs; request a higher limit;
 batch 4 to 8 messages per request only after an eval shows batched accuracy
 holds. Enable OpenRouter's ZDR routing for this lane, because bodies leave the
-box. Never send AI-off bodies.
+box. The lane never runs for AI-off accounts.
 
 ## 8. Smoke evidence (2026-09-22, dev grant mark@orbiter.io)
 
@@ -968,7 +973,7 @@ suite on any change to any of the three.
    `ai_enabled` grants.
 3. `logandparse` Phase 0: build `classifier.Input` from the queue row (the
    cleaner, `isMachineAddress`, `IsMarketingPrefix`, the emailed-before
-   lookup), call `Classify` or `Rules`, route by `is_human`, clear the body.
+   lookup), call `Classify` (`ai_enabled` grants only), route by `is_human`, clear the body.
 4. `emails`: repo + `emailspub` writer for the non-human table; `activities`:
    accept the classification on the email activity input.
 5. Config and wiring: `EMAILS_CLASSIFIER_ENABLED`, `EMAILS_CLASSIFIER_MODEL`,
@@ -981,7 +986,7 @@ suite on any change to any of the three.
 
 ## 11. Open decisions
 
-- AI-off grants: rules-only (recommended) or subject + snippet to Jev.
+- AI-off grants: resolved 2026-09-22, not classified at all; the lane is gated on `ai_enabled`.
 - Forwarded notifications (a person forwards a LinkedIn invite): classify the
   forwarded content, the forwarder, or both.
 - `WrittenFloor` for `staffed_inbox`, pending labels.

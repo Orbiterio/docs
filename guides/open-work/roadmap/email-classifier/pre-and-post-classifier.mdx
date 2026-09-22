@@ -6,7 +6,7 @@ icon: "arrow-progress"
 ---
 
 <Danger>
-**Not Ready for Dev yet - still scoping.** Companion to the [Email Classifier](/guides/open-work/roadmap/email-classifier) overview. Phases marked *exists* are live in `orbiter-backend` log-and-parse today; everything else is design.
+**Not Ready for Dev yet - still scoping.** Companion to the [Email Classifier](/guides/open-work/roadmap/email-classifier) overview. Phases marked *exists* are live in `orbiter-backend` log-and-parse today; everything else is design. The classifier lane runs **only** on accounts with AI features enabled (`nylas_grants.ai_enabled`).
 </Danger>
 
 Every inbound message goes through the same five phases. Code owns phases 1 and 3, Jev owns the judgment in phase 2, and one cheap LLM appears only on the human branch, after the classification has already decided the message is worth it.
@@ -38,7 +38,7 @@ flowchart TD
 
 **Add facts the model cannot know.** Attachment metadata (`has_attachment`, kinds; bytes are never read here), provider labels and the Gmail category (`inbox`, `spam`, `important`, `category_promotions`, ...), `unread`, `starred`, the sender rules (`isMachineAddress`, marketing prefix, relay domain), relationship facts (the user has emailed this sender before, the sender is an existing contact), body signals (`has_unsubscribe_link`), and regex candidates for amounts, absolute dates and confirmation codes.
 
-**Redact and cap.** URL query strings and tokens of 32+ characters are removed; the text is cut at 2,500 characters, head first. AI-off grants stop here with no body: they get a rules-only classification.
+**Redact and cap.** URL query strings and tokens of 32+ characters are removed; the text is cut at 2,500 characters, head first. The lane only runs for accounts with AI features enabled (`nylas_grants.ai_enabled`); AI-off accounts never reach this phase.
 
 ```json
 {
@@ -99,13 +99,13 @@ A cron sweeps unswept rows later for the downstream uses listed on the overview.
 
 ## Who does what
 
-| Phase | Actor | Reads | Writes | Runs on AI-off grants |
+| Phase | Actor | Reads | Writes | Runs on AI-off accounts |
 | --- | --- | --- | --- | --- |
-| 0 Sweep and stage | code (exists) | Nylas messages | `import_classify_queue`, `import_email_message` | yes, without body |
-| 1 Prep | code | queue row, sender rules, contact tables | in-memory envelope | yes, without body |
-| 2 Classify | Jev | envelope | `Result` | rules-only (`classifier.Rules`) |
-| 3a Store non-human | code | `Result` | `non_human_email_activity`; receipt file via files pipeline | yes |
-| 3b Promote | code (exists) | staged rows | contact, `email_activity`, interaction log | yes |
+| 0 Sweep and stage | code (exists) | Nylas messages | `import_classify_queue`, `import_email_message` | sweep yes (existing, without body); queue row no |
+| 1 Prep | code | queue row, sender rules, contact tables | in-memory envelope | no |
+| 2 Classify | Jev | envelope | `Result` | no |
+| 3a Store non-human | code | `Result` | `non_human_email_activity`; receipt file via files pipeline | no |
+| 3b Promote | code (exists) | staged rows | contact, `email_activity`, interaction log | yes (existing path, unchanged) |
 | 3b Clean | LLM (`gemini-2.5-flash-lite`) | stripped body | `email_activity.clean_message` | no |
 | 3b Signature | LLM (exists) | message with signature | person title, phone, links | no |
 | 3b Summary | LLM (exists) | clean messages of the thread | `email_ai_summaries` | no |
