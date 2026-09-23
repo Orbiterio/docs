@@ -94,6 +94,8 @@ tags:
     description: Copilot suggestion requests in loop mode with their suggestions, actions, trajectories and follow-up questions. Requires a verified WorkOS access token.
   - name: Links
     description: Web links on persons/companies. Requires a verified WorkOS access token.
+  - name: Voice
+    description: ElevenLabs speech and transcription proxy. Requires a verified WorkOS access token.
   - name: Memories
     description: |
       Semantic memories about a contact, a company, or the caller themselves,
@@ -7234,8 +7236,10 @@ paths:
       summary: Get all collections
       description: |
         Returns a page of the collections the authenticated user can see —
-        ones they own or ones shared with them via a collection join —
-        newest-activity first. Each item carries its node count, the teams it's
+        ones they own or ones shared with them via a collection join — in the
+        authenticated user's saved sidebar order first, then latest activity
+        (updated_at, created_at, id) for collections with no saved position.
+        Each item carries its node count, the teams it's
         shared through (an array; a collection can be shared through several),
         and the authenticated user's own questions on it. `with_favourites=false` excludes
         the authenticated user's favourited collections; `query` is a case-insensitive title
@@ -7316,6 +7320,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CollectionResponseEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /collections/reorder:
+    patch:
+      tags:
+        - Collections
+      summary: Reorder collections in the sidebar
+      description: |
+        Persists the authenticated user's sidebar order for the submitted
+        collections. Covers owned and shared collections, independent of
+        favourites (Starred keeps its own ordering). A partial list is allowed:
+        the submitted collections are placed in the submitted order within
+        their existing slots, and every collection not sent keeps its slot.
+        An unknown or inaccessible id rejects the whole reorder.
+      operationId: reorderCollections
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderCollectionsRequest'
+      responses:
+        '200':
+          description: Collections reordered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -8114,6 +8152,77 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /voice/speech:
+    post:
+      tags:
+        - Voice
+      summary: Synthesize speech
+      description: |
+        Streams an mp3 rendering of `text` in the ElevenLabs voice
+        `voice_id` (eleven_multilingual_v2, mp3_44100_128). The success body
+        is raw `audio/mpeg`, not an envelope, and is flushed as it is
+        produced so playback can start early. Validation and upstream
+        failures before any audio is sent return the usual error envelope.
+        Text is trimmed and capped at 5000 characters.
+      operationId: synthesizeSpeech
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeechRequest'
+      responses:
+        '200':
+          description: The spoken audio, streamed.
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /voice/transcriptions:
+    post:
+      tags:
+        - Voice
+      summary: Transcribe a recorded clip
+      description: |
+        Sends one recorded clip (webm/opus or mp4, under 25MB) to ElevenLabs
+        Scribe (`scribe_v1`) and returns the trimmed transcript.
+      operationId: transcribeSpeech
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: The transcript.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscriptionEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Internal'
   /email-addresses/contacts/{contact_id}/primary:
@@ -9759,6 +9868,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuggestionBatchEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /suggestion-batches/{batch_id}/suggestions/{suggestion_id}:
+    parameters:
+      - $ref: '#/components/parameters/BatchID'
+      - $ref: '#/components/parameters/SuggestionID'
+    patch:
+      operationId: updateFeedSuggestion
+      tags:
+        - Suggestions
+      summary: Dismiss or restore one suggestion of a batch
+      description: Sets or clears `dismissed_at` on a single suggestion, scoped by its batch. Dismissed suggestions drop out of the live feed but stay on the batch detail read. Only a member of the batch's organisation can write.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateFeedSuggestionRequest'
+      responses:
+        '200':
+          description: The flag was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -12592,13 +12734,21 @@ components:
             - 'null'
     LocationRef:
       type: object
+      description: |
+        A person's place as plain text on their row: the display string plus
+        coordinates. The object is null when the row holds no place.
       properties:
-        id:
-          type: string
-          format: uuid
         formatted_location:
           type:
             - string
+            - 'null'
+        latitude:
+          type:
+            - number
+            - 'null'
+        longitude:
+          type:
+            - number
             - 'null'
     ConnectionRequest:
       type: object
@@ -18012,6 +18162,96 @@ components:
         query:
           type: string
           description: The search query.
+    TravelUser:
+      type: object
+      required:
+        - id
+        - person_id
+        - name
+      description: The trip owner's person card, embedded on list items.
+      properties:
+        id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+    PersonCard:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        avatar:
+          type:
+            - string
+            - 'null'
+    EmbeddedPerson:
+      type: object
+      required:
+        - id
+        - person_id
+        - person
+      properties:
+        id:
+          type: string
+          format: uuid
+        person_id:
+          type: string
+          format: uuid
+        person:
+          $ref: '#/components/schemas/PersonCard'
+    TravelCompanion:
+      type: object
+      required:
+        - id
+        - travel_id
+        - my_person_id
+        - my_person
+      properties:
+        id:
+          type: string
+          format: uuid
+        travel_id:
+          type: string
+          format: uuid
+        my_person_id:
+          type: string
+          format: uuid
+        my_person:
+          $ref: '#/components/schemas/EmbeddedPerson'
+    TravelSharedUser:
+      type: object
+      required:
+        - id
+        - shared_to_user
+        - team_id
+        - user
+      properties:
+        id:
+          type: string
+          format: uuid
+        shared_to_user:
+          type: string
+          format: uuid
+        team_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        user:
+          $ref: '#/components/schemas/EmbeddedPerson'
     TravelResponse:
       type: object
       required:
@@ -18093,6 +18333,21 @@ components:
           items:
             type: string
             format: uuid
+        travel_user:
+          $ref: '#/components/schemas/TravelUser'
+        travel_companions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TravelCompanion'
+          description: |
+            Resolved passengers for the trip — contact_ids mapped to person
+            cards. Emitted on both list and detail responses; omitted when the
+            trip has no companions.
+        shared_users:
+          type: array
+          items:
+            $ref: '#/components/schemas/TravelSharedUser'
+          description: Direct per-user shares, detail response only.
         created_at:
           type: string
           format: date-time
@@ -20182,6 +20437,22 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    ReorderCollectionsRequest:
+      type: object
+      required:
+        - collection_ids
+      description: |
+        The authenticated user's sidebar order for the submitted collections;
+        ids may be a subset — omitted collections keep their existing slots.
+      properties:
+        collection_ids:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
     CollectionListItemEnvelope:
       type: object
       required:
@@ -20960,6 +21231,38 @@ components:
         link_url:
           type: string
           minLength: 1
+    SpeechRequest:
+      type: object
+      required:
+        - text
+        - voice_id
+      properties:
+        text:
+          type: string
+          maxLength: 5000
+        voice_id:
+          type: string
+          pattern: ^[A-Za-z0-9]{1,64}$
+    Transcription:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+    TranscriptionEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/Transcription'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
     EmailAddress-2:
       type: object
       required:
@@ -21104,10 +21407,9 @@ components:
         - postal_code
         - longitude
         - latitude
-        - timezone
-        - city_id
-        - region_id
-        - country_id
+        - city
+        - state_region
+        - country
         - connected_only
         - is_mailing_address
         - source
@@ -21168,25 +21470,18 @@ components:
           type:
             - number
             - 'null'
-        timezone:
+        city:
           type:
             - string
             - 'null'
-        city_id:
+        state_region:
           type:
             - string
             - 'null'
-          format: uuid
-        region_id:
+        country:
           type:
             - string
             - 'null'
-          format: uuid
-        country_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
         connected_only:
           type: boolean
         is_mailing_address:
@@ -21240,43 +21535,14 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
-    CreateAddressRequest:
-      type: object
-      required:
-        - formatted_address
-      description: Exactly one of person_id / company_id must be set.
-      properties:
-        person_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
-        company_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
-        address_label:
-          type:
-            - string
-            - 'null'
-        formatted_address:
-          type: string
-          minLength: 1
-        address_note:
-          type:
-            - string
-            - 'null'
-    UpdateAddressRequest:
+    AddressComponents:
       type: object
       description: |
-        formatted_address is rebuilt server-side from the non-empty
-        components. address_note null deletes the caller's note.
+        The place as the client sends it, typically the picked Radar hit.
+        Every field is optional and stored as given; nothing is resolved or
+        geocoded server-side. latitude outside [-90, 90] or longitude
+        outside [-180, 180] is rejected.
       properties:
-        address_label:
-          type:
-            - string
-            - 'null'
         unit:
           type:
             - string
@@ -21293,6 +21559,10 @@ components:
           type:
             - string
             - 'null'
+        postal_code:
+          type:
+            - string
+            - 'null'
         city:
           type:
             - string
@@ -21301,18 +21571,73 @@ components:
           type:
             - string
             - 'null'
-        postal_code:
-          type:
-            - string
-            - 'null'
         country:
           type:
             - string
             - 'null'
-        address_note:
+        latitude:
           type:
-            - string
+            - number
             - 'null'
+          minimum: -90
+          maximum: 90
+        longitude:
+          type:
+            - number
+            - 'null'
+          minimum: -180
+          maximum: 180
+    CreateAddressRequest:
+      allOf:
+        - $ref: '#/components/schemas/AddressComponents'
+        - type: object
+          required:
+            - formatted_address
+          description: Exactly one of person_id / company_id must be set.
+          properties:
+            person_id:
+              type:
+                - string
+                - 'null'
+              format: uuid
+            company_id:
+              type:
+                - string
+                - 'null'
+              format: uuid
+            address_label:
+              type:
+                - string
+                - 'null'
+            formatted_address:
+              type: string
+              minLength: 1
+            address_note:
+              type:
+                - string
+                - 'null'
+    UpdateAddressRequest:
+      allOf:
+        - $ref: '#/components/schemas/AddressComponents'
+        - type: object
+          description: |
+            A full replace of the place: components and coordinates follow the
+            body (absent means null). formatted_address is stored as given when
+            present and rebuilt from the non-empty components when absent.
+            address_note null deletes the caller's note.
+          properties:
+            address_label:
+              type:
+                - string
+                - 'null'
+            formatted_address:
+              type:
+                - string
+                - 'null'
+            address_note:
+              type:
+                - string
+                - 'null'
     AddressOrNullEnvelope:
       type: object
       required:
@@ -22027,10 +22352,14 @@ components:
         - ready
         - leads
         - timed_out
+        - response
       description: |
         Where the lane's candidates are. `found` excludes what the relevance
         gate rejected; `enriching` are seeded and awaiting Universe;
         `ready` have local rows; `leads` were kept but could never be added.
+        `response` counts candidates the placement step judged to be the
+        answer itself — the response cards to expect — while they are still
+        enriching, so the client can skeleton that many cards.
       properties:
         found:
           type: integer
@@ -22042,6 +22371,8 @@ components:
           type: integer
         timed_out:
           type: integer
+        response:
+          type: integer
     DeepLane:
       type: object
       required:
@@ -22049,6 +22380,7 @@ components:
         - trigger
         - message
         - progress
+        - answer_entities
       description: |
         The Deep Discover web lane as the client should show it. Poll the
         record while `status` is `queued`, `running`, `enriching` or
@@ -22073,6 +22405,15 @@ components:
           description: |
             Candidate counts, loaded by the detail endpoint only; null on
             create and update responses.
+        answer_entities:
+          type: array
+          items:
+            type: string
+          description: |
+            On a `miss` lane, the names the early answer text is about: the
+            response cards the lane owes, known the moment the answer is
+            written and before any web search. Empty when the answer named
+            none or the lane was requested.
     DiscoverRecord:
       type: object
       required:
@@ -22438,16 +22779,19 @@ components:
             - 'null'
     ContextLocation:
       type: object
-      required:
-        - id
-      description: A person's primary location.
+      description: 'A person''s place as text: the display string plus coordinates.'
       properties:
-        id:
-          type: string
-          format: uuid
         formatted_location:
           type:
             - string
+            - 'null'
+        latitude:
+          type:
+            - number
+            - 'null'
+        longitude:
+          type:
+            - number
             - 'null'
     ContactEmail:
       type: object
@@ -24415,6 +24759,14 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+    UpdateFeedSuggestionRequest:
+      type: object
+      required:
+        - dismissed
+      properties:
+        dismissed:
+          type: boolean
+          description: true dismisses (soft-deletes) the suggestion; false restores it.
     EnsureThreadRequest:
       type: object
       required:
@@ -25137,7 +25489,7 @@ components:
           maxLength: 500
     IntakeContext:
       type: object
-      description: The versioned intake document; see the intake contract.
+      description: The versioned intake document. An uncertain outcome classification immediately resolves to get_advice with routing_source advice_fallback and confidence 0, indicating an application default rather than a model match. Existing saved clarifications remain answerable.
     SubmissionReceipt:
       type: object
       description: The public receipt; the stored document also carries a private approved_snapshot.
@@ -26201,11 +26553,6 @@ components:
           type:
             - string
             - 'null'
-        primary_location_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
         bio:
           type:
             - string
@@ -26616,11 +26963,6 @@ components:
           type:
             - string
             - 'null'
-        primary_location_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
         bio:
           type:
             - string
@@ -26744,11 +27086,6 @@ components:
             - string
             - 'null'
         company_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
-        primary_location_id:
           type:
             - string
             - 'null'
@@ -27022,30 +27359,11 @@ components:
           type:
             - string
             - 'null'
-        location_id:
-          type:
-            - string
-            - 'null'
-          format: uuid
         location_formatted:
           type:
             - string
             - 'null'
-        location_country_name:
-          type:
-            - string
-            - 'null'
-          description: Country of the person's stored primary location.
-        location_country_code:
-          type:
-            - string
-            - 'null'
-          description: ISO alpha-2 country code of the primary location.
-        location_country_flag:
-          type:
-            - string
-            - 'null'
-          description: Flag emoji stored on the primary location's country record.
+          description: The person's place as text.
         primary_email:
           type:
             - string
@@ -27461,19 +27779,11 @@ components:
           type:
             - string
             - 'null'
-        region_code:
-          type:
-            - string
-            - 'null'
         postal_code:
           type:
             - string
             - 'null'
         country:
-          type:
-            - string
-            - 'null'
-        country_code:
           type:
             - string
             - 'null'
