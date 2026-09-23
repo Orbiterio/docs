@@ -1,0 +1,104 @@
+---
+title: "Leverage Outcome & Serendipity"
+description: "Contract profiles for the two v2 suggestion types without populated fixtures: user-requested Leverage Outcome with a beneficiary, and agent-generated Serendipity with suggestion_mode."
+icon: "sparkles"
+---
+
+<Danger>
+**DESIGN ONLY — CONTRACT PROFILE, NO FIXTURES OR UI.** The storage contract on [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) already accepts `leverage_outcome` and `serendipity` batches. No populated sample package, UI reference, or generation source exists for either type yet. The schema-example sections below are placeholders to be filled.
+</Danger>
+
+Two of the four v2 `suggestion_type` values have complete samples: `outcome` and `leverage_loop`. This page holds the contract profiles for the other two so their fixtures can be written against a fixed target.
+
+## Type comparison
+
+| Field | Leverage Outcome | Serendipity |
+| --- | --- | --- |
+| `suggestion_type` | `leverage_outcome` | `serendipity` |
+| `origin` | `user_requested` | `agent_generated` |
+| `request_suggestion_id` | Required; creates a minimal `request_suggestion` row when absent | `null`; no request row is created |
+| `requested_by` | Required local user UUID | `null` |
+| `beneficiary_contact_id` | Required person entity UUID | `null` |
+| `suggestion_mode` | `null` | `new_connection` or `reconnect` |
+| `trigger_source` | `null` | Optional attribution text for what generated the batch |
+| Scope key | `(org_id, leverage_outcome, beneficiary)` | `(org_id, serendipity, null)` |
+| `badge` | Optional display text, e.g. `LEVERAGE OUTCOME` | Optional display text |
+| Content fields | Outcome family: `trajectories[]`, `suggested_sequencing[]`, `key_people`, `hooks[]` | Same storage model; content contract to be confirmed |
+
+All four types share one storage model: same envelope, same suggestion/entity/child tables, same `ready`/`placeholder` rules, and the same `POST /v1/ingest/suggestions` receiver contract.
+
+## Leverage Outcome
+
+An outcome request made on behalf of a specific person: "help this beneficiary achieve X." It combines the beneficiary requirement of Leverage Loop with the route-based content of Outcome.
+
+- **Beneficiary** — `beneficiary_contact_id` carries the beneficiary's person entity UUID. Each suggestion declares the beneficiary in `entities[]` with role `beneficiary`, as in Leverage Loop.
+- **Requester and request row** — `user_requested` origin. Backend creates or validates the `request_suggestion` row from the envelope's org, requester, type, and beneficiary.
+- **Content** — trajectories, sequencing, and `key_people` behave as in Outcome: separate route narratives per connector and ordered sequencing steps. A `make_intro` action targeting the beneficiary becomes available where a route calls for an introduction; Outcome alone cannot use `make_intro` because it has no beneficiary.
+
+### Envelope example
+
+<Note>
+**Placeholder — schema example to be supplied.** Expected shape: the [Outcome sample](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#outcome) envelope with `suggestion_type: "leverage_outcome"`, `beneficiary_contact_id` set, and the beneficiary declared in each suggestion's `entities[]`.
+</Note>
+
+```json Leverage Outcome skeleton
+{
+  "schema_version": 2,
+  "batch_id": "{batch ID for leverage_outcome}",
+  "request_suggestion_id": "{request suggestion ID for leverage_outcome}",
+  "org_id": "{owning organization ID}",
+  "requested_by": "{requesting user ID}",
+  "suggestion_type": "leverage_outcome",
+  "beneficiary_contact_id": "{entity ID for beneficiary person}",
+  "origin": "user_requested",
+  "trigger_source": null,
+  "status": "complete",
+  "generated_at": "{generation timestamp in RFC3339 format}",
+  "suggestions": []
+}
+```
+
+## Serendipity
+
+Agent-generated suggestions: no user request precedes the batch. The engine surfaces an unexpected connection or a dormant relationship worth reviving.
+
+- **`suggestion_mode`** — `new_connection` or `reconnect`, set per suggestion. It is `null` on all other suggestion types.
+- **Attribution** — `origin` is `agent_generated`. `trigger_source` optionally names what produced the batch, such as a trigger or scheduled scan. Request, requester, and beneficiary IDs are all `null`, and no `request_suggestion` row is created.
+- **Modes** — `new_connection` surfaces someone outside the user's known first-degree network; `reconnect` surfaces an existing relationship that has gone quiet. Mode is generation and display metadata, not a different storage shape.
+- **Existing surfaces** — the [Serendipity mode](/guides/modes/serendipity) page, [Serendipity view menus](/guides/open-work/contextual-menus/serendipity-view-menus), and the `serendipity-*` endpoint family under V2 Suggestions cover the current-generation contract. This page's `serendipity` is the v2 delivery shape that replaces it.
+
+### Envelope example
+
+<Note>
+**Placeholder — schema example to be supplied.** Expected shape: envelope with `origin: "agent_generated"`, null request/requester/beneficiary, and `suggestion_mode` set on each suggestion. One fixture per mode (`new_connection`, then `reconnect`).
+</Note>
+
+```json Serendipity skeleton
+{
+  "schema_version": 2,
+  "batch_id": "{batch ID for serendipity}",
+  "request_suggestion_id": null,
+  "org_id": "{owning organization ID}",
+  "requested_by": null,
+  "suggestion_type": "serendipity",
+  "beneficiary_contact_id": null,
+  "origin": "agent_generated",
+  "trigger_source": "{optional trigger attribution}",
+  "status": "complete",
+  "generated_at": "{generation timestamp in RFC3339 format}",
+  "suggestions": []
+}
+```
+
+## Still needed
+
+| Missing piece | Notes |
+| --- | --- |
+| Populated Leverage Outcome fixture | One ready suggestion plus placeholders; content written against the skeleton above |
+| Populated Serendipity fixtures | One per mode: `new_connection`, then `reconnect` |
+| Serendipity content contract | Confirm whether ready serendipity suggestions require WHY, hooks, and actions, or carry a lighter shape |
+| `trigger_source` vocabulary | Enumerate producer names before Universe generates batches |
+| Badge decision per type | Display text such as `LEVERAGE OUTCOME` or a serendipity-specific badge |
+| UI reference for both views | No Midnight-palette reference exists for either type |
+
+[Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).
