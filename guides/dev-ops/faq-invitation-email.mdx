@@ -1,0 +1,80 @@
+---
+title: "FAQ Invitation Email"
+description: "The email infrastructure behind the due-diligence FAQ: Resend domains, DNS, keys, the no-reply mailbox, and how to change or debug it"
+---
+
+Adding an investor in the FAQ manager (`faq.manager.orbiter.io`) sends them an invitation from `<Inviter> @ Orbiter <no-reply@orbiter.io>` with the access code and a link to `dd.faq.orbiter.io`. The same sender carries the note managers get when an investor signs in. Everything goes through Resend. Ticket: [PLT-53](https://linear.app/orbiter-io/issue/PLT-53).
+
+## Sending domains in Resend
+
+All in region `us-east-1`, open and click tracking off. Each needs four DNS records, all in `orbiter-infra/environments/shared/dns_records.tf` (zone `orbiter-io`, project `orbiter-shared`):
+
+| Record | Name | Purpose |
+| --- | --- | --- |
+| TXT | `resend._domainkey.<domain>` | DKIM public key. Signs every message; this is what aligns with the From address for DMARC |
+| MX | `send.<domain>` → `feedback-smtp.us-east-1.amazonses.com` | Return-Path. Bounces go here so Resend records them |
+| TXT | `send.<domain>` → `v=spf1 include:amazonses.com ~all` | SPF for the Return-Path domain (receivers check SPF against Return-Path, not From) |
+| CNAME | `rsend.<domain>` → `send.forge.rmta.net` | Tracking host; required by Resend even with tracking off |
+
+| Domain | Used by | Key (Resend name → secret) |
+| --- | --- | --- |
+| `orbiter.io` | FAQ invitations and manager notes; waitlist welcome email | `orbiter faq manager` → `resend-api-key`; `orbiter waitlist` → `waitlist-resend-api-key` |
+| `faq.manager.orbiter.io` | nothing now (the FAQ's sender until 2026-09-21) | none |
+| `updates.orbiter.io` | backend identity-review email | backend's own key |
+
+The apex `orbiter.io` keeps Google Workspace MX and DKIM (`google._domainkey`), and its SPF is `v=spf1 include:_spf.google.com ~all`: Google is the only sender whose envelope domain is the apex. Resend's envelope is `send.orbiter.io`, so its SPF lives there. DMARC is `p=none` with no reporting address.
+
+Resend API keys are **sending-only and restricted to one domain**, and cannot be edited after creation. A sender on a new domain always means a new key.
+
+## The no-reply mailbox
+
+`no-reply@orbiter.io` is a Google Workspace user (one seat), not an alias. It exists so Gmail shows the Orbiter logo as the sender avatar: Gmail takes the avatar from the Google profile of the sending address. Setup, done once:
+
+- Profile photo: the Orbiter mark (`orbiter-frontend/public/images/orbiter-logo.png`, square), visibility **Anyone** on `aboutme.google.com`.
+- Unattended: a Gmail filter archives everything sent to it, and a vacation responder replies that the address is not monitored. No Reply-To is set on outgoing mail.
+- Password in the team password manager. Creating and editing the user needs the **User Management Admin** role in Workspace.
+
+## Where the configuration lives
+
+| Setting | Location |
+| --- | --- |
+| Sender address | `notify_from` in `orbiter-infra/environments/dev/orbiter-faq/variables.tf` → env `FAQ_NOTIFY_FROM` on Cloud Run |
+| Resend key | Secret Manager `resend-api-key` in `orbiter-dev`, mounted as `RESEND_API_KEY`; the service reads `latest` **at revision start** |
+| Access code in the email | Secret `faq-access-password` |
+| Template and send | `orbiter-faq/server/invite.mjs`; triggered from the allowlist handler in `server/manager.mjs` |
+
+## Changing the sender or domain
+
+1. Add the domain in Resend (`us-east-1`, tracking off). Copy its four records into `dns_records.tf` as a block like the existing ones. PR, then `/apply environments/shared`.
+2. In the Resend dashboard, click **Restart** on the domain. The API's verify call did not pick up new records; the dashboard button did, within minutes. Records answered on public resolvers long before Resend saw them, so a stale "Missing SPF records" warning is Resend's cache, not DNS.
+3. Create a sending-only key restricted to the domain. Store it as a new secret version with the bare key, no newline:
+   ```bash
+   echo -n <key> | gcloud secrets versions add resend-api-key --project orbiter-dev --data-file=-
+   ```
+   Disable the previous version afterwards.
+4. Change `notify_from`, PR, `/apply environments/dev/orbiter-faq`. Then **redeploy** (rerun "Deploy to Cloud Run" on `main` in `orbiter-faq`): the new secret version is only read by a new revision.
+5. Test with a real send (below), then a live one: add `you+test@orbiter.io` in the manager, expect "Access granted and invitation sent", revoke it.
+
+Do steps 1–3 before step 4, or every send fails until they are done.
+
+## Test a send
+
+From a checkout of `orbiter-faq`, signed in to `gcloud` with an `@orbiter.io` account:
+
+```bash
+RESEND_API_KEY="$(gcloud secrets versions access latest --secret resend-api-key --project orbiter-dev)" \
+FAQ_ACCESS_PASSWORD="$(gcloud secrets versions access latest --secret faq-access-password --project orbiter-dev)" \
+FAQ_NOTIFY_FROM='Orbiter FAQ <no-reply@orbiter.io>' GCP_REQUEST_TIMEOUT_MS=10000 \
+node -e 'import("./server/invite.mjs").then(({sendInvite}) => sendInvite("you+test@orbiter.io", "you@orbiter.io").then(console.log))'
+```
+
+## When a send fails
+
+| Resend response | Cause |
+| --- | --- |
+| `403 This API key is not authorized to send emails from <domain>` | The key in the secret is restricted to a different domain |
+| `400 API key is invalid` | The secret value is not the bare key (a trailing newline, or `%s` from a bad `printf`) |
+| `400 The associated domain with your API key is not verified` | The domain is not fully verified in Resend; click Restart on it |
+| Manager shows "The invitation did not send to X" | Any of the above; the person is still added. Cloud Run logs `Manager: invitation to <email> not sent` with the reason |
+
+Resend keeps every sent email with its status and full content under Emails in the dashboard. One invitation per investor, inviter and day; a repeat within the day is silently deduplicated.
