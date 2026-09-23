@@ -22,7 +22,7 @@ import UniverseEdgeReference from '/snippets/ontology/universe-edge-reference.md
 ## Current Universe reference
 
 <Warning>
-**Required rule: older work = HIGHER weight; lower = stronger.** The current Go `AUTHORED` / `CONTRIBUTED_TO` ladders are reversed. Proposed corrected tiers preserve the existing bands: projects **15/20/25/30/35/40** and publications **15/18/22/25** as age increases. The generated reference records the inspected implementation; it does not approve those incorrect assignments. Universe code and graph data are unchanged. [Developer change list](/files/graph/universe-developer-handoff.md).
+**Rule: older work = HIGHER weight; lower = stronger.** The Go `AUTHORED` / `CONTRIBUTED_TO` ladders were corrected on 2026-09-22 to projects **15/20/25/30/35/40** and publications **15/18/22/25** as age increases, undated = weakest tier. The generated reference below is regenerated from the committed Universe revision; until it is re-run it still shows the pre-fix registry, and stored graph edges keep the old values until the reconciliation run. [Developer change list](/files/graph/universe-developer-handoff.md).
 </Warning>
 
 <UniverseEdgeReference />
@@ -32,8 +32,8 @@ import UniverseEdgeReference from '/snippets/ontology/universe-edge-reference.md
 - Read `weight_kind` and CSV notes: discrete tiers are not continuous ranges. Endpoint matters (`PUBLISHED_BY` publication 20 vs game 45; music `PRODUCED` 18 vs stage 12–35).
 - `HAS_INVESTMENT_THESIS` is deliberately unweighted. User-graph platform/content edges are also unweighted by contract; their App writers were not inspected in this Universe audit.
 - Go emits past-tense `WORKED_AT` and `WAS_ADVISOR_TO`. Observed `WORKS_AT` still includes legacy costs up to 40.
-- `AUTHORED` Go age cutoffs are ≤1/≤3/≤6 years, then older, at 25/22/18/15. `CONTRIBUTED_TO` is 40 current, then 35/30/25/20/15. **Older work has lower cost in current code**, contrary to the earlier prose. This is a confirmed bug against the required older = higher rule, awaiting developer correction.
-- Stage `PRODUCED` targets `Stage_Production`; registry `Film_TV:stage` / planned status is stale. Stage `WORKED_ON` 30 exists outside the registry inventory. Media `PART_OF` remains a stale registry proposal; the accepted unbuilt name is `SESSION_OF` 30.
+- `AUTHORED` Go age cutoffs are ≤1/≤3/≤6 years, then older, at **15/18/22/25** (corrected 2026-09-22; undated 25). `CONTRIBUTED_TO` is **15** ongoing or ending this year, then **20/25/30/35** for 1–4 years, **40** older or finished without an end year. Age is measured against an injected clock, so edges re-grade on re-enrichment.
+- Registry drift closed 2026-09-22: `edges.ProducedStage` targets `Stage_Production` (live) and the stage lane reads its billing weights from it; `edges.StageWorkedOn` 30 is in the inventory; the media proposal is `edges.SessionOf` 30 (planned), `PART_OF` stays reserved for user projects.
 - Observed award weights are 40/30/35, `LOCATED_IN` is 70 in this snapshot (80 country tier remains supported), and `HAS_SUBDOMAIN` is 100. No zero/sub-1 weighted edges were observed.
 
 See [current parameters, description receipts and writer sources](/guides/ontology/edges#current-universe-writers-and-parameters). The refresh script and audit method are documented in `files/graph/README.md`. Graph counts are a dated snapshot, not a deployment guarantee.
@@ -208,7 +208,7 @@ Music label bridges use the shared company model: `Company:Music_Label` can link
 | `[:CONTRIBUTED_TO]` | `(Person)→(Project)` | — | 15–40 *(recency; `#12579`)* |
 | `[:REGISTERED_FOR]` | `(Person)→(Event:Live_*)` | 1,982 | 65 |
 
-Both work-product edges are **recency-graded**, but these values give **older work lower cost**. This is the historical Xano mapping; current Go `AUTHORED` cutoffs are documented above. `CONTRIBUTED_TO`: **40** current/ongoing, **35 / 30 / 25 / 20** for ending ≤1 / ≤2 / ≤3 / ≤4 years ago, **15** older. `AUTHORED`: **25** current-year, **22** ≤2y, **18** ≤4y, **15** older.
+Both work-product edges are **age-graded**. The snapshot values above are the historical Xano mapping, which gave older work a lower cost; the Universe writer was corrected on 2026-09-22 so older work costs more: `CONTRIBUTED_TO` **15** ongoing, **20 / 25 / 30 / 35** for ending 1 / 2 / 3 / 4 years ago, **40** older or undated; `AUTHORED` **15** ≤1y, **18** ≤3y, **22** ≤6y, **25** older or undated. Stored edges keep the old values until the reconciliation run.
 
 ### Other / artifacts
 
@@ -416,7 +416,7 @@ Designed in the [Donors](/guides/open-work/roadmap/donors) build plan (Enrichmen
 
 ### Person / Company → Stage production (Broadway lane)
 
-The direct `PRODUCED` billing bands were set at the 2026-08-21 cross-lane §3.6 sitting. **2026-09-07 contract synchronization:** the target is `Stage_Production`, and the [Go theatre edge specification](/guides/ontology/edges#theatre-edges) adds proposed structural, authorship and award contracts. No theatre writer is implemented. Co-producing pairs derive from credits on the same production; there is no `CO_PRODUCED_WITH` edge.
+The direct `PRODUCED` billing bands were set at the 2026-08-21 cross-lane §3.6 sitting. **2026-09-07 contract synchronization:** the target is `Stage_Production`, and the [Go theatre edge specification](/guides/ontology/edges#theatre-edges) adds proposed structural, authorship and award contracts. `MergeProduced` and `MergeStageWorkedOn` are implemented in Universe behind `STAGE_EDGE_WRITES_ENABLED`, reading `edges.ProducedStage` / `edges.StageWorkedOn`; no theatre edge was observed in the 2026-09-22 snapshot. Co-producing pairs derive from credits on the same production; there is no `CO_PRODUCED_WITH` edge.
 
 | Edge / theatre endpoints | Weight | Status / scoring rationale |
 | --- | --- | --- |

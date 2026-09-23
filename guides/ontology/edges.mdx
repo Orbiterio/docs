@@ -33,7 +33,7 @@ The graph contained **24,755 edges across 56 relationship types**. Of those, **2
 [Current weights and endpoint variants](/guides/ontology/edge-weights#current-universe-reference) · [Weights CSV](/files/graph/edge-weights.csv) · [Observed property coverage CSV](/files/graph/edge-properties-observed.csv) · [Dated aggregate evidence](/files/graph/graph-audit-2026-09-22.json)
 
 <Warning>
-**Required scoring correction (Mark, September 22): lower weight = stronger; older work must have a HIGHER weight.** Current `AUTHORED` and `CONTRIBUTED_TO` code reverses that rule. Their values below report the bug, not the intended policy. Proposed reversal preserves the bands: project 15 →20 →25 →30 →35 →40 as age increases; publication 15 →18 →22 →25. Universe code and graph data remain unchanged pending developer implementation. [Developer change list](/files/graph/universe-developer-handoff.md).
+**Scoring rule (Mark, September 22): lower weight = stronger; older work has a HIGHER weight.** The Universe registry (`internal/kernel/edges`) was corrected on 2026-09-22: `CONTRIBUTED_TO` grades **15 / 20 / 25 / 30 / 35 / 40** and `AUTHORED` **15 / 18 / 22 / 25** as age increases, an undated work takes the weakest tier, and the age is measured against an injected clock instead of a fixed 2026. The graph counts on this page are the **pre-fix snapshot**: edges already stored still carry the old values until the bounded reconciliation run lands. [Developer change list](/files/graph/universe-developer-handoff.md).
 </Warning>
 
 ### Corrected implementation differences
@@ -42,13 +42,13 @@ The graph contained **24,755 edges across 56 relationship types**. Of those, **2
 | --- | --- | --- |
 | Employment | `WORKS_AT` current seniority 5–20; `WORKED_AT` past seniority +20 (25–40); `WAS_ADVISOR_TO` 12 | Go uses distinct past-tense labels. Observed `WORKS_AT` still spans 5–40, so historical rows are not uniformly relabeled. |
 | Direct angel investment | Person:Angel → Company `INVESTED_IN` 25 | The former work-derived 15 branch is defunct; funding-round variants remain VC 20 / angel 25. |
-| Music | `IMPRINT_OF` 12, `DISTRIBUTED_BY` 40 and `FROM_AREA` 70 have writers and observed edges | These are not forward gaps. `ACQUIRED_BY` 25 accepts Company → Company, beyond music labels. `SAME_AS` remains a legacy identity contract; the registry explicitly says it was not ported. |
+| Music | `IMPRINT_OF` 12, `DISTRIBUTED_BY` 40 and `FROM_AREA` 70 have writers and observed edges | These are not forward gaps. `ACQUIRED_BY` 25 accepts Company → Company, beyond music labels. `SAME_AS` remains a legacy identity contract; the registry note reads "legacy Xano writer only, Universe never writes it". |
 | Game relationships | `MergeGameEdge` implements the registered endpoint allowlist; `MergeBasedOn` owns adaptation | Game relationships are no longer blanket “unbuilt.” The snapshot includes `DEVELOPED_BY`, `IN_GAME_SERIES`, `USES_ENGINE` and game publishing edges, but not every supported family. |
-| Theatre | `MergeProduced`: Person/Company → Stage_Production, 12/16/22/28/35. `MergeStageWorkedOn`: Person → Stage_Production, 30. Stage awards 40/30/35. | Registry `ProducedStage` still says planned / `Film_TV:stage`; actual writer uses `Stage_Production`. `WORKED_ON` stage variant is missing from `edges.All()`. Award recipient writer currently accepts **Person only**, not the proposed Company extension. No theatre edges were observed in this snapshot; implementation is not proof of deployed data. |
+| Theatre | `MergeProduced`: Person/Company → Stage_Production, 12/16/22/28/35. `MergeStageWorkedOn`: Person → Stage_Production, 30. Stage awards 40/30/35. | Registry corrected 2026-09-22: `edges.ProducedStage` targets `Stage_Production`, status live, and the stage lane reads its weights from it; `edges.StageWorkedOn` 30 is in `edges.All()`. Award recipient writer currently accepts **Person only**, not the proposed Company extension. No theatre edges were observed in this snapshot; implementation is not proof of deployed data. |
 | Person relations | Deep Bio person-relation writer implements the documented fixed/tiered costs; several families observed | The whole section is no longer “not deployed.” Missing families in this snapshot do not prove missing writers. |
-| Appearances | Deep Bio writes `SPOKE_AT` and `APPEARED_IN`; both observed | The expanded media ledger/session contract remains proposed. `SESSION_OF` 30 is the accepted replacement for unbuilt media `PART_OF`; registry still has the older name. |
+| Appearances | Deep Bio writes `SPOKE_AT` and `APPEARED_IN`; both observed | The expanded media ledger/session contract remains proposed. `SESSION_OF` 30 is the accepted replacement for unbuilt media `PART_OF`; the registry carries `edges.SessionOf` (planned) since 2026-09-22. |
 | Governance / donations | `OFFICER_OF` and `DONOR_TO` have writers; only `OFFICER_OF` observed here | Do not label the entire v1.2 lane set unbuilt. `POLITICAL_DONOR_TO` / `RELATED_PERSON_OF` remain proposals in the registry. |
-| Work recency | `AUTHORED`: age ≤1y =25, ≤3y =22, ≤6y =18, older =15; undated =25. `CONTRIBUTED_TO`: current/undated =40, then 35/30/25/20/15. | Current Go publication cutoffs differ from the old Xano snippet. Both formulas give older work a **lower traversal cost**; “newer = stronger” was incorrect. This is a confirmed implementation mismatch: required policy is older = higher cost. Developer correction is pending. |
+| Work recency | Corrected 2026-09-22. `AUTHORED`: age ≤1y =15, ≤3y =18, ≤6y =22, older =25; undated =25. `CONTRIBUTED_TO`: ongoing or ending this year =15, then 20/25/30/35 for 1–4 years, 40 older; finished with no end year =40. | Older work now costs more, as required. Go publication cutoffs (≤1/≤3/≤6) are kept; the old Xano snippet used current/≤2/≤4. Undated is the weakest tier because missing evidence is not recent evidence. Age is measured against an injected clock (`person.Deps.Now`), so an edge re-grades on every re-enrichment. Stored edges keep the old values until the reconciliation run. |
 
 Source files: [`edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/kernel/edges/edges.go), [`person_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/person_edges.go), [`music_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/music_edges.go), [`game_edges.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/game_edges.go), [`stage.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/stage.go), [`stage_award.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/stage_award.go), [`appearances.go`](https://github.com/Orbiterio/orbiter-universe/blob/bb0fc045/internal/platform/graph/appearances.go).
 
@@ -761,15 +761,15 @@ mvp/resolve/resolve-edges-projects-publications — #12579
 
 ### CONTRIBUTED_TO
 
-**Implementation mismatch:** the historical/current code ladder below is reversed. Required policy is older work = higher weight. Proposed corrected ladder: current 15, then 20/25/30/35/40 with increasing age. See the [developer change list](/files/graph/universe-developer-handoff.md).
+**Corrected 2026-09-22 (Mark's rule: older work = higher weight).** The Universe writer grades **15** for an ongoing project or one ending this year, then **20 / 25 / 30 / 35** for one to four years since the end, **40** for five or more, and **40** for a finished project with no end year. The Xano snippet below is historical and reversed; do not copy its ladder.
 
 Person contributed to a project (work product).
 
 | | |
 |---|---|
 | **Pattern** | `(Person)-[CONTRIBUTED_TO]->(Work:Project)` |
-| **Weight** | **dynamic: 40 / 35 / 30 / 25 / 20 / 15** by project recency |
-| **Writer** | `mvp/resolve/resolve-edges-projects-publications` (#12579) |
+| **Weight** | **dynamic: 15 / 20 / 25 / 30 / 35 / 40** by years since the project ended (`edges.ContributedTo`) |
+| **Writer** | Universe: `enrichment/person/steps_credentials.go` → `platform/graph/person_credentials.go` `MergeCredentialEdge`. Historical: `mvp/resolve/resolve-edges-projects-publications` (#12579) |
 
 ```cypher
 WITH
@@ -808,26 +808,29 @@ SET r.description = CASE
 END
 ```
 
-| Recency | Weight |
+| Recency (Universe, 2026-09-22) | Weight |
 |---|---|
-| Current (no end_year or end_year ≥ current_year) | **40** |
-| Within 1 year | **35** |
-| Within 2 years | **30** |
-| Within 3 years | **25** |
-| Within 4 years | **20** |
-| 5+ years ago | **15** |
+| Ongoing (`is_current`), or end year ≥ this year | **15** |
+| Ended 1 year ago | **20** |
+| Ended 2 years ago | **25** |
+| Ended 3 years ago | **30** |
+| Ended 4 years ago | **35** |
+| Ended 5+ years ago | **40** |
+| Finished, no end year (`undated`) | **40** |
+
+The historical Xano ladder above (40 → 15 as age increases) is the reversed one and is kept only as a record.
 
 ---
 
 ### AUTHORED
 
-Person authored a publication-shaped work. **Current Go cutoffs:** age ≤1 year →25, ≤3 years →22, ≤6 years →18, older →15; undated →25. The Xano snippet below is historical and uses different boundaries. Both implementations currently assign lower cost to older work, **contrary to the required policy**. Developer correction is pending; this historical snippet must not be copied as the desired formula.
+Person authored a publication-shaped work. **Corrected 2026-09-22 (Mark's rule: older work = higher weight).** Universe cutoffs: age ≤1 year → **15**, ≤3 years → **18**, ≤6 years → **22**, older → **25**; undated → **25** (the weakest tier: missing evidence is not recent evidence). The Xano snippet below is historical, reversed and uses different boundaries; do not copy it.
 
 | | |
 |---|---|
 | **Pattern** | `(Person)-[AUTHORED]->(Work:Publication)` |
-| **Weight** | **dynamic: 25 / 22 / 18 / 15** by recency |
-| **Writer** | `mvp/resolve/resolve-edges-projects-publications` (#12579) |
+| **Weight** | **dynamic: 15 / 18 / 22 / 25** by years since publication (`edges.Authored`) |
+| **Writer** | Universe: `enrichment/person/steps_credentials.go` → `platform/graph/person_credentials.go` `MergeCredentialEdge`. Historical: `mvp/resolve/resolve-edges-projects-publications` (#12579) |
 
 ```cypher
 WITH
@@ -4733,8 +4736,8 @@ Quick scan of all edge weights, sorted strongest → weakest. One integer scale 
 | `MEMBER_OF` (music past) | **12** |
 | `MENTOR` | **14** |
 | OFFICER_OF (Person → nonprofit Company) | **14** officer · **20** key employee |
-| `AUTHORED` | 15-25 (recency-tiered) |
-| `CONTRIBUTED_TO` | 15-40 (recency-tiered) |
+| `AUTHORED` | 15-25 (age-tiered, older = higher; corrected 2026-09-22) |
+| `CONTRIBUTED_TO` | 15-40 (age-tiered, older = higher; corrected 2026-09-22) |
 | `INVESTED_IN` (person→company, work-derived — defunct #2800 branch) | **15** |
 | `INVESTMENT_PARTNER_IN` | **15** |
 | `LEAD_INVESTED_IN` | **15** |
