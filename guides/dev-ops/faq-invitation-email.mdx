@@ -1,0 +1,63 @@
+---
+title: "FAQ Invitation Email"
+description: "How investors get invited to the due-diligence FAQ, where each piece lives, and how to test or debug a send"
+---
+
+Adding an investor in the FAQ manager (`faq.manager.orbiter.io`) emails them an invitation: who invited them, the access code, and a link to `dd.faq.orbiter.io`. The same sender also carries the note managers get when an investor signs in. Ticket: [PLT-53](https://linear.app/orbiter-io/issue/PLT-53).
+
+## What is sent
+
+| | Value |
+| --- | --- |
+| From | `<Inviter> @ Orbiter <no-reply@orbiter.io>` |
+| Subject | `<Inviter> invited you to access the Interactive Orbiter.io Due Diligence FAQ` |
+| Reply-To | none |
+| Body | Logo, heading, access code in a select-on-tap block, "Open the FAQ" button, confidentiality line, postal address |
+
+The inviter is the manager who clicked Add. Their first name is the part of their sign-in email before `@` (`mark@orbiter.io` becomes "Mark"). The access code is read from `FAQ_ACCESS_PASSWORD` at send time.
+
+## Where it lives
+
+| Piece | Location |
+| --- | --- |
+| Template and send | `orbiter-faq` → `server/invite.mjs` (`renderInvite`, `sendInvite`) |
+| Trigger | `orbiter-faq` → `server/manager.mjs`, the `/api/manager/allowlist` handler, after the allowlist write |
+| Resend call | `orbiter-faq` → `server/notify.mjs` (`deliver`) |
+| Sender address | `orbiter-infra` → `environments/dev/orbiter-faq/variables.tf` (`notify_from`), reaches the service as `FAQ_NOTIFY_FROM` |
+| Resend key | Secret Manager `resend-api-key` in `orbiter-dev`; sending-only, restricted to `orbiter.io`; the service reads `latest` |
+| DNS for `orbiter.io` in Resend | `orbiter-infra` → `environments/shared/dns_records.tf`: `resend._domainkey` TXT, `send` MX and TXT, `rsend` CNAME |
+| Sender mailbox | Google Workspace user `no-reply@orbiter.io`, unattended: all mail auto-archived, auto-reply says it is not monitored. Its profile photo is the Orbiter logo, which Gmail can show as the sender avatar |
+
+## Behaviour
+
+- Only newly added addresses are emailed. Re-adding someone already on the list sends nothing.
+- At most one invitation per investor, inviter and day.
+- A failed send never undoes the add. The manager shows "The invitation did not send to X; email them yourself", and the response lists them under `uninvited`.
+- `scripts/faq-invite.sh` adds people without emailing them.
+
+## Test a send
+
+From a checkout of `orbiter-faq`, with `gcloud` signed in to an `@orbiter.io` account:
+
+```bash
+RESEND_API_KEY="$(gcloud secrets versions access latest --secret resend-api-key --project orbiter-dev)" \
+FAQ_ACCESS_PASSWORD="$(gcloud secrets versions access latest --secret faq-access-password --project orbiter-dev)" \
+FAQ_NOTIFY_FROM='Orbiter FAQ <no-reply@orbiter.io>' GCP_REQUEST_TIMEOUT_MS=10000 \
+node -e 'import("./server/invite.mjs").then(({sendInvite}) => sendInvite("you+test@orbiter.io", "you@orbiter.io").then(console.log))'
+```
+
+For the live path, add an alias such as `you+test@orbiter.io` in the manager, confirm "Access granted and invitation sent", then remove it. No Firestore record is created until the alias signs in.
+
+## When a send fails
+
+| Resend response | Cause |
+| --- | --- |
+| `403 This API key is not authorized to send emails from orbiter.io` | The key in `resend-api-key` is restricted to another domain |
+| `400 API key is invalid` | The secret value has extra characters (check for a trailing newline or shell formatting) |
+| `400 The associated domain with your API key is not verified` | `orbiter.io` is not verified in Resend; check its records there and click Restart |
+
+Resend keeps the sent email, its status and its full content under Emails in the dashboard. Cloud Run logs the failure as `Manager: invitation to <email> not sent`.
+
+## Changing the sender
+
+`notify_from` is a Terraform variable. Any new domain has to be added in Resend, its four DNS records added to `dns_records.tf`, and the key replaced with one allowed to send from that domain, before the variable is changed. Cloud Run reads the secret at revision start, so a new secret version needs a redeploy.
