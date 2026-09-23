@@ -2360,6 +2360,120 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/relations/discover:
+    post:
+      operationId: discoverPendingPersonRelations
+      tags:
+        - Enrichment
+      summary: Run the Edge Resolver by hand — search strong keys for name-only pending relations (management plane)
+      description: |
+        The Edge Resolver (Mark's page 2026-09-22) takes a pending relation whose counterpart is a bare name, looks in the estate first, then classifies the counterpart (one judge call), searches the anchor the evidence points at (LinkedIn, IMDb, MusicBrainz), gates the hits in code and judges each candidate against the row's own evidence. An accepted key is written to the row and the person is offered to the fan-out brake; the existing resolve pass then claims the row when their enrichment lands. With `dry_run` true (the default when omitted) the run is shadow: every verdict is recorded on the row, nothing is attached, nothing is queued and no review is filed. Only a live run asks a human. Rows in one counterpart group are judged once. Spend is bounded by the rolling daily cap; a full cap refuses the paid stages and leaves the row untouched. `relation_id` runs that row's whole group regardless of the attempt cap; otherwise `limit` groups are taken fewest-attempts-first. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelationDiscoverRequest'
+      responses:
+        '200':
+          description: The tick tally and the mode it ran under.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationDiscoverEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/relations/{id}/anchor:
+    post:
+      operationId: anchorPersonRelationCounterpart
+      tags:
+        - Enrichment
+      summary: Apply a reviewer's pick to a pending relation group (management plane)
+      description: |
+        The decision on a `person_relation_*` review filing, and only those: a filing from another lane is refused. This is not the public create-person call — it writes the key on the relation rows first, then offers the person to the fan-out brake, which reaches the same gate `get-add` uses. Without that key on the rows nothing links them to the person afterwards, which is why an operator never creates the counterpart by hand. The reviewer names the key, not the path: a key a person already holds links the rows to them, a key nobody holds is written on the rows and the person is offered to the fan-out brake, which queues their enrichment. Every row naming the same counterpart through the same organization is decided together. It runs whatever `ENRICHMENT_RELATION_DISCOVER_MODE` is, because a reviewer has already made the decision the mode defers. Pass `review_item_id` to close the filing as confirmed. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Any pending relation row in the group.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelationAnchorRequest'
+      responses:
+        '200':
+          description: What the pick did to the group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationAnchorEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/enrichment/persons/relations/{id}/park:
+    post:
+      operationId: parkPersonRelationCounterpart
+      tags:
+        - Enrichment
+      summary: Record that a reviewer could not place a pending relation counterpart (management plane)
+      description: |
+        "None of these." The sweep stops spending on the group and the rows stay pending, so they remain visible on the gap tracker. Pass `review_item_id` to close the filing as rejected; like the anchor route it decides `person_relation_*` filings only. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelationParkRequest'
+      responses:
+        '200':
+          description: The parked group.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationAnchorEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
   /v1/admin/enrichment/persons/{id}/status:
     get:
       operationId: personEnrichmentStatus
@@ -9746,6 +9860,14 @@ components:
             - ambiguous
             - self
             - null
+        discover_attempts:
+          type: integer
+          description: The Edge Resolver's own attempts, the most any row spent.
+        last_discover_outcome:
+          type:
+            - string
+            - 'null'
+          description: Why the Edge Resolver left the row (anchored, resolved, shadow_would_anchor, shadow_would_resolve, below_threshold, insufficient, ambiguous, parked, evidence_never_names_counterpart, skipped_likely_no_via, budget_denied, …).
         first_seen_at:
           type: string
           format: date-time
@@ -9759,6 +9881,8 @@ components:
         - rows_pending
         - resolve_attempts
         - last_resolve_outcome
+        - discover_attempts
+        - last_discover_outcome
         - first_seen_at
     PendingRelationsEnvelope:
       type: object
@@ -9823,6 +9947,145 @@ components:
         - data
         - error
         - meta
+    RelationDiscoverRequest:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: Counterpart groups to judge in this call; omitted = the configured batch.
+        relation_id:
+          type: string
+          format: uuid
+          description: Run this pending relation's whole group instead of a batch.
+        dry_run:
+          type: boolean
+          description: Shadow mode for this call. Omitted means true.
+    RelationDiscover:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            - shadow
+            - live
+        groups:
+          type: integer
+          description: Counterpart groups judged.
+        anchored:
+          type: integer
+          description: Groups that got a new key (live) or would have (shadow, outcome shadow_would_anchor).
+        resolved:
+          type: integer
+          description: Groups linked to a person already held (live) or that would be (shadow, outcome shadow_would_resolve).
+        below_threshold:
+          type: integer
+          description: Groups where the judge said same_person but under the accept bar even after corroboration.
+        insufficient:
+          type: integer
+        ambiguous:
+          type: integer
+        skipped:
+          type: integer
+          description: Evidence never names the counterpart, or a `likely` tie with no via.
+        budget_denied:
+          type: integer
+        errors:
+          type: integer
+      required:
+        - mode
+        - groups
+        - anchored
+        - resolved
+        - below_threshold
+        - insufficient
+        - ambiguous
+        - skipped
+        - budget_denied
+        - errors
+    RelationDiscoverEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/RelationDiscover'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    RelationAnchorRequest:
+      type: object
+      properties:
+        anchor_kind:
+          type: string
+          enum:
+            - linkedin
+            - imdb
+            - mbid
+        anchor_ref:
+          type: string
+          description: The profile URL or the bare key; it is normalized to the form entity_identifiers stores.
+        review_item_id:
+          type: string
+          format: uuid
+          description: The filing to close as confirmed.
+        note:
+          type: string
+          maxLength: 500
+      required:
+        - anchor_kind
+        - anchor_ref
+    RelationAnchor:
+      type: object
+      properties:
+        relation_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        outcome:
+          type: string
+          description: resolved when the key was already held, anchored when the person was queued, parked when the reviewer declined.
+        counterpart_entity_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        queued:
+          type: boolean
+          description: True when the person was offered to the fan-out brake.
+      required:
+        - relation_ids
+        - outcome
+        - counterpart_entity_id
+        - queued
+    RelationAnchorEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/RelationAnchor'
+        error:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    RelationParkRequest:
+      type: object
+      properties:
+        review_item_id:
+          type: string
+          format: uuid
+          description: The filing to close as rejected.
+        note:
+          type: string
+          maxLength: 500
     PersonRunCompletion:
       type: object
       description: |
