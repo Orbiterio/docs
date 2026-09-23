@@ -11,7 +11,7 @@ Demo suggestions are hand-written. Mark writes the content — who is suggested,
 </Warning>
 
 <Info>
-Checked against `orbiter-backend` `main` at `fd32f8e` (2026-09-17) and `orbiter-frontend` `dev` at `24564350` (2026-09-17). Recheck `cmd/ingestpackage/main.go` if the flags below stop working.
+Checked against `orbiter-backend` `main` at `aa647514` (2026-09-23) and `orbiter-frontend` `dev` at `24564350` (2026-09-17). The CLI, validation, and store code are unchanged since `fd32f8e`; the changes since then are [removing a demo](#fix-or-re-run-a-demo) and the [demo environment switch](#demo-environments). Recheck `cmd/ingestpackage/main.go` if the flags below stop working. For what the CLI calls and which tables it writes, see [Suggestion Service Ingest](/guides/open-work/suggestion-delivery-and-tables/suggestion-service-ingest).
 </Info>
 
 ## Who does what
@@ -508,7 +508,7 @@ The entity roles `beneficiary` and `target_org` must be spelled exactly; the UI 
 | Action groups | Every group has at least one action; every `group_ref` and `trajectory_ref` names something in the same suggestion |
 | Emails and phones | Non-empty lists, no duplicates, bare addresses, E.164 numbers |
 | `suggestion_mode` | `null` for both types |
-| Docs placeholder UUIDs | Any ID starting `019a0000-0000-7000-8000-` aborts the run. The backend test fixtures use this prefix, so a copied fixture will not load until its IDs are replaced |
+| Docs placeholder UUIDs | Any ID starting `019a0000-0000-7000-8000-` aborts the run. The backend test fixtures use this prefix, so a copied fixture will not load until its IDs are replaced. `-allow-placeholder <id>[,<id>]` exempts specific IDs; do not use it for a demo |
 | Requester | Must be an active member of `-org`, or the load is refused as forbidden |
 
 ## Replicate the demo for another user
@@ -559,6 +559,16 @@ Entity, user, and organization IDs are row IDs in one database and are not guara
 
 This is the case to be careful with. A stale entity ID from another environment passes every load check except the beneficiary's and then renders the wrong card.
 
+## Demo environments
+
+A demo account can still request new Leverage Loops in the app, and normally each one is sent to Universe. In a demo environment, set this in the backend's environment:
+
+```bash .env
+SUGGESTIONS_LOOP_FILING_DISABLED=true
+```
+
+With the switch on, a loop the user dispatches stays in `processing` with no Universe job until the user deletes it. It does not affect `cmd/ingestpackage`, which never files with Universe. The default is `false`; leave it that way in every other environment, or no real loop is ever generated.
+
 ## Fix or re-run a demo
 
 | Situation | What to do |
@@ -566,10 +576,17 @@ This is the case to be careful with. A stale entity ID from another environment 
 | Rerun the identical file with the same flags | Safe. The report shows `created: false` and nothing changes |
 | The load was rejected | Fix the file and rerun with the same request and batch IDs; nothing was stored |
 | Copy or contacts need changing after a successful load | New batch ID, same request ID, same scope. The same batch ID with different content is a conflict |
-| The old version is still visible | Expected. The feed returns every complete batch in the scope, newest first, so the corrected batch appears above the original. The CLI has no delete; removing a stored batch is a manual database change and needs explicit approval first |
+| The old version is still visible | Expected. The feed returns every complete batch in the scope, newest first, so the corrected batch appears above the original. Hide the old cards, or remove the whole demo and reload it |
+| Hide one card | Signed in as a member of the batch's organization: `PATCH /v1/suggestion-batches/{batch_id}/suggestions/{suggestion_id}` with `{"dismissed": true}`. The card leaves the feed but stays on the batch detail read (`GET /v1/suggestion-batches/{batch_id}`); `{"dismissed": false}` restores it. The IDs are the stored suggestion row IDs, not `source_ref` |
+| Remove the whole demo | Signed in as the requesting user: `DELETE /v1/leverage-loops/{request_id}`. It deletes every batch loaded under that request ID, with all their suggestions and actions, then the request row. The handler does not check the request type, so it removes an Outcome request too. It still returns `409` if another row, such as a copilot conversation, references the request |
+
+<Note>
+The `deleteLeverageLoop` description in `api/suggestions.openapi.yaml` still says a loop with stored suggestions cannot be deleted. That was true before `4d043cc3`; the code now deletes the batches first. The CLI itself still has no delete, and deleting rows directly in the database still needs explicit approval first.
+</Note>
 
 ## Related pages
 
+- [Suggestion Service Ingest](/guides/open-work/suggestion-delivery-and-tables/suggestion-service-ingest) — the Go function behind the CLI and the tables it fills.
 - [Sample Suggestion Data](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data) — the full Leverage Loop and Outcome templates.
 - [Add Required Entities](/guides/open-work/suggestion-delivery-and-tables/add-required-entities) — the people and companies the samples reference, with identity links.
 - [Leverage Loop UI](/guides/open-work/suggestion-delivery-and-tables/leverage-loop-ui) and [Outcome UI](/guides/open-work/suggestion-delivery-and-tables/outcome-ui) — what each field renders as.
