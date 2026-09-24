@@ -1,6 +1,6 @@
 ---
 title: "AI & Media Serendipity Demo"
-description: "A v2 Serendipity demo package: nine October 2026 AI and media events, three ready with a WHY and actions, six placeholders, plus the suggestion_request record and the live_event seed records."
+description: "A v2 Serendipity demo package: nine October 2026 AI and media events, three ready with a WHY and actions, six placeholders, plus the batch scope and the live_event seed records."
 icon: "calendar-check"
 ---
 
@@ -11,7 +11,7 @@ This is a hand-written **Serendipity** demo package for the events use case: the
 </Note>
 
 <Warning>
-  **Serendipity diverges from the receiver design on two points.** [Leverage Outcome & Serendipity](/guides/open-work/suggestion-delivery-and-tables/leverage-outcome-and-serendipity) defines Serendipity as `agent_generated` with null request, requester and beneficiary. The CLI path used here always stores `user_requested` and needs a request row, so this demo carries a `suggestion_request` record with `copilot_mode: "serendipity"`. Second, the cards are events, not people: `entity_type` is `live_events`, which is in `nodespub.ValidEntityType`, and `suggestion_mode` is `new_connection` because the taxonomy has no event value. Both are demo choices, not contract changes.
+  **Serendipity loads as `agent_generated`, and the cards are events.** [Leverage Outcome & Serendipity](/guides/open-work/suggestion-delivery-and-tables/leverage-outcome-and-serendipity) defines Serendipity as `agent_generated` with null request, requester and beneficiary, and the backend's `validateScope` enforces it: a `user_requested` Serendipity batch is rejected. So this demo has no `suggestion_request` row and is found through the org's feed (`GET /v1/suggestion-batches?organization_id=…&suggestion_type=serendipity`). Loading it needs the `cmd/ingestpackage` Serendipity mode on `orbiter-backend` `thursday_dev` (commit `443ba4ab`, not yet on `main`). Second, the cards are events, not people: `entity_type` is `live_events`, which is in `nodespub.ValidEntityType`, and `suggestion_mode` is `new_connection` because the taxonomy has no event value. That one is a demo choice, not a contract change.
 </Warning>
 
 ## Serendipity response
@@ -28,50 +28,20 @@ The copy the agent delivers. The first line is the batch narrative; each of the 
   **NAB Show New York, Oct 21–22, Javits.** Same week as Paley. Five themes: AI, creator economy, streaming, sports, broadcasting. Low cost, high operator density.
 </Info>
 
-The v2 envelope has no batch-level narrative field. The first line lives on the request record as `request_header_title`; the six other events are placeholder bars under the three ready cards.
+The v2 envelope has no batch-level narrative field, and a Serendipity batch has no request record to carry a `request_header_title`, so the first line is not stored anywhere yet. The six other events are placeholder bars under the three ready cards.
 
-## Suggestion request record
+## Batch scope
 
-The parent row in `suggestions.suggestion_request`. It reuses the dev user and personal organization from the Angel demo; mint `id` and `batch_id` with `go run ./cmd/ingestpackage -mint` and set both timestamps at insert time.
-
-```json suggestion_request record
-{
-  "id": "{minted request id}",
-  "user_id": "01a08264-0bf3-7842-8069-4cd2f6ae39b9",
-  "copilot_mode": "serendipity",
-  "status": "suggestion",
-  "request_panel_title": "AI & Media Events, Next 60 Days",
-  "request_header_title": "Events and conferences in AI & Media in the next 60 days",
-  "request_context": null,
-  "class_slug": null,
-  "person_id": null,
-  "number_of_results": 9,
-  "deliver_format": null,
-  "llm_summary_context": [],
-  "modified": false,
-  "created_at": "{insert timestamp}",
-  "updated_at": "{insert timestamp}",
-  "organization_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
-  "universe_job_id": null,
-  "batch_id": "{minted batch id}",
-  "next_poll_at": null,
-  "poll_attempts": 0,
-  "poll_deadline_at": null,
-  "failure_reason": null,
-  "context_version": 0,
-  "intake_context": {},
-  "submission_receipt": null
-}
-```
+Serendipity has no request, requester or beneficiary. Scope comes from CLI flags only: the owning organization is the Angel demo's personal org `01a08264-0ef6-744c-b4f5-5f398dc2f98e`, and the batch ID is `01a0d44a-d414-7762-9bc8-e9aac16bc77c`, minted with `go run ./cmd/ingestpackage -mint` on 2026-09-24. Reuse that batch ID to replay; a new batch needs a fresh one.
 
 ## Package
 
-One `serendipity` package in the CLI's loadable form: scope comes from flags, `suggestion_request_id` points at the record above, and `entity_type` values are table names. Each ready card has one action group holding a `create_task` (the calendar block) and a `draft_email` to `mark@orbiter.io` for a test send. Placeholders carry only their rank, target and entity registry. Trajectories, sequencing, hooks, paths and evidence stay empty.
+One `serendipity` package in the CLI's loadable form: scope comes from flags, `suggestion_request_id` is `null`, and `entity_type` values are table names. Each ready card has one action group holding a `create_task` (the calendar block). Placeholders carry only their rank, target and entity registry. Trajectories, sequencing, hooks, paths and evidence stay empty.
 
 ```json AI & Media Serendipity package expandable
 {
   "schema_version": 2,
-  "suggestion_request_id": "{minted request id}",
+  "suggestion_request_id": null,
   "status": "complete",
   "generated_at": "2026-09-24T16:00:00Z",
   "suggestions": [
@@ -125,24 +95,6 @@ One `serendipity` package in the CLI's loadable form: scope comes from flags, `s
           "group_ref": "g-paley",
           "params": {
             "due_in_days": 7
-          }
-        },
-        {
-          "ref": "a-paley-email",
-          "action_type": "draft_email",
-          "rank": 2,
-          "label": "Email the team about Paley",
-          "target_entity_id": null,
-          "group_ref": "g-paley",
-          "params": {
-            "emails": [
-              "mark@orbiter.io"
-            ],
-            "draft": {
-              "subject": "Paley Summit, Oct 19–21: who's in the room?",
-              "message": "Team,\n\nPaley International Council Summit runs Oct 19–21 at the Paley Museum. On the 20th, Totoki (Sony) and Zelnick (Take-Two) are on stage for gaming and the future of entertainment. Densest CEO room of the month, and it's in Midtown.\n\nI'm registering. Worth a second seat for the 20th?\n\nMark"
-            },
-            "sender_name": "Mark Pederson"
           }
         }
       ]
@@ -198,24 +150,6 @@ One `serendipity` package in the CLI's loadable form: scope comes from flags, `s
           "params": {
             "due_in_days": 5
           }
-        },
-        {
-          "ref": "a-mipcom-email",
-          "action_type": "draft_email",
-          "rank": 2,
-          "label": "Email the team about MIPCOM",
-          "target_entity_id": null,
-          "group_ref": "g-mipcom",
-          "params": {
-            "emails": [
-              "mark@orbiter.io"
-            ],
-            "draft": {
-              "subject": "MIPCOM, Oct 12–15: go or skip?",
-              "message": "Team,\n\nMIPCOM is Oct 12–15 in Cannes. It's the global content market and this year AI companies are on the seller side: studios, streamers, YouTube, brands, AI innovators and investors from 100+ countries in four days.\n\nOnly worth the trip if a studio or licensing deal is on the roadmap. Is one? If yes I'll book by Oct 1.\n\nMark"
-            },
-            "sender_name": "Mark Pederson"
-          }
         }
       ]
     },
@@ -269,24 +203,6 @@ One `serendipity` package in the CLI's loadable form: scope comes from flags, `s
           "group_ref": "g-nab",
           "params": {
             "due_in_days": 14
-          }
-        },
-        {
-          "ref": "a-nab-email",
-          "action_type": "draft_email",
-          "rank": 2,
-          "label": "Email the team about NAB Show NY",
-          "target_entity_id": null,
-          "group_ref": "g-nab",
-          "params": {
-            "emails": [
-              "mark@orbiter.io"
-            ],
-            "draft": {
-              "subject": "NAB Show New York, Oct 21–22, Javits",
-              "message": "Team,\n\nNAB Show New York is Oct 21–22 at Javits, same week as Paley. Five themes this year: AI, creator economy, streaming, sports, broadcasting. Low cost, high operator density.\n\nI'll take the 21st for the AI and journalism sessions. Anyone want the 22nd?\n\nMark"
-            },
-            "sender_name": "Mark Pederson"
           }
         }
       ]
@@ -458,7 +374,7 @@ If this package is ever sent to `POST /v1/ingest/suggestions` instead of the CLI
 ```json Serendipity envelope scope fields
 {
   "schema_version": 2,
-  "batch_id": "{minted batch id}",
+  "batch_id": "01a0d44a-d414-7762-9bc8-e9aac16bc77c",
   "request_suggestion_id": null,
   "org_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
   "requested_by": null,
@@ -502,14 +418,13 @@ The three ready cards declare their organizer as `target_org` so the card header
 
 ## Actions
 
-Each ready card has one action group with `trajectory_ref: null` and two actions:
+Each ready card has one action group with `trajectory_ref: null` and one action:
 
 | Action | Type | `params` | Why |
 | --- | --- | --- | --- |
 | Block the dates | `create_task` | `{ "due_in_days": n }` | The natural event action; the task target is the event itself. Store only: task execution is later work. `due_in_days` counts from `generated_at`: 7 for Paley, 5 for MIPCOM (a Cannes booking decision by Oct 1), 14 for NAB. |
-| Email the team | `draft_email` | `emails: ["mark@orbiter.io"]`, `sender_name: "Mark Pederson"` | Gives the card a rendering DRAFT EMAIL control, as in the Angel demo; a test send lands back with the requester. `target_entity_id` is `null` because the recipient is the requester, not a declared entity. |
 
-If the CLI on `main` rejects `create_task` or a null email target, drop that action and reload with the same request and batch IDs; the email alone is a valid group.
+There is no email action. `validateActionTarget` requires every action except `create_task` to target a person declared in the card's entities, and an event card declares none; a `draft_email` with a `null` target is rejected. Adding one would mean declaring a person on each card.
 
 ## Resolve the entity IDs
 
@@ -532,7 +447,13 @@ Done in dev on 2026-09-24. The steps below record what was run, so another envir
     `POST /v1/companies/url-lookup` with each organizer's domain, as a signed-in dev user. Universe company enrichment has a population ceiling (`consumers.environment_variables`, `kill_switch_company` and `kill_switch_person`); dev was at 5,000/5,000 and skipped all three, so both were raised to 10,000. Paley returned `created` (via the backend provider fallback) and NAB returned `created` after the raise. RX returned a logo.dev brand match with no ID, which short-circuits before Universe, so it was created with `POST /v1/companies` (`brand_selected: false`, domain plus LinkedIn URL). That call also adds the company to the caller's contacts. None of the three is in Universe `master_companies` yet; they are bare cards until enrichment finishes.
   </Step>
   <Step title="Load">
-    The twelve IDs are substituted in the package. Insert the `suggestion_request` row, mint IDs, and load with `-type serendipity -org 01a08264-0ef6-744c-b4f5-5f398dc2f98e -requested-by 01a08264-0bf3-7842-8069-4cd2f6ae39b9` and `-expect` for the dev database. Expected counts: 9 suggestions, 12 entity rows, 3 action groups, 6 actions.
+    Save the [package](#package) as `package.json` and load it from `orbiter-backend` on `thursday_dev`. There is no request row to insert. Serendipity takes no `-request-id`, `-requested-by`, `-beneficiary` or `-paths`.
+
+    ```bash
+    DB_DSN="postgres://mark%40orbiter.io:$(gcloud auth print-access-token)@localhost:5436/orbiter?sslmode=require" go run ./cmd/ingestpackage -file package.json -type serendipity -org 01a08264-0ef6-744c-b4f5-5f398dc2f98e -batch-id 01a0d44a-d414-7762-9bc8-e9aac16bc77c -expect localhost:5436/orbiter
+    ```
+
+    Expected counts: 1 batch, 9 suggestions, 12 entity rows (`suggestion_node`), 3 action groups, 3 actions.
   </Step>
 </Steps>
 
@@ -853,11 +774,11 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
 
 ## Load notes
 
-- The twelve entities exist in dev as of 2026-09-24. The request row and batch have not been created, and nothing exists in any other environment.
+- The twelve entities exist in dev as of 2026-09-24. The package loaded cleanly into the local Docker database (batch `01a0d44a-d414-7762-9bc8-e9aac16bc77c`, counts as above) as a trial before dev.
 - `live_events` is accepted by `nodespub.ValidEntityType`, but no demo has loaded a non-person, non-company target before. Expect the card header and hydration path to need work: `live_event_display` is card-only by default, and the Outcome header logic assumes a person or company target.
 - `suggestion_mode: "new_connection"` is a stand-in. If an event mode is added to the taxonomy, update all nine suggestions in a new batch.
 - The `hooks` array is `null` on every card. The Serendipity content contract has not confirmed whether ready cards need hooks; add them in a later batch if the view uses them.
-- Copy is written in Mark's voice as the batch requester. For another user, rewrite the three drafts and reload with their own request and batch IDs per [Replicate the demo for another user](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions#replicate-the-demo-for-another-user).
+- The batch belongs to the organization, not a user. For another org, reload with its `-org` and a fresh batch ID.
 - Event dates and figures were verified against organizer sites on 2026-09-22. Check registration URLs at load time; several organizers move pages once registration closes.
 
 [Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).
