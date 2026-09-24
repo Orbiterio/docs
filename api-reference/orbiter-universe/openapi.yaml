@@ -1125,6 +1125,193 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
+  /v1/admin/provider-quota/limits:
+    post:
+      operationId: providerQuotaSetLimit
+      tags:
+        - Admin
+      summary: Set a provider limit for today (management plane)
+      description: |
+        Creates or changes the limit for the window that contains now, in `reset_timezone` (default `UTC`). Later windows copy the latest limit when their first reservation arrives, so one call sets the limit from today on. `limit_amount: 0` pauses the provider. Only `provider`, `metric` and `limit_amount` are required. With no limit row at all, every paid call for that provider is refused. Staff only: a WorkOS session with role `admin`, never a consumer API key.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderQuotaSetLimitRequest'
+      responses:
+        '200':
+          description: Today's limit window after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderQuotaLimitEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+    get:
+      operationId: providerQuotaListLimits
+      tags:
+        - Admin
+      summary: List provider limit windows (management plane)
+      description: |
+        Newest windows first, with what is held by in-flight calls (`reserved_amount`), what was charged (`consumed_amount`) and what a new call may still take (`remaining_amount`, never negative even after an overrun). Staff only: WorkOS role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider
+          in: query
+          description: Only this provider; omit for every provider.
+          schema:
+            type: string
+            maxLength: 64
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 30
+      responses:
+        '200':
+          description: Limit windows.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderQuotaLimitsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/social-media/entities/{id}/enrich:
+    post:
+      operationId: socialMediaEnrichEntity
+      tags:
+        - Admin
+      summary: Check an entity's social links now (management plane)
+      description: |
+        Classifies every link on the entity that has no check under the current registry, and reads each fetchable profile from ScrapeCreators. A profile stored within the refresh age is not re-read (`origin: stored_fresh`). `force: true` re-checks every link and re-reads every profile, skipping both the stored copy and the provider cache. Stops early with `budget_stopped: true` when the day's credit limit is spent; the sweep picks the rest up. Staff only: a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SocialMediaEntityID'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialMediaEnrichRequest'
+      responses:
+        '200':
+          description: What each link check decided and did.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialMediaEnrichEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/social-media/entities/{id}:
+    get:
+      operationId: socialMediaEntityStatus
+      tags:
+        - Admin
+      summary: The lane's stored view of one entity (management plane)
+      description: |
+        Profiles, link checks, the stored post count and the 20 latest provider calls for the canonical entity. Staff only: WorkOS role `admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SocialMediaEntityID'
+      responses:
+        '200':
+          description: The entity's social media state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialMediaEntityStatusEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/social-media/sweep:
+    post:
+      operationId: socialMediaSweep
+      tags:
+        - Admin
+      summary: Run one bounded sweep pass (management plane)
+      description: |
+        The scheduler tick's work, for local stepping: new links, then due retries, then profiles older than the refresh age, each list at most `batch` long. Runs even when the worker's sweep tick is switched off. `remaining: true` means a list was full. Staff only: WorkOS role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SocialMediaSweepRequest'
+      responses:
+        '200':
+          description: Counts for the pass.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialMediaSweepEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/social-media/capabilities:
+    get:
+      operationId: socialMediaCapabilities
+      tags:
+        - Admin
+      summary: The platform registry (management plane)
+      description: |
+        Every profile read the lane knows, with its endpoint, credit cost and status (`live`, `pending` until its decoder lands, `disabled`). Staff only: WorkOS role `admin`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SocialMediaCapabilitiesEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
   /v1/backfill/graph/seed/locations:
     post:
       operationId: seedGraphLocations
@@ -8755,6 +8942,592 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/DonorsEdgeEvidence'
+    ProviderQuotaLimit:
+      type: object
+      required:
+        - id
+        - provider
+        - account_ref
+        - scope_key
+        - metric
+        - window_start
+        - window_end
+        - reset_timezone
+        - limit_amount
+        - reserved_amount
+        - consumed_amount
+        - remaining_amount
+        - policy_version
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        account_ref:
+          type: string
+        scope_key:
+          type: string
+        metric:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        reset_timezone:
+          type: string
+        limit_amount:
+          type: integer
+          format: int64
+        reserved_amount:
+          type: integer
+          format: int64
+        consumed_amount:
+          type: integer
+          format: int64
+          description: May exceed `limit_amount` when a provider charged more than was held.
+        remaining_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        policy_version:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    ProviderQuotaLimitsEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderQuotaLimit'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    ProviderQuotaSetLimitRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - metric
+        - limit_amount
+      properties:
+        provider:
+          type: string
+          maxLength: 64
+          examples:
+            - scrapecreators
+        account_ref:
+          type: string
+          maxLength: 192
+          default: default
+          description: The provider account or purchased pack the limit belongs to. Defaults to `default`.
+        scope_key:
+          type: string
+          maxLength: 192
+          default: account
+          description: |
+            The slice of the account this limit covers. Defaults to `account` (the whole account); a value like `lane:socialmedia` splits one account between lanes. Must match what the paying lane reserves with.
+        metric:
+          type: string
+          maxLength: 64
+          examples:
+            - credits
+        limit_amount:
+          type: integer
+          format: int64
+          minimum: 0
+        reset_timezone:
+          type: string
+          description: IANA timezone whose calendar day is the window. Defaults to `UTC`.
+          examples:
+            - UTC
+        policy_version:
+          type: string
+          maxLength: 64
+          description: Defaults to `admin`.
+    ProviderQuotaLimitEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/ProviderQuotaLimit'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    SocialMediaEnrichRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        force:
+          type: boolean
+          default: false
+    SocialMediaLinkResult:
+      type: object
+      required:
+        - master_link_id
+        - url
+        - classification
+        - reason
+        - platform
+        - canonical_url
+        - origin
+        - profile_id
+        - posts_stored
+        - credits_charged
+        - error_code
+        - error
+      properties:
+        master_link_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+        classification:
+          type: string
+          enum:
+            - supported_profile
+            - supported_content
+            - unsupported_host
+            - unsupported_content
+            - excluded_capability
+        reason:
+          type:
+            - string
+            - 'null'
+        platform:
+          type:
+            - string
+            - 'null'
+        canonical_url:
+          type:
+            - string
+            - 'null'
+        origin:
+          type:
+            - string
+            - 'null'
+          enum:
+            - stored_fresh
+            - provider_cache
+            - provider_live
+            - null
+          description: Null when nothing was read.
+        profile_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        posts_stored:
+          type: integer
+        credits_charged:
+          type: integer
+          format: int64
+        error_code:
+          type:
+            - string
+            - 'null'
+          description: A failure code; retryable ones are retried by the sweep.
+        error:
+          type:
+            - string
+            - 'null'
+    SocialMediaEnrichResult:
+      type: object
+      required:
+        - id
+        - requested_id
+        - links
+        - budget_stopped
+      properties:
+        id:
+          type: string
+          format: uuid
+        requested_id:
+          type: string
+          format: uuid
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialMediaLinkResult'
+        budget_stopped:
+          type: boolean
+    SocialMediaEnrichEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SocialMediaEnrichResult'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    SocialMediaProfile:
+      type: object
+      required:
+        - id
+        - platform
+        - account_kind
+        - canonical_url
+        - handle
+        - platform_account_id
+        - display_name
+        - bio
+        - headline
+        - avatar_source_url
+        - website_url
+        - location
+        - verified
+        - private
+        - followers_count
+        - following_count
+        - content_count
+        - last_profile_fetched_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        platform:
+          type: string
+        account_kind:
+          type: string
+        canonical_url:
+          type: string
+        handle:
+          type:
+            - string
+            - 'null'
+        platform_account_id:
+          type:
+            - string
+            - 'null'
+        display_name:
+          type:
+            - string
+            - 'null'
+        bio:
+          type:
+            - string
+            - 'null'
+        headline:
+          type:
+            - string
+            - 'null'
+        avatar_source_url:
+          type:
+            - string
+            - 'null'
+        website_url:
+          type:
+            - string
+            - 'null'
+        location:
+          type:
+            - string
+            - 'null'
+        verified:
+          type:
+            - boolean
+            - 'null'
+        private:
+          type:
+            - boolean
+            - 'null'
+        followers_count:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        following_count:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        content_count:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        last_profile_fetched_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+    SocialMediaLinkCheck:
+      type: object
+      required:
+        - master_link_id
+        - registry_version
+        - classification
+        - reason
+        - platform
+        - canonical_url
+        - social_profile_id
+        - last_error_code
+        - last_error_reason
+        - next_retry_at
+        - checked_at
+      properties:
+        master_link_id:
+          type: string
+          format: uuid
+        registry_version:
+          type: string
+        classification:
+          type: string
+        reason:
+          type:
+            - string
+            - 'null'
+        platform:
+          type:
+            - string
+            - 'null'
+        canonical_url:
+          type:
+            - string
+            - 'null'
+        social_profile_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        last_error_code:
+          type:
+            - string
+            - 'null'
+        last_error_reason:
+          type:
+            - string
+            - 'null'
+        next_retry_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        checked_at:
+          type: string
+          format: date-time
+    SocialMediaProviderCall:
+      type: object
+      required:
+        - capability_key
+        - canonical_url
+        - http_status
+        - origin
+        - credits_charged
+        - credits_remaining
+        - outcome
+        - created_at
+      properties:
+        capability_key:
+          type: string
+        canonical_url:
+          type: string
+        http_status:
+          type:
+            - integer
+            - 'null'
+        origin:
+          type: string
+          enum:
+            - provider_cache
+            - provider_live
+        credits_charged:
+          type: integer
+          format: int64
+        credits_remaining:
+          type:
+            - integer
+            - 'null'
+          format: int64
+        outcome:
+          type: string
+          enum:
+            - succeeded
+            - no_data
+            - failed
+        created_at:
+          type: string
+          format: date-time
+    SocialMediaEntityStatus:
+      type: object
+      required:
+        - id
+        - requested_id
+        - profiles
+        - link_checks
+        - post_count
+        - calls
+      properties:
+        id:
+          type: string
+          format: uuid
+        requested_id:
+          type: string
+          format: uuid
+        profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialMediaProfile'
+        link_checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialMediaLinkCheck'
+        post_count:
+          type: integer
+          format: int64
+        calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialMediaProviderCall'
+    SocialMediaEntityStatusEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SocialMediaEntityStatus'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    SocialMediaSweepRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        batch:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Omit for ENRICHMENT_SOCIAL_MEDIA_SWEEP_BATCH.
+    SocialMediaSweepResult:
+      type: object
+      required:
+        - checked
+        - retried
+        - refreshed
+        - fetched
+        - credits_charged
+        - budget_stopped
+        - remaining
+      properties:
+        checked:
+          type: integer
+        retried:
+          type: integer
+        refreshed:
+          type: integer
+        fetched:
+          type: integer
+        credits_charged:
+          type: integer
+          format: int64
+        budget_stopped:
+          type: boolean
+        remaining:
+          type: boolean
+    SocialMediaSweepEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SocialMediaSweepResult'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
+    SocialMediaCapability:
+      type: object
+      required:
+        - key
+        - platform
+        - account_kind
+        - entity_types
+        - endpoint
+        - embedded_posts
+        - cache_max_age
+        - credit_cost
+        - status
+      properties:
+        key:
+          type: string
+          examples:
+            - instagram.profile
+        platform:
+          type: string
+        account_kind:
+          type: string
+        entity_types:
+          type: array
+          items:
+            type: string
+            enum:
+              - person
+              - company
+        endpoint:
+          type: string
+        embedded_posts:
+          type: boolean
+        cache_max_age:
+          type: boolean
+        credit_cost:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum:
+            - live
+            - pending
+            - disabled
+    SocialMediaCapabilitiesEnvelope:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SocialMediaCapability'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+      required:
+        - data
+        - error
+        - meta
     SeedFailure:
       type: object
       properties:
@@ -11431,3 +12204,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
+  parameters:
+    SocialMediaEntityID:
+      name: id
+      in: path
+      required: true
+      description: Any entity id; a merged id resolves to its canonical entity.
+      schema:
+        type: string
+        format: uuid
