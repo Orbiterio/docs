@@ -7,12 +7,12 @@ icon: "hand-holding-dollar"
 This is a hand-written **Outcome** demo package for the seed-raise use case: six NYC-based angel investors, all `ready`, each carrying a WHY narrative and four hooks: three written opening lines and one generated `hook_remix`. It follows the same load path as [Create Demo Suggestions](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions): the package loads through `cmd/ingestpackage`. All entity and scope IDs below are already resolved against dev AlloyDB.
 
 <Warning>
-**The `POST /v1/ingest/suggestions` receiver described in [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) was not built.** This package loads with the backend CLI. The JSON below is the documented v2 envelope; Claude handles the file conversion at load time.
+**The `POST /v1/ingest/suggestions` receiver described in [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) was not built.** This package loads with the backend CLI (`cmd/ingestpackage`) as is: the JSON below is byte-for-byte the backend's acceptance fixture `internal/features/suggestions/testdata/angel_outcome.package.json`, which the test suite decodes strictly, validates, stores and reads back. Entity types are table names (`persons`, `companies`). Batch scope (organization, requester, suggestion type, origin) is not in the package; it comes from the request record below and the CLI flags.
 </Warning>
 
 ## Package
 
-One `outcome` envelope holding all six `ready` suggestions. Trajectories, sequencing, paths and evidence stay empty for this demo; each suggestion carries one cold `draft_email` action (see [Email actions](#email-actions)). The [Outcome sample](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#outcome) shows the warm pattern. Every hook references the suggested person and repeats that person's `entity_type`.
+One `outcome` package holding all six `ready` suggestions. Trajectories, sequencing, paths and evidence stay empty for this demo; each suggestion carries one cold `draft_email` action (see [Email actions](#email-actions)). The [Outcome sample](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#outcome) shows the warm pattern. Every hook references the suggested person and repeats that person's `entity_type`.
 
 ### Suggestion Request Record Needed
 
@@ -51,14 +51,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
 ```json Angel Outcome package expandable
 {
   "schema_version": 2,
-  "batch_id": "01a0cdce-53d4-707d-8ab0-fbbff8fbc34c",
-  "request_suggestion_id": "01a0cdce-53d4-7079-a21a-1093307f43c3",
-  "org_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
-  "requested_by": "01a08264-0bf3-7842-8069-4cd2f6ae39b9",
-  "suggestion_type": "outcome",
-  "beneficiary_contact_id": null,
-  "origin": "user_requested",
-  "trigger_source": null,
+  "suggestion_request_id": "01a0cdce-53d4-7079-a21a-1093307f43c3",
   "status": "complete",
   "generated_at": "2026-09-23T10:50:00Z",
   "suggestions": [
@@ -66,7 +59,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-laurel-touby",
       "rank": 1,
       "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -87,7 +80,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "You monetized connecting media people before software could. Orbiter does it now on a per-tenant context graph, with 10,000+ operators already waitlisted.",
           "model": "z-ai/glm-5.3-flash",
@@ -98,7 +91,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "Somewhere in the mediabistro years, a freelancer got a career-changing assignment because you built the room where it happened. Orbiter gives every operator that room.",
           "model": "z-ai/glm-5.3-flash",
@@ -109,7 +102,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "mediabistro proved media people will pay to find each other. The dirty secret: they still can't find the right one. We built that.",
           "model": "z-ai/glm-5.3-flash",
@@ -120,7 +113,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "For a decade, the most valuable context graph in New York media lived in your head: who needed to meet whom, and why. Orbiter is what happens when it finally outgrows one.",
           "model": "z-ai/glm-5.3-flash",
@@ -134,12 +127,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdba-76c0-7250-a1e1-abdc6de83c85",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
@@ -175,7 +168,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-susan-lyne",
       "rank": 2,
       "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -196,7 +189,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "You crossed from running prime time at ABC to running BBG Ventures. Our Phase 1 lives exactly on that bridge: media, entertainment, and venture.",
           "model": "z-ai/glm-5.3-flash",
@@ -207,7 +200,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "Every career you ever made at ABC started with someone remembering the right person at the right moment. Orbiter exists so nobody has to rely on memory again.",
           "model": "z-ai/glm-5.3-flash",
@@ -218,7 +211,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "Entertainment never had an org chart. It had your phone book. We turned that phone book into a graph with six patents under it.",
           "model": "z-ai/glm-5.3-flash",
@@ -229,7 +222,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You greenlit Desperate Housewives after every other network had passed, a bet that came down to knowing exactly whose conviction to trust. The unobvious believer behind your next bet is already in your network, and Orbiter is how you find them, and why.",
           "model": "z-ai/glm-5.3-flash",
@@ -243,12 +236,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-0400-7835-b7c3-f0aeb859a099",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
@@ -284,7 +277,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-desiree-gruber",
       "rank": 3,
       "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -305,7 +298,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "Full Picture monetizes the relationship layer between talent, brands and media. Your book (Afterparty, Unrivaled, Phia) is that economy's next form. Orbiter is its infrastructure.",
           "model": "z-ai/glm-5.3-flash",
@@ -316,7 +309,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "You've spent 30 years making introductions that changed people's lives. Orbiter exists so that instinct scales beyond the people lucky enough to know you.",
           "model": "z-ai/glm-5.3-flash",
@@ -327,7 +320,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "The talent business runs on who you can reach. We built the map of who can reach whom, and why. You'll either love it or find it slightly unnerving.",
           "model": "z-ai/glm-5.3-flash",
@@ -338,7 +331,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You've been running Orbiter's core workflow by hand since 2004 — Project Runway only worked because no designer met a mentor, no talent met a brand, until both sides said yes. Orbiter is that double opt-in instinct, compiled into software.",
           "model": "z-ai/glm-5.3-flash",
@@ -352,12 +345,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-1def-7274-b199-61abde08bfec",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
@@ -393,7 +386,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-lindsay-kaplan",
       "rank": 4,
       "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -414,7 +407,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "You proved curated professional networks are a venture-scale business. Orbiter is the intelligence layer that makes each member's existing network worth more.",
           "model": "z-ai/glm-5.3-flash",
@@ -425,7 +418,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "Chief worked because a woman's network is the one thing nobody could hand her. Orbiter is built on the same belief: the network is the asset.",
           "model": "z-ai/glm-5.3-flash",
@@ -436,7 +429,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "Membership was the product at Chief. The product here is what the membership quietly knew all along.",
           "model": "z-ai/glm-5.3-flash",
@@ -447,7 +440,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You've spent years watching someone walk into a Chief dinner as a stranger and leave with a board seat. Orbiter is what happens when software catches those moments before they happen.",
           "model": "z-ai/glm-5.3-flash",
@@ -461,12 +454,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-946e-7acf-ad93-6d1a8522a86d",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
@@ -502,7 +495,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-esther-dyson",
       "rank": 5,
       "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -523,7 +516,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "75 tracked angel deals with a through-line from Delicious and Dopplr to today: tools that make social context usable. This is the biggest version of that bet yet.",
           "model": "z-ai/glm-5.3-flash",
@@ -534,7 +527,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "You've spent a career arguing that who we are to each other matters more than what we do. Orbiter is that conviction, finally executable as software.",
           "model": "z-ai/glm-5.3-flash",
@@ -545,7 +538,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "Every CRM sells the lie that a relationship is a record. You've known better for decades. We built the alternative.",
           "model": "z-ai/glm-5.3-flash",
@@ -556,7 +549,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "Back in 1998 you chaired ICANN, the body that taught the internet who was who. Orbiter answers the question that came next: who knows whom, and why.",
           "model": "z-ai/glm-5.3-flash",
@@ -570,12 +563,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdea-8ba3-74b7-8276-9483b175ebf4",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
@@ -611,7 +604,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-randi-zuckerberg",
       "rank": 6,
       "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
       "badge": null,
@@ -632,7 +625,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-thesis",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
           "text": "Your book, Curastory, Virtualness, Sportsbox AI, is creator economy at the tech/media seam. Our beachhead is exactly that seam.",
           "model": "z-ai/glm-5.3-flash",
@@ -643,7 +636,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-personal",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
           "text": "You watched the friend graph change what people meant to each other. Orbiter is built for the moment the professional graph does the same.",
           "model": "z-ai/glm-5.3-flash",
@@ -654,7 +647,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-provocative",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
           "text": "Facebook made the world searchable by friend. Nobody has made a career searchable by trust. That gap is our $2.8M seed.",
           "model": "z-ai/glm-5.3-flash",
@@ -665,7 +658,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         {
           "ref": "hook-remix",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You turned Facebook into a broadcast booth — streaming the first inauguration of the social era to millions — and Orbiter is built for what happens after the stream ends: the two people in that crowd who were always meant to meet.",
           "model": "z-ai/glm-5.3-flash",
@@ -679,12 +672,12 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbc-4a8e-7903-ab14-11b231ad7a7a",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
