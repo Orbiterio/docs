@@ -4,15 +4,15 @@ description: "A v2 Outcome demo package for the $2.8M seed raise: six NYC-based 
 icon: "hand-holding-dollar"
 ---
 
-This is a hand-written **Outcome** demo package for the seed-raise use case: six NYC-based angel investors, all `ready`, each carrying a WHY narrative and three outreach hooks. It follows the same load path as [Create Demo Suggestions](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions): the package loads through `cmd/ingestpackage`. All entity and scope IDs below are already resolved against dev AlloyDB.
+This is a hand-written **Outcome** demo package for the seed-raise use case: six NYC-based angel investors, all `ready`, each carrying a WHY narrative and four hooks: three written opening lines and one generated `hook_remix`. It follows the same load path as [Create Demo Suggestions](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions): the package loads through `cmd/ingestpackage`. All entity and scope IDs below are already resolved against dev AlloyDB.
 
 <Warning>
-**The `POST /v1/ingest/suggestions` receiver described in [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) was not built.** This package loads with the backend CLI. The JSON below is the documented v2 envelope; Claude handles the file conversion at load time.
+**The `POST /v1/ingest/suggestions` receiver described in [Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables) was not built.** This package loads with the backend CLI (`cmd/ingestpackage`) as is: the JSON below is byte-for-byte the backend's acceptance fixture `internal/features/suggestions/testdata/angel_outcome.package.json`, which the test suite decodes strictly, validates, stores and reads back. Entity types are table names (`persons`, `companies`). Batch scope (organization, requester, suggestion type, origin) is not in the package; it comes from the request record below and the CLI flags.
 </Warning>
 
 ## Package
 
-One `outcome` envelope holding all six `ready` suggestions. Trajectories, sequencing, paths, evidence, and actions stay empty for this demo; outreach actions can be added later using the [Outcome sample](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#outcome) pattern. Every hook references the suggested person and repeats that person's `entity_type`.
+One `outcome` package holding all six `ready` suggestions. Trajectories, sequencing, paths and evidence stay empty for this demo; each suggestion carries one cold `draft_email` action (see [Email actions](#email-actions)). The [Outcome sample](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data#outcome) shows the warm pattern. Every hook references the suggested person and repeats that person's `entity_type`.
 
 ### Suggestion Request Record Needed
 
@@ -51,14 +51,7 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
 ```json Angel Outcome package expandable
 {
   "schema_version": 2,
-  "batch_id": "01a0cdce-53d4-707d-8ab0-fbbff8fbc34c",
-  "request_suggestion_id": "01a0cdce-53d4-7079-a21a-1093307f43c3",
-  "org_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
-  "requested_by": "01a08264-0bf3-7842-8069-4cd2f6ae39b9",
-  "suggestion_type": "outcome",
-  "beneficiary_contact_id": null,
-  "origin": "user_requested",
-  "trigger_source": null,
+  "suggestion_request_id": "01a0cdce-53d4-7079-a21a-1093307f43c3",
   "status": "complete",
   "generated_at": "2026-09-23T10:50:00Z",
   "suggestions": [
@@ -66,15 +59,14 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "source_ref": "candidate-laurel-touby",
       "rank": 1,
       "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Laurel built mediabistro on the value of connecting media people. Orbiter is that thesis with a context graph.",
         "body": [
-          "She spent a decade proving media professionals will pay to find each other, then sold the business that did it. Orbiter automates that same job on a per-tenant context graph, so the network she curated by hand becomes software.",
-          "Her portfolio through Supernode VC leans toward media, community, and network-effect tools. Orbiter is the infrastructure bet beneath all three.",
+          "She spent a decade proving media professionals will pay to find each other, then sold the business that did it. Orbiter automates that same job on a per-tenant context graph, so the network she curated by hand becomes software. Her portfolio through Supernode VC leans toward media, community, and network-effect tools. Orbiter is the infrastructure bet beneath all three.",
           "The round is her natural ticket: a $2.8M NYC seed with a 10,000+ organic waitlist, enterprise pilots, and a founder team that already shipped a category product in Frame.io's orbit."
         ]
       },
@@ -85,27 +77,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "You monetized connecting media people before software could. Orbiter does it now on a per-tenant context graph, with 10,000+ operators already waitlisted."
+          "text": "You monetized connecting media people before software could. Orbiter does it now on a per-tenant context graph, with 10,000+ operators already waitlisted.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "Somewhere in the mediabistro years, a freelancer got a career-changing assignment because you built the room where it happened. Orbiter gives every operator that room."
+          "text": "Somewhere in the mediabistro years, a freelancer got a career-changing assignment because you built the room where it happened. Orbiter gives every operator that room.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "mediabistro proved media people will pay to find each other. The dirty secret: they still can't find the right one. We built that."
+          "text": "mediabistro proved media people will pay to find each other. The dirty secret: they still can't find the right one. We built that.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "For a decade, the most valuable context graph in New York media lived in your head: who needed to meet whom, and why. Orbiter is what happens when it finally outgrows one.",
           "model": "z-ai/glm-5.3-flash",
@@ -119,31 +127,55 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdba-76c0-7250-a1e1-abdc6de83c85",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-laurel",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-laurel-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Laurel",
+          "target_entity_id": "01a0cdb9-f90b-75cd-b83c-e86c8efe3ca4",
+          "group_ref": "g-laurel",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "Orbiter: mediabistro's thesis, as a context graph",
+              "message": "Hi Laurel,\n\nYou spent a decade proving media people will pay to find each other, then sold the business that did it. Orbiter does that same job in software: a per-tenant context graph that makes each operator's network work for them.\n\nWe're raising a $2.8M seed in NYC, with 10,000+ operators on an organic waitlist and enterprise pilots underway. Given Supernode's lean toward media, community and network-effect tools, I'd love 20 minutes to show you what we've built.\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     },
     {
       "source_ref": "candidate-susan-lyne",
       "rank": 2,
       "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Susan's career ran on relationship capital from ABC prime time to BBG. Orbiter makes that capital queryable.",
         "body": [
-          "She crossed from running entertainment businesses to funding founders, which is exactly the bridge Orbiter's beachhead sits on: media and entertainment first, venture and dealmakers second.",
-          "BBG Ventures backed women-led consumer companies where distribution was the network. Orbiter turns that kind of network into a durable, owned asset instead of a rented audience.",
+          "She crossed from running entertainment businesses to funding founders, which is exactly the bridge Orbiter's beachhead sits on: media and entertainment first, venture and dealmakers second. BBG Ventures backed women-led consumer companies where distribution was the network. Orbiter turns that kind of network into a durable, owned asset instead of a rented audience.",
           "She has seen every version of \"who you know\" decide outcomes for four decades. A platform that remembers everyone and engineers serendipity is the product her career argued for."
         ]
       },
@@ -154,27 +186,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdba-6dcf-7dc2-a921-4a71c496b452"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "You crossed from running prime time at ABC to running BBG Ventures. Our Phase 1 lives exactly on that bridge: media, entertainment, and venture."
+          "text": "You crossed from running prime time at ABC to running BBG Ventures. Our Phase 1 lives exactly on that bridge: media, entertainment, and venture.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "Every career you ever made at ABC started with someone remembering the right person at the right moment. Orbiter exists so nobody has to rely on memory again."
+          "text": "Every career you ever made at ABC started with someone remembering the right person at the right moment. Orbiter exists so nobody has to rely on memory again.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "Entertainment never had an org chart. It had your phone book. We turned that phone book into a graph with six patents under it."
+          "text": "Entertainment never had an org chart. It had your phone book. We turned that phone book into a graph with six patents under it.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You greenlit Desperate Housewives after every other network had passed, a bet that came down to knowing exactly whose conviction to trust. The unobvious believer behind your next bet is already in your network, and Orbiter is how you find them, and why.",
           "model": "z-ai/glm-5.3-flash",
@@ -188,31 +236,55 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-0400-7835-b7c3-f0aeb859a099",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-susan",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-susan-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Susan",
+          "target_entity_id": "01a0cdba-6dcf-7dc2-a921-4a71c496b452",
+          "group_ref": "g-susan",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "Relationship capital, made queryable",
+              "message": "Hi Susan,\n\nYour career ran on relationship capital, from ABC prime time to BBG Ventures. Orbiter makes that capital queryable: a platform that remembers everyone you know and surfaces the right person at the right moment.\n\nOur beachhead sits on the bridge you crossed: media and entertainment first, venture and dealmakers second. We're raising a $2.8M seed with 10,000+ operators on an organic waitlist and enterprise pilots underway. Would you take a look?\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     },
     {
       "source_ref": "candidate-desiree-gruber",
       "rank": 3,
       "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Desiree has monetized the relationship layer between talent, brands, and media for 30 years. Orbiter sells that layer as software.",
         "body": [
-          "Full Picture runs on knowing who can reach whom and why. Orbiter's double opt-in introduction workflow is her daily practice, automated end to end.",
-          "Her angel book, including Afterparty, Unrivaled, and Phia, is a map of the new talent economy. Orbiter's context graph is the infrastructure all of them eventually need.",
+          "Full Picture runs on knowing who can reach whom and why. Orbiter's double opt-in introduction workflow is her daily practice, automated end to end. Her angel book, including Afterparty, Unrivaled, and Phia, is a map of the new talent economy. Orbiter's context graph is the infrastructure all of them eventually need.",
           "She sits inside the exact persona the product serves: a connector whose value compounds with every introduction she makes."
         ]
       },
@@ -223,27 +295,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdba-b7df-7383-9273-c4efb1c4c009"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "Full Picture monetizes the relationship layer between talent, brands and media. Your book (Afterparty, Unrivaled, Phia) is that economy's next form. Orbiter is its infrastructure."
+          "text": "Full Picture monetizes the relationship layer between talent, brands and media. Your book (Afterparty, Unrivaled, Phia) is that economy's next form. Orbiter is its infrastructure.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "You've spent 30 years making introductions that changed people's lives. Orbiter exists so that instinct scales beyond the people lucky enough to know you."
+          "text": "You've spent 30 years making introductions that changed people's lives. Orbiter exists so that instinct scales beyond the people lucky enough to know you.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "The talent business runs on who you can reach. We built the map of who can reach whom, and why. You'll either love it or find it slightly unnerving."
+          "text": "The talent business runs on who you can reach. We built the map of who can reach whom, and why. You'll either love it or find it slightly unnerving.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You've been running Orbiter's core workflow by hand since 2004 — Project Runway only worked because no designer met a mentor, no talent met a brand, until both sides said yes. Orbiter is that double opt-in instinct, compiled into software.",
           "model": "z-ai/glm-5.3-flash",
@@ -257,31 +345,55 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-1def-7274-b199-61abde08bfec",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-desiree",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-desiree-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Desiree",
+          "target_entity_id": "01a0cdba-b7df-7383-9273-c4efb1c4c009",
+          "group_ref": "g-desiree",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "The relationship layer, as software",
+              "message": "Hi Desiree,\n\nFull Picture has monetized the relationship layer between talent, brands and media for 30 years. Orbiter sells that layer as software: a context graph of who can reach whom and why, with a double opt-in introduction workflow that mirrors how you already work.\n\nYour book, Afterparty, Unrivaled and Phia, maps the new talent economy, and every company in it will need this infrastructure. We're raising a $2.8M seed with 10,000+ operators waitlisted. Could I walk you through it?\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     },
     {
       "source_ref": "candidate-lindsay-kaplan",
       "rank": 4,
       "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Lindsay proved curated professional networks are a venture-scale business at Chief. Orbiter is the intelligence layer for every network like it.",
         "body": [
-          "Chief's product was the network itself. Orbiter is built on the same premise: the relationships are the asset, and software should make them work harder.",
-          "She watched thousands of executives pay for structured access to each other. Orbiter turns that access into per-member intelligence rather than a directory.",
+          "Chief's product was the network itself. Orbiter is built on the same premise: the relationships are the asset, and software should make them work harder. She watched thousands of executives pay for structured access to each other. Orbiter turns that access into per-member intelligence rather than a directory.",
           "Her portfolio leans community and women-led consumer. A privacy-first, human-in-the-loop relationship product matches both her thesis and her lived operator experience."
         ]
       },
@@ -292,27 +404,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdbb-0f2f-7348-a8ac-486247c74c96"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "You proved curated professional networks are a venture-scale business. Orbiter is the intelligence layer that makes each member's existing network worth more."
+          "text": "You proved curated professional networks are a venture-scale business. Orbiter is the intelligence layer that makes each member's existing network worth more.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "Chief worked because a woman's network is the one thing nobody could hand her. Orbiter is built on the same belief: the network is the asset."
+          "text": "Chief worked because a woman's network is the one thing nobody could hand her. Orbiter is built on the same belief: the network is the asset.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "Membership was the product at Chief. The product here is what the membership quietly knew all along."
+          "text": "Membership was the product at Chief. The product here is what the membership quietly knew all along.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You've spent years watching someone walk into a Chief dinner as a stranger and leave with a board seat. Orbiter is what happens when software catches those moments before they happen.",
           "model": "z-ai/glm-5.3-flash",
@@ -326,31 +454,55 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbb-946e-7acf-ad93-6d1a8522a86d",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-lindsay",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-lindsay-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Lindsay",
+          "target_entity_id": "01a0cdbb-0f2f-7348-a8ac-486247c74c96",
+          "group_ref": "g-lindsay",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "The intelligence layer for networks like Chief",
+              "message": "Hi Lindsay,\n\nAt Chief you proved curated professional networks are a venture-scale business. Orbiter is built on the same premise: the relationships are the asset, and software should make them work harder.\n\nWhere Chief gave members structured access to each other, Orbiter turns each member's existing network into private, per-member intelligence, with a human in the loop on every introduction. We're raising a $2.8M seed with 10,000+ operators waitlisted. I'd love your read.\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     },
     {
       "source_ref": "candidate-esther-dyson",
       "rank": 5,
       "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Esther has argued for three decades that reputation and relationships are the real asset. Orbiter finally gives that asset a graph.",
         "body": [
-          "Her angel record, from Delicious and Dopplr to Crowdbooster, is a through-line of tools that make social context usable. Orbiter is the largest version of that bet yet.",
-          "She has written about digital identity, attention, and privacy since before the social web existed. A privacy-first, per-tenant relationship graph with human-in-the-loop outreach is the architecture her positions point to.",
+          "Her angel record, from Delicious and Dopplr to Crowdbooster, is a through-line of tools that make social context usable. Orbiter is the largest version of that bet yet. She has written about digital identity, attention, and privacy since before the social web existed. A privacy-first, per-tenant relationship graph with human-in-the-loop outreach is the architecture her positions point to.",
           "At seed stage she backs the person and the problem. The problem here is the one she has been circling her whole career."
         ]
       },
@@ -361,27 +513,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdbb-bf0c-7106-ab3d-ded775669b7c"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "75 tracked angel deals with a through-line from Delicious and Dopplr to today: tools that make social context usable. This is the biggest version of that bet yet."
+          "text": "75 tracked angel deals with a through-line from Delicious and Dopplr to today: tools that make social context usable. This is the biggest version of that bet yet.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "You've spent a career arguing that who we are to each other matters more than what we do. Orbiter is that conviction, finally executable as software."
+          "text": "You've spent a career arguing that who we are to each other matters more than what we do. Orbiter is that conviction, finally executable as software.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "Every CRM sells the lie that a relationship is a record. You've known better for decades. We built the alternative."
+          "text": "Every CRM sells the lie that a relationship is a record. You've known better for decades. We built the alternative.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "Back in 1998 you chaired ICANN, the body that taught the internet who was who. Orbiter answers the question that came next: who knows whom, and why.",
           "model": "z-ai/glm-5.3-flash",
@@ -395,31 +563,55 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdea-8ba3-74b7-8276-9483b175ebf4",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-esther",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-esther-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Esther",
+          "target_entity_id": "01a0cdbb-bf0c-7106-ab3d-ded775669b7c",
+          "group_ref": "g-esther",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "Reputation and relationships, finally as a graph",
+              "message": "Hi Esther,\n\nYou've argued for three decades that reputation and relationships are the real asset. Orbiter gives that asset a graph: private, per tenant, with a human in the loop on every introduction.\n\nFrom Delicious and Dopplr to Crowdbooster, your angel record backs tools that make social context usable. This is the largest version of that bet yet. We're raising a $2.8M seed with 10,000+ operators waitlisted, and I'd value your read on the problem.\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     },
     {
       "source_ref": "candidate-randi-zuckerberg",
       "rank": 6,
       "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-      "entity_type": "person",
+      "entity_type": "persons",
       "content_status": "ready",
       "suggestion_mode": null,
-      "badge": "NYC ANGEL",
+      "badge": null,
       "why": {
         "headline": "Randi watched the friend graph become an economy at Facebook. Orbiter is the professional relationship graph's turn.",
         "body": [
-          "She ran marketing at Facebook while the friend graph became the most valuable asset in consumer tech. Orbiter applies the same graph economics to professional relationships, privately and per tenant.",
-          "Her portfolio through Zuckerberg Media and HUG, including Curastory, Virtualness, and Sportsbox AI, sits exactly on the creator-economy and media seam Orbiter opens with.",
+          "She ran marketing at Facebook while the friend graph became the most valuable asset in consumer tech. Orbiter applies the same graph economics to professional relationships, privately and per tenant. Her portfolio through Zuckerberg Media and HUG, including Curastory, Virtualness, and Sportsbox AI, sits exactly on the creator-economy and media seam Orbiter opens with.",
           "A 10,000+ organic waitlist and stealth enterprise pilots is the distribution playbook she ran herself, pointed at a graph she understands better than most."
         ]
       },
@@ -430,27 +622,43 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
         "01a0cdbc-0167-7b40-b213-6819fd81acad"
       ],
       "hooks": [
-      {
+        {
+          "ref": "hook-thesis",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "thesis",
-          "text": "Your book, Curastory, Virtualness, Sportsbox AI, is creator economy at the tech/media seam. Our beachhead is exactly that seam."
+          "text": "Your book, Curastory, Virtualness, Sportsbox AI, is creator economy at the tech/media seam. Our beachhead is exactly that seam.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "precise and evidence-led",
+          "temperature": 0.4,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-personal",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "personal",
-          "text": "You watched the friend graph change what people meant to each other. Orbiter is built for the moment the professional graph does the same."
+          "text": "You watched the friend graph change what people meant to each other. Orbiter is built for the moment the professional graph does the same.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "warm and personal",
+          "temperature": 0.7,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-provocative",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "provocative",
-          "text": "Facebook made the world searchable by friend. Nobody has made a career searchable by trust. That gap is our $2.8M seed."
+          "text": "Facebook made the world searchable by friend. Nobody has made a career searchable by trust. That gap is our $2.8M seed.",
+          "model": "z-ai/glm-5.3-flash",
+          "tone_instruction": "bold and contrarian",
+          "temperature": 0.9,
+          "max_tokens": 4000
         },
-      {
+        {
+          "ref": "hook-remix",
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "angle": "hook_remix",
           "text": "You turned Facebook into a broadcast booth — streaming the first inauguration of the social era to millions — and Orbiter is built for what happens after the stream ends: the two people in that crowd who were always meant to meet.",
           "model": "z-ai/glm-5.3-flash",
@@ -464,17 +672,42 @@ The parent row in `suggestions.suggestion_request` that this package's `suggesti
       "entities": [
         {
           "entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
-          "entity_type": "person",
+          "entity_type": "persons",
           "role": "target"
         },
         {
           "entity_id": "01a0cdbc-4a8e-7903-ab14-11b231ad7a7a",
-          "entity_type": "company",
+          "entity_type": "companies",
           "role": "target_org"
         }
       ],
-      "action_groups": [],
-      "actions": []
+      "action_groups": [
+        {
+          "ref": "g-randi",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-randi-email",
+          "action_type": "draft_email",
+          "rank": 1,
+          "label": "Email Randi",
+          "target_entity_id": "01a0cdbc-0167-7b40-b213-6819fd81acad",
+          "group_ref": "g-randi",
+          "params": {
+            "emails": [
+              "mark@orbiter.io"
+            ],
+            "draft": {
+              "subject": "The professional graph's turn",
+              "message": "Hi Randi,\n\nYou watched the friend graph become an economy at Facebook. Orbiter applies the same graph economics to professional relationships, privately and per tenant.\n\nYour book, Curastory, Virtualness and Sportsbox AI, sits on the creator-economy and media seam we open with. We have 10,000+ operators on an organic waitlist and stealth enterprise pilots: the distribution playbook you ran, pointed at a graph you know better than most. We're raising a $2.8M seed. Open to a quick look?\n\nBest,\nMark"
+            },
+            "sender_name": "Mark Pederson"
+          }
+        }
+      ]
     }
   ]
 }
@@ -498,14 +731,20 @@ Verify the LinkedIn URLs at load time. If any profile resolves ambiguously, stop
 
 ## WHY and hooks
 
-Each candidate's WHY is investor-facing: why this person should invest in Orbiter. The `hooks` array carries three opening lines at different angles (`personal`, `thesis`, `provocative`); each hook object follows the documented shape of `entity_id`, `entity_type`, `angle`, and `text`.
+Each candidate's WHY is investor-facing: why this person should invest in Orbiter. The `hooks` array carries three written opening lines at different angles (`thesis`, `personal`, `provocative`) and one generated `hook_remix`. Each hook has `ref`, `entity_id`, `entity_type`, `angle`, and `text`, plus the generation recipe that produced it (`model`, `tone_instruction`, `temperature`, `max_tokens`). Every angle uses `z-ai/glm-5.3-flash` with `max_tokens: 4000`; the temperature and tone differ by angle:
+
+| Angle | `temperature` | `tone_instruction` |
+| --- | --- | --- |
+| `thesis` | 0.4 | precise and evidence-led |
+| `personal` | 0.7 | warm and personal |
+| `provocative` | 0.9 | bold and contrarian |
+| `hook_remix` | 0.8 | more creative | See [Scope for hooks](/guides/open-work/suggestion-delivery-and-tables/suggestion-service-ingest#scope-for-hooks) for the rules.
 
 ### 1. Laurel Touby
 
 **WHY headline:** Laurel built mediabistro on the value of connecting media people. Orbiter is that thesis with a context graph.
 
-- She spent a decade proving media professionals will pay to find each other, then sold the business that did it. Orbiter automates that same job on a per-tenant context graph, so the network she curated by hand becomes software.
-- Her portfolio through Supernode VC leans toward media, community, and network-effect tools. Orbiter is the infrastructure bet beneath all three.
+- She spent a decade proving media professionals will pay to find each other, then sold the business that did it. Orbiter automates that same job on a per-tenant context graph, so the network she curated by hand becomes software. Her portfolio through Supernode VC leans toward media, community, and network-effect tools. Orbiter is the infrastructure bet beneath all three.
 - The round is her natural ticket: a $2.8M NYC seed with a 10,000+ organic waitlist, enterprise pilots, and a founder team that already shipped a category product in Frame.io's orbit.
 
 **Hooks:**
@@ -521,8 +760,7 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 
 **WHY headline:** Susan's career ran on relationship capital from ABC prime time to BBG. Orbiter makes that capital queryable.
 
-- She crossed from running entertainment businesses to funding founders, which is exactly the bridge Orbiter's beachhead sits on: media and entertainment first, venture and dealmakers second.
-- BBG Ventures backed women-led consumer companies where distribution was the network. Orbiter turns that kind of network into a durable, owned asset instead of a rented audience.
+- She crossed from running entertainment businesses to funding founders, which is exactly the bridge Orbiter's beachhead sits on: media and entertainment first, venture and dealmakers second. BBG Ventures backed women-led consumer companies where distribution was the network. Orbiter turns that kind of network into a durable, owned asset instead of a rented audience.
 - She has seen every version of "who you know" decide outcomes for four decades. A platform that remembers everyone and engineers serendipity is the product her career argued for.
 
 **Hooks:**
@@ -538,8 +776,7 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 
 **WHY headline:** Desiree has monetized the relationship layer between talent, brands, and media for 30 years. Orbiter sells that layer as software.
 
-- Full Picture runs on knowing who can reach whom and why. Orbiter's double opt-in introduction workflow is her daily practice, automated end to end.
-- Her angel book, including Afterparty, Unrivaled, and Phia, is a map of the new talent economy. Orbiter's context graph is the infrastructure all of them eventually need.
+- Full Picture runs on knowing who can reach whom and why. Orbiter's double opt-in introduction workflow is her daily practice, automated end to end. Her angel book, including Afterparty, Unrivaled, and Phia, is a map of the new talent economy. Orbiter's context graph is the infrastructure all of them eventually need.
 - She sits inside the exact persona the product serves: a connector whose value compounds with every introduction she makes.
 
 **Hooks:**
@@ -555,8 +792,7 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 
 **WHY headline:** Lindsay proved curated professional networks are a venture-scale business at Chief. Orbiter is the intelligence layer for every network like it.
 
-- Chief's product was the network itself. Orbiter is built on the same premise: the relationships are the asset, and software should make them work harder.
-- She watched thousands of executives pay for structured access to each other. Orbiter turns that access into per-member intelligence rather than a directory.
+- Chief's product was the network itself. Orbiter is built on the same premise: the relationships are the asset, and software should make them work harder. She watched thousands of executives pay for structured access to each other. Orbiter turns that access into per-member intelligence rather than a directory.
 - Her portfolio leans community and women-led consumer. A privacy-first, human-in-the-loop relationship product matches both her thesis and her lived operator experience.
 
 **Hooks:**
@@ -572,8 +808,7 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 
 **WHY headline:** Esther has argued for three decades that reputation and relationships are the real asset. Orbiter finally gives that asset a graph.
 
-- Her angel record, from Delicious and Dopplr to Crowdbooster, is a through-line of tools that make social context usable. Orbiter is the largest version of that bet yet.
-- She has written about digital identity, attention, and privacy since before the social web existed. A privacy-first, per-tenant relationship graph with human-in-the-loop outreach is the architecture her positions point to.
+- Her angel record, from Delicious and Dopplr to Crowdbooster, is a through-line of tools that make social context usable. Orbiter is the largest version of that bet yet. She has written about digital identity, attention, and privacy since before the social web existed. A privacy-first, per-tenant relationship graph with human-in-the-loop outreach is the architecture her positions point to.
 - At seed stage she backs the person and the problem. The problem here is the one she has been circling her whole career.
 
 **Hooks:**
@@ -589,8 +824,7 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 
 **WHY headline:** Randi watched the friend graph become an economy at Facebook. Orbiter is the professional relationship graph's turn.
 
-- She ran marketing at Facebook while the friend graph became the most valuable asset in consumer tech. Orbiter applies the same graph economics to professional relationships, privately and per tenant.
-- Her portfolio through Zuckerberg Media and HUG, including Curastory, Virtualness, and Sportsbox AI, sits exactly on the creator-economy and media seam Orbiter opens with.
+- She ran marketing at Facebook while the friend graph became the most valuable asset in consumer tech. Orbiter applies the same graph economics to professional relationships, privately and per tenant. Her portfolio through Zuckerberg Media and HUG, including Curastory, Virtualness, and Sportsbox AI, sits exactly on the creator-economy and media seam Orbiter opens with.
 - A 10,000+ organic waitlist and stealth enterprise pilots is the distribution playbook she ran herself, pointed at a graph she understands better than most.
 
 **Hooks:**
@@ -602,14 +836,22 @@ Each candidate's WHY is investor-facing: why this person should invest in Orbite
 | `provocative` | Facebook made the world searchable by friend. Nobody has made a career searchable by trust. That gap is our $2.8M seed. |
 | `hook_remix` | You turned Facebook into a broadcast booth — streaming the first inauguration of the social era to millions — and Orbiter is built for what happens after the stream ends: the two people in that crowd who were always meant to meet. *(model `z-ai/glm-5.3-flash`, "more creative", temp 0.8, max_tokens 4000)* |
 
+## Email actions
+
+Each suggestion has one `draft_email` action to the suggested person, in its own action group with `trajectory_ref: null`. A group has no trajectory only when the requester has no path to the suggestion at all and must reach out cold. A suggestion with a path carries a trajectory, and its group points at it.
+
+Every `emails` array holds `mark@orbiter.io`, the requester's own address, so a test send from the draft composer lands back with him. Every action also carries `sender_name: "Mark Pederson"`, the requester's display name, which the AI draft signs off with. Verified addresses for the six live only in Universe, never in this package. The drafts are written from each suggestion's WHY and hooks, signed by Mark as the batch requester.
+
 ## Load notes
 
 - All entity IDs are real `persons.persons.id` / `companies.companies.id` values resolved against **dev AlloyDB** (2026-09-23). The `suggestion_request` parent row exists in dev (`suggestions.suggestion_request`, id `01a0cdce-53d4-7079-a21a-1093307f43c3`, panel title "Top NYC Female Angels"). To move this demo to another environment, re-resolve every ID per [Create Demo Suggestions](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions#replicate-the-demo-for-another-user).
 - The three orgs were seeded/resolved in **GCP Universe dev** (2026-09-23) and inserted into `companies.companies` with `source = 'universe_projection'`, keyed by their Universe entity UUIDs: Supernode Ventures `01a0cdba-76c0-7250-a1e1-abdc6de83c85` (enriched), EDventure Holdings `01a0cdea-8ba3-74b7-8276-9483b175ebf4` (created via `get-add` with `cascade_depth: 0`, full enrich succeeded), and Zuckerberg Media `01a0cdbc-4a8e-7903-ab14-11b231ad7a7a` (already enriched).
 - **Supernode exists twice in dev Universe.** The package uses the enriched `01a0cdba-76c0-7250-a1e1-abdc6de83c85`. A twin `01a0cdba-7bb2-7a97-a858-31d0c99267c4` holds the `supernode.vc` domain key and the fundable id but is quarantined (`identity_unresolved` — its LinkedIn `supernode-ventures` conflicts with `supernodeventures` on the enriched twin). The pair is pending in `curation.human_review_queue`; whichever survives the merge keeps the other's identifiers via `merged_into`.
-- **Esther Dyson's dev person row has mangled name fields** — `first_name` is `Esther Dyson Founder Way To`, `last_name` is `Wellville` (a bad parse of "Esther Dyson, Founder, Way to Wellville"). The ID is correct, but the card header will render oddly until the row is fixed.
+- **Esther Dyson's name is fixed on dev.** Her backend row was held before Universe finished enriching her and read `Esther Dyson Founder Way To` / `Wellville`; an admin projection re-sync on 2026-09-24 replaced it with Universe's `Esther` / `Dyson`, title, bio, and avatar.
 - Lindsay Kaplan's `current_company_id` points at **Next Wave NYC**, not Chief. The `target_org` here uses Chief because the WHY is about Chief; swap to `Next Wave NYC` if the card should mirror her current affiliation.
-- `hooks` stays a JSONB array on the `suggestion` row. The four `angle` values (`personal`, `thesis`, `provocative`, `hook_remix`) are demo content, not enum values; the contract only requires `entity_id`, `entity_type`, `angle`, and `text` per hook. The `hook_remix` entries carry the generation recipe that produced them — `model`, `tone_instruction`, `temperature`, `max_tokens` — fed the suggestion's WHY plus its other three hooks. `glm-5.3-flash` is a reasoning model: `max_tokens: 4000` is the safe value for every entry — at 1500 some calls return empty `content` with `finish_reason: length` because the reasoning budget eats the output cap. Metadata is decoration on the hook object, not part of the required shape.
-- With empty `action_groups` and `actions`, each card renders WHY plus hooks without outreach buttons. Add `draft_email` actions later if the demo needs the contact arrays.
+- Every hook carries a `ref`, unique within its suggestion: `hook-thesis`, `hook-personal`, `hook-provocative`, `hook-remix`. The four `angle` values are demo content, not enum values. Every hook carries the recipe that produced it (`model`, `tone_instruction`, `temperature`, `max_tokens`); the `hook_remix` was fed the suggestion's WHY plus its other three hooks. `glm-5.3-flash` is a reasoning model: `max_tokens: 4000` is the safe value; at 1500 some calls return empty `content` with `finish_reason: length`.
+- **Hooks with `ref` and a recipe load only on the backend branch `feat/suggestion-hooks`.** On `main` the CLI rejects this package: its strict decode does not know `ref` or the recipe keys. That branch stores each hook as a `suggestions.suggestion_hook` row as well as in the `suggestion.hooks` JSONB. The backend fixture `internal/features/suggestions/testdata/angel_outcome.package.json` is this package in its loadable form.
+- Each card renders a DRAFT EMAIL action under WHY and hooks, addressed to `mark@orbiter.io` for testing.
+- **Laurel Touby and Randi Zuckerberg have no title, bio, or avatar on dev yet.** Universe dev holds all three for both but withholds their projections: each person run depends on an employer company whose own run is quarantined by a LinkedIn identity conflict. Laurel's is the duplicate Supernode Ventures `01a0cdba-7bb2-…` (`supernode-ventures` held, `supernodeventures` found); Randi's is HUG `01a0cdbc-2daa-…` (`thehugxyz` held, `thehugart` found). Once Universe resolves those and re-runs both people, the same admin re-sync fills the backend rows.
 
 [Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).

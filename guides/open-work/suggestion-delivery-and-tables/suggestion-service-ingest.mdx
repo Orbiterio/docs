@@ -13,7 +13,7 @@ Checked against `orbiter-backend` `main` at `aa647514` (2026-09-23). Paths are r
 ## Scope for hooks
 
 <Warning>
-**Plan — not built.** This section specifies the work. Nothing below exists in `orbiter-backend` yet; the rest of this page describes the code as it is today.
+**Built on a branch, not merged or deployed.** Steps 1–6 are on the `orbiter-backend` branch `feat/suggestion-hooks` (commits `6325e62a`, `c0274364`, `2cee69b2`, `01d6f815`, `22c29d4e`, `f113f7f8`) and were verified against a local database on 2026-09-24. `main` and dev still behave as [What happens on main](#what-happens-on-main) describes, and the rest of this page describes `main`. Deploying waits on Universe sending `ref`: see [Decisions](#decisions).
 </Warning>
 
 ### Goal
@@ -57,20 +57,22 @@ The Angel Outcome Demo shape, plus the new `ref`:
 | `model` | No | text | Only on generated hooks. Non-empty when present |
 | `tone_instruction` | No | text | Only on generated hooks. Non-empty when present |
 | `temperature` | No | number | Only on generated hooks. `0` to `2` when present |
-| `max_tokens` | No | integer | Only on generated hooks. Greater than `0` when present |
+| `max_tokens` | No | integer | Only on generated hooks. Greater than `0` and at most 2147483647 (the `INT` column) when present |
 
 The four recipe keys are optional and independent: a hook can carry none, some, or all of them. Hooks have no `rank`; array order is the display order and is stored as `position`.
 
-### What happens today
+### What happens on main
 
-- **The CLI rejects the Angel package.** `cmd/ingestpackage` decodes with `DisallowUnknownFields`, and `universe.PackageHook` has only `entity_id`, `entity_type`, `angle`, and `text`. The first `hook_remix` hook fails the load at `decodePackage` with `json: unknown field "model"`. The Angel Outcome Demo's load note saying the recipe is "decoration" that the contract ignores is wrong for the CLI and needs correcting as part of this work.
+- **The CLI rejects the Angel package.** `cmd/ingestpackage` decodes with `DisallowUnknownFields`, and `universe.PackageHook` has only `entity_id`, `entity_type`, `angle`, and `text`. The first `hook_remix` hook fails the load at `decodePackage` with `json: unknown field "model"`. The Angel Outcome Demo's load notes now say the package loads only on the branch.
 - **The Leverage Loop worker drops the recipe silently.** The Universe client decodes leniently, so the four keys are discarded and the hook is stored without them.
 - **No package carries a hook `ref` yet.** Once `ref` is required, every package with hooks has to add one: the Angel Outcome Demo, the samples, and whatever Universe sends to the Leverage Loop worker.
 - **Hooks are stored only as JSONB** in `suggestion.hooks`, written by `hooksJSON` and read back by `hooksFromJSON` for `ReadBatch` and the feed (`HookResponse` in the API).
 
 ### Table spec
 
-New migration `migrations/<timestamp>_suggestions_005_hooks.sql`. It follows `suggestion_action` for the `ref` key and `suggestion_node` for `position`, because hooks have no rank.
+Migration `migrations/20260923224419_suggestions_005_hooks.sql` on the branch; it must be re-timestamped to be newer than `main` before it merges. It follows `suggestion_action` for the `ref` key and `suggestion_node` for `position`, because hooks have no rank.
+
+The migration also backfills hooks already stored as JSONB. Each gets `ref` `hook-<position>`, written into `suggestion.hooks` first and then copied into the table, so the two agree; hooks that already have a `ref` keep it. Down drops the table and leaves the added keys, which older code ignores.
 
 ```sql suggestions.suggestion_hook
 -- +goose Up
@@ -131,8 +133,8 @@ Moving the readers to the table and dropping the JSONB column is a later, separa
 | 3 | `internal/clients/universe/suggestion_package.go` | Add to `PackageHook`: `Ref string` (`json:"ref"`), and `Model *string`, `ToneInstruction *string`, `Temperature *float64`, `MaxTokens *int`, each `json:"…,omitempty"` so a hook without a recipe does not store four `null` keys in the JSONB |
 | 4 | `types_ingest.go` | The domain `Hook` already uses `Ref` for the entity (`nodespub.Ref`). Rename that field to `Entity` and add `Ref string`, matching `Action`, `ActionGroup`, and `Trajectory`; then add the four recipe fields. Update every use of the old field: `universe_package.go`, `validate_refs.go`, `repo_ingest_json.go`, `http_mappers_feed.go` |
 | 5 | `universe_package.go` | `hooksFromPackage` copies `ref` and the four recipe fields |
-| 6 | `validate_refs.go` | `validateHooks` checks `ref` with the existing `refs` helper (`suggestions[i].hooks[j].ref`: `required` or `duplicate`) and adds the recipe rules from the shape table. The existing registry, `angle`, and `text` checks stay |
-| 7 | `repo_ingest_rows.go` | `insertSuggestion` inserts one `suggestion_hook` row per hook, in the same transaction, after `suggestion_node` |
+| 6 | `validate_refs.go` | `validateHooks` checks `ref` with the existing `refs` helper (`suggestions[i].hooks[j].ref`: `required` or `duplicate`); `validateHookRecipe` adds the recipe rules from the shape table, plus `max_tokens` `too large` above the 32-bit `INT` column. The existing registry, `angle`, and `text` checks stay |
+| 7 | `repo_ingest_rows.go` | `insertSuggestion` calls `insertHooks`, which writes one `suggestion_hook` row per hook in the same transaction, after `suggestion_node` |
 | 8 | `repo_ingest_json.go` | `hooksJSON` writes `ref` and the four recipe fields into the JSONB column |
 | 9 | `repo_ingest_read.go` | No change needed in this phase: `hooksFromJSON` picks the new fields up through `PackageHook`. Optionally load `suggestion_hook` rows to assert they match the JSONB |
 | 10 | `cmd/ingestpackage/report.go` | Add a `hooks` count to `counts` so the load report can be checked against the package |
@@ -245,17 +247,18 @@ Each case is a one-field edit to the fixture. Each must be rejected with the fie
 | Validation of the recipe keys | **Each optional**, range-checked when present |
 | Ref naming convention | **`hook-<angle>`** in kebab-case, with a numeric suffix when an angle repeats (`hook-thesis`, `hook-thesis-2`). For the Angel demo: `hook-thesis`, `hook-personal`, `hook-provocative`, `hook-remix`. This is a convention for writers; validation only requires non-empty and unique |
 | Rolling out the required `ref` for the Leverage Loop worker | **Coordinate first.** Agree the `ref` addition with the Universe contract and deploy the requirement only once Universe sends it. The backend never makes refs up for missing ones |
-| Backfill `suggestion_hook` from hooks already stored as JSONB? | **Check the count, then decide.** Run `SELECT count(*) FROM suggestions.suggestion WHERE hooks IS NOT NULL AND jsonb_array_length(hooks) > 0` read-only on dev and staging. If it is zero, skip the backfill. Otherwise backfill in the migration with `jsonb_array_elements(hooks) WITH ORDINALITY`, assigning `hook-<position>` refs because stored hooks have none |
+| Backfill `suggestion_hook` from hooks already stored as JSONB? | **Backfill in the migration.** The local count found 8 hooks on 4 suggestions from one real Universe loop, which shows Universe already sends hooks without refs (angles `mechanism` and `rationale`). The migration writes `hook-<position>` into the JSONB and the table. Dev and staging have not been counted |
+| Write the backfilled refs into the JSONB too? | **Yes, both.** The table and the JSONB stay identical, so the API sees a ref on every hook |
 
 ### Order of work
 
-1. Agree the `ref` addition with Universe, and run the backfill count on dev and staging.
-2. Migration, queries, and `sqlc` generation.
-3. Wire and domain structs (including the `Hook.Ref` → `Entity` rename), mapping, and validation, with unit tests.
-4. The table insert and the JSONB write, with the round-trip integration test.
-5. The CLI report count.
-6. Add refs to the Angel Outcome Demo package and run the [acceptance test](#acceptance-test-angel-outcome-demo): the Go integration test, then the dev load through the CLI, checking every table against the expected rows.
-7. Update the docs: this page's tables section, the Angel Outcome Demo package and load note, the [rejection rules](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions#rules-that-reject-a-package), and [Sample Suggestion Data](/guides/open-work/suggestion-delivery-and-tables/sample-suggestion-data).
+1. **Open:** agree the `ref` addition with Universe. Until Universe sends it, every delivered loop with hooks would be rejected.
+2. **Done:** migration, queries, and `sqlc` generation (`6325e62a`).
+3. **Done:** wire and domain structs, including the `Hook.Ref` → `Entity` rename, and mapping (`c0274364`); validation (`2cee69b2`).
+4. **Done:** the table insert and the JSONB write, with the round-trip integration test (`01d6f815`).
+5. **Done:** the CLI report count (`22c29d4e`).
+6. **Partly done:** the Angel Outcome Demo package carries refs, and the Go acceptance test passes (`f113f7f8`). The same package loaded into a local database on 2026-09-24 with every expected row. The dev load waits on the merge and deploy.
+7. **Done:** these docs.
 
 ## Callers
 
@@ -381,6 +384,10 @@ The dismissal columns (`dismissed_at`, `dismissed_by`, `dismissal_reason`) and `
 
 The candidate's `entities[]` registry (`CreateSuggestionNode`): `entity_type`, `node_uuid`, `role`, and `position` (the 1-based array index). Every ID-only reference on the candidate, such as a key person, connector, action target, or introduction recipient, has to resolve to one of these rows. The UI builds the card header from the `beneficiary` and `target_org` roles.
 
+### `suggestions.suggestion_hook` (branch only)
+
+On `feat/suggestion-hooks`, one row per `hooks[]` item (`CreateSuggestionHook`, written by `insertHooks`): `ref`, `position` (the 1-based array index), `entity_type`, `node_uuid`, `angle`, `text`, and the nullable recipe columns `model`, `tone_instruction`, `temperature`, `max_tokens`. Unique on `(suggestion_id, ref)` and `(suggestion_id, position)`; deleted with its suggestion. The JSONB `suggestion.hooks` is still written and is what `ReadBatch` and the feed read; the rows must equal it element by element. See [Scope for hooks](#scope-for-hooks).
+
 ### `suggestions.suggestion_trajectory`
 
 One row per `trajectories[]` item (`CreateSuggestionTrajectory`): `ref`, `rank`, `connector_node_uuids` (`UUID[]` from `connector_entity_ids`), and `body` (`TEXT[]`). The trajectory's `path_refs` are validated but not stored.
@@ -397,7 +404,7 @@ One row per `actions[]` item (`CreateSuggestionAction`): `ref`, `group_ref`, `ac
 
 | `action_type` | `params` shape | Target rule |
 | --- | --- | --- |
-| `draft_email` | `{emails[], draft: {subject, message}}` | Required; a declared person |
+| `draft_email` | `{emails[], draft: {subject, message}, sender_name?}` | Required; a declared person |
 | `draft_sms` | `{mobile_phones[], draft: {message}}` | Required; a declared person |
 | `make_intro` | `{workflow, recipients[{entity_id, entity_type, emails[]}], steps[{rank, step, label, recipient_entity_ids[], draft}]}` | Required; must be the batch beneficiary |
 | `create_task` | `{due_in_days}` | Optional; any declared entity |
