@@ -36,7 +36,7 @@ Serendipity has no request, requester or beneficiary on the batch. Scope comes f
 
 ## Suggestion request record
 
-The request row still exists, so the request carries its titles and appears in the requester's Serendipity request list. The link runs one way: the request's `batch_id` points at the batch, while the batch's `suggestion_request_id` stays `null`, because `validateScope` rejects a Serendipity batch that names a request. Insert it with an idempotent `INSERT … ON CONFLICT (id) DO UPDATE`; order relative to the batch load does not matter, since `batch_id` has no foreign key. The feed joins titles through the batch's `suggestion_request_id`, so the feed itself still shows no title.
+The request row still exists, so the request carries its titles and summary: the Serendipity header shows `llm_summary_context` (one paragraph per string) under the title, falling back to `request_context`, then `request_header_title`. The link runs one way: the request's `batch_id` points at the batch, while the batch's `suggestion_request_id` stays `null`, because `validateScope` rejects a Serendipity batch that names a request. Insert it with an idempotent `INSERT … ON CONFLICT (id) DO UPDATE`; order relative to the batch load does not matter, since `batch_id` has no foreign key. The feed joins titles through the batch's `suggestion_request_id`, so the feed itself still shows no title.
 
 ```json suggestion_request record
 {
@@ -46,12 +46,17 @@ The request row still exists, so the request carries its titles and appears in t
   "status": "suggestion",
   "request_panel_title": "AI & Media Events, Next 60 Days",
   "request_header_title": "Events and conferences in AI & Media in the next 60 days",
-  "request_context": null,
+  "request_context": "There are nine AI and media events in October, three in New York. Three worth blocking time for: the Paley International Council Summit, MIPCOM in Cannes and NAB Show New York.",
   "class_slug": null,
   "person_id": null,
   "number_of_results": 9,
   "deliver_format": null,
-  "llm_summary_context": [],
+  "llm_summary_context": [
+    "Nine AI and media events in October, three in New York. Three worth blocking time for:",
+    "Paley International Council Summit, Oct 19–21, NYC. Densest CEO room of the month. On October 20, Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick speak on gaming, culture and the future of entertainment. No travel.",
+    "MIPCOM, Oct 12–15, Cannes. The global content market, now with AI companies on the seller side. Studios, streamers, YouTube, brands, AI innovators and investors from 100+ countries in four days. Go if a studio or licensing deal is on the roadmap.",
+    "NAB Show New York, Oct 21–22, Javits. Same week as Paley. Five themes: AI, creator economy, streaming, sports, broadcasting. Low cost, high operator density."
+  ],
   "modified": false,
   "organization_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
   "universe_job_id": null,
@@ -560,7 +565,7 @@ Done in dev on 2026-09-24. The steps below record what was run, so another envir
 
 ### Seed records
 
-One record per event in the `seed-live-events` input shape (`event_key`, `event_url`, `series_name`, dates, venue, counts). Counts are organizer-published figures where available and `null` otherwise; `actual_attendance`, `logo_url` and `linkedin_url` are unfilled.
+One record per event in the `seed-live-events` input shape (`event_key`, `event_url`, `series_name`, dates, venue, counts). Counts are organizer-published figures where available and `null` otherwise; `actual_attendance` and `linkedin_url` are unfilled. `logo_url` is logo.dev by the event website's domain, checked on 2026-09-24 to resolve to a real logo for all nine; when an event has no domain, the logo should come from the page scrape instead.
 
 ```json live_event seed records expandable
 [
@@ -593,7 +598,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "The industry all in one place",
     "short_description": "Four days of programming across marketing, media, advertising and technology, with AI, commerce and the creator economy as headline themes.",
     "long_description": "Advertising Week New York returns to The Penn District in Midtown Manhattan for four days of stages, summits and networking. The 2026 program runs 1,300+ speakers and 500+ sessions covering AI, creativity, commerce, media, technology, culture and the creator economy, plus dedicated summits such as Gaming. Attendees span CMOs, agency leaders, platforms, creators and media executives, making it the densest marketing and media crowd in New York each October.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/advertisingweek.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "advertisingweek",
     "source": "manual_seed"
@@ -627,7 +632,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Shaping the new AI paradigm",
     "short_description": "10th anniversary edition of the Amsterdam AI summit: 10 tracks including AI Media, 300+ speakers and 10,000+ attendees from enterprise, big tech, startups and investors.",
     "long_description": "World Summit AI anchors World AI Week in Amsterdam and gathers the full AI ecosystem: enterprise leaders, big tech, startups, investors, researchers and policymakers. The 2026 edition marks its 10th anniversary under the theme 'Shaping the new AI paradigm', with 10 tracks (Adopt AI, Build AI, AI Labs, AI Media and more), 300+ speakers and 100+ exhibitors. Speakers include Zico Kolter (Carnegie Mellon, OpenAI board) and C-suite executives from Tencent, AMD, Isomorphic Labs and Sony. Tickets start around EUR 1,099 plus tax.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/worldsummit.ai?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "WorldSummitAI",
     "source": "manual_seed"
@@ -661,7 +666,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Media Tech & AI Week: conference and study tour",
     "short_description": "INMA's second annual San Francisco week pairing a two-day conference with a Silicon Valley study tour, bridging news publishers and the major AI and platform players.",
     "long_description": "INMA Media Tech & AI Week combines a two-day conference at KQED with INMA's eighth San Francisco study tour of leading tech and AI companies. The conference puts frontier AI companies, technology platforms, publishers and researchers on one stage to work through LLMs, content rights management, licensing standards, discoverability and the economics of content in an AI-first world. The 2026 program includes a keynote conversation with Substack co-founder Hamish McKenzie and sessions drawing on IAB Tech Lab standards work. Built for media executives deciding how to license, attribute and monetize content with AI players.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/inma.org?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": null,
     "source": "manual_seed"
@@ -695,7 +700,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Where the industry creates what's next",
     "short_description": "The global content business market: studios, streamers, broadcasters, YouTube, brands, AI innovators and investors from 100+ countries across four days in Cannes, preceded by MIPJUNIOR Oct 10-11.",
     "long_description": "MIPCOM is the largest global market for the content business, run by RX at the Palais des Festivals in Cannes. The 42nd edition expects 10,600+ delegates including 3,300+ buyers and 350+ exhibiting companies. The 2026 program expands into the creator economy, AI, brand-funded storytelling and a new Microdrama & Vertical Content Programme, alongside the Innovation Lab and curated matchmaking meetings. A pre-opening Headliner session on Sunday Oct 11 features Dhar Mann. MIPJUNIOR runs Oct 10-11 ahead of the main market. The room where distribution, co-production and financing deals get done for the year ahead.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/mipcom.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "mipcom",
     "source": "manual_seed"
@@ -729,7 +734,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Where AI engineering meets financial services",
     "short_description": "Flagship technical conference for engineers shipping production AI, with a 2026 tilt toward financial services; 1,000-1,500 in person plus a large online audience.",
     "long_description": "AI Engineer New York is the East Coast flagship of the AI Engineer conference series, built for practitioners rather than theorists. The 2026 edition runs three days at the Sheraton New York Times Square: hands-on deep-dive workshops and expo preview on Oct 12, keynotes and breakouts on Oct 13, closing sessions on Oct 14. This year's program targets technical leaders deploying AI across banking, hedge funds, fintech, insurance and asset management, with past speakers drawn from Google DeepMind, Anthropic, OpenAI, Cursor, Netflix and Meta. Talks are livestreamed and recorded; side events cluster around the conference across Manhattan.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/ai.engineer?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "aiDotEngineer",
     "source": "manual_seed"
@@ -763,7 +768,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Innovation for every stage",
     "short_description": "10,000+ founders, investors and operators, six industry stages, Startup Battlefield 200 and AI-powered matchmaking; 2026 stages feature OpenAI, Anthropic and Replit.",
     "long_description": "TechCrunch Disrupt is the startup ecosystem's flagship gathering, returning to Moscone West in San Francisco for three days. Expect 10,000+ attendees, 300+ startups in the Expo Hall, six industry stages spanning AI, SaaS, fintech, biotech, climate and space, and the Startup Battlefield pitch competition whose alumni have raised $32B+. The 2026 lineup includes OpenAI, Anthropic and Replit; the audience carries one of the highest concentrations of active VCs of any conference, from a16z and Sequoia to hundreds of seed funds. A full week of side events runs across the city Oct 12-15.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/techcrunch.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "TechCrunch",
     "source": "manual_seed"
@@ -797,7 +802,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Global Media in Focus: Power, Platforms, and Perspective",
     "short_description": "The 'Davos of Media': an invitation-style gathering of media, tech, sports and gaming CEOs and global dignitaries at the Paley Museum in Midtown Manhattan.",
     "long_description": "The Paley International Council Summit convenes chief executives, dignitaries and industry leaders from media, entertainment, technology, sports and gaming for two days of substantive dialogue. The 2026 edition, themed 'Global Media in Focus: Power, Platforms, and Perspective', launches the inaugural Dr. John C. Malone Annual Keynote (Malone with Liberty Global CEO Mike Fries) alongside the Henry A. Kissinger Annual Keynote. Agenda highlights include Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick on gaming, culture and the future of entertainment, the evolution of Hollywood, women's sports and the 'new economics of attention'. Speakers include Versant Media CEO Mark Lazarus, Yahoo's Jim Lanzone, Adam Silver and Phil Spencer. Delegate registration without membership runs about $2,999.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/paleycenter.org?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "paleycenter",
     "source": "manual_seed"
@@ -831,7 +836,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Where media, entertainment and storytelling converge",
     "short_description": "The East Coast marketplace for media innovation: two days of exhibits and programs on AI, the creator economy, streaming, sports and broadcasting at the Javits Center.",
     "long_description": "Produced by the National Association of Broadcasters, NAB Show New York brings creators, producers, broadcasters, technologists and media business leaders to the Javits Center for two days. The 2026 program is organized around five themes: artificial intelligence, the creator economy, streaming, sports, and TV and radio broadcasting. Day 1 (Oct 21), 'Big Media, Big Tech, Big Tools', covers sports media, the future of journalism, media investment perspectives, newsroom AI and broadcast innovation; Day 2 shifts to workflows, cloud production and tech strategy. Around 11,500 attendees are expected alongside exhibits, the SMPTE ST 2110 IP Media Roadshow and the NAB Marconi Radio Awards.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/nabshow.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "NABShow",
     "source": "manual_seed"
@@ -865,7 +870,7 @@ One record per event in the `seed-live-events` input shape (`event_key`, `event_
     "tagline": "Asia's leading content market",
     "short_description": "The Tokyo International Film Festival's affiliated market for film, TV and anime rights, with a 2026 conference keynote from AGBO on technology, AI and storytelling.",
     "long_description": "TIFFCOM is the audiovisual content market affiliated with the Tokyo International Film Festival (Oct 26 - Nov 4), organized by METI, MIC and UNIJAPAN. It runs three days at the Tokyo Metropolitan Industrial Trade Center and draws buyers, producers and rights holders across film, television and animation from Asia and worldwide; the 2025 edition recorded 4,610 participants including 1,905 international attendees from 46 countries. The 2026 conference lineup includes a keynote from AGBO executives on technology, AI and storytelling, global IP strategy sessions from Nippon TV, TBS and BEAJ, the Tokyo Gap-Financing Market and the Tokyo IP Market: Adaptation & Remake.",
-    "logo_url": null,
+    "logo_url": "https://img.logo.dev/tiffcom.jp?token=pk_Twvl42WzTX2-ySNbnZKlSA",
     "linkedin_url": null,
     "twitter_handle": "TIFFCOM_Tokyo",
     "source": "manual_seed"
