@@ -1,0 +1,891 @@
+---
+title: "AI & Media Serendipity Demo"
+description: "A v2 Serendipity demo package: nine October 2026 AI and media events, three ready with a WHY and actions, six placeholders, plus the batch scope, the suggestion_request record and the live_event seed records."
+icon: "calendar-check"
+---
+
+This is a hand-written **Serendipity** demo package for the events use case: the agent answers "Events and conferences in AI & Media in the next 60 days" with nine October 2026 events. Three are `ready` cards carrying a WHY and actions; six are `placeholder` bars. It follows the same load path as the [Angel Outcome Demo](/guides/open-work/suggestion-delivery-and-tables/angel-outcome-demo): a `suggestion_request` row, then the package through `cmd/ingestpackage` per [Create Demo Suggestions](/guides/open-work/suggestion-delivery-and-tables/create-demo-suggestions).
+
+<Note>
+  **Entity IDs are resolved in dev.** All nine events and three organizers exist in dev as of 2026-09-24, and the package below carries their real IDs. The events were seeded into Universe and hand-projected into the backend; see [Resolve the entity IDs](#resolve-the-entity-ids). The IDs are dev-only: another environment needs its own seed and projection.
+</Note>
+
+<Warning>
+  **Serendipity loads as `agent_generated`, and the cards are events.** [Leverage Outcome & Serendipity](/guides/open-work/suggestion-delivery-and-tables/leverage-outcome-and-serendipity) defines Serendipity as `agent_generated` with null request, requester and beneficiary, and the backend's `validateScope` enforces it: a `user_requested` Serendipity batch is rejected. So the batch names no request and is found through the org's feed; a separate [request record](#suggestion-request-record) points at it (`GET /v1/suggestion-batches?organization_id=…&suggestion_type=serendipity`). Loading it needs the `cmd/ingestpackage` Serendipity mode on `orbiter-backend` `thursday_dev` (commit `443ba4ab`, not yet on `main`). Second, the cards are events, not people: `entity_type` is `live_events`, which is in `nodespub.ValidEntityType`, and `suggestion_mode` is `new_connection` because the taxonomy has no event value. That one is a demo choice, not a contract change.
+</Warning>
+
+## Serendipity response
+
+The copy the agent delivers: the request's `llm_summary_context`, shown verbatim under the batch title in the Serendipity header, one paragraph per string. Each card's own WHY is on the card and in the [package](#package); the facts behind those WHYs are in [WHY sources](#why-sources).
+
+<Info>
+  Nine AI and media events in October, four of them in New York. Three worth blocking time for:
+
+  Paley International Council Summit, Oct 19–21, NYC. Sony, Take-Two and John Malone in one Midtown room. On October 20, Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick talk gaming, culture and the future of entertainment, and the summit debuts the Dr. John C. Malone Annual Keynote with Malone and Liberty Global CEO Mike Fries. A Delegate pass is $2,999; no invitation needed.
+
+  MIPCOM, Oct 12–15, Cannes. MIPCOM gives AI studios their own stage. The first MIP AI Entertainment Forum opens with Utopai Studios CEO Cecilia Shen, inside a market of 10,600+ attendees and 3,300+ buyers from 110+ countries. Worth the flight if a licensing deal or an AI-studio partnership is on the Q4 roadmap.
+
+  NAB Show New York, Oct 21–22, Javits. Same week as Paley, and the operators are at Javits: 225+ exhibitors and 60+ sessions, including CNN and Scripps on AI in newsrooms and a media-consolidation panel with BofA, JP Morgan and Apollo. A subway ride away.
+</Info>
+
+The v2 envelope has no batch-level narrative field, so the summary lives on the [request record](#suggestion-request-record), which the feed reads through the request whose `batch_id` points at the batch. The six other events are placeholder cards in the grid beside the three ready ones.
+
+## Batch scope
+
+Serendipity has no request, requester or beneficiary on the batch. Scope comes from CLI flags only: the owning organization is the Angel demo's personal org `01a08264-0ef6-744c-b4f5-5f398dc2f98e`, and the batch ID is `01a0d477-58ea-744d-9015-4c9591acdc30`, minted with `go run ./cmd/ingestpackage -mint` on 2026-09-24. Reuse that batch ID to replay; changed content needs a fresh one, since a replay with a different digest is refused. The first load, `01a0d44a-d414-7762-9bc8-e9aac16bc77c`, carried the earlier WHYs and no register actions; its suggestions are dismissed, so it no longer shows in the feed.
+
+## Suggestion request record
+
+The request row still exists, so the request carries its titles and summary: the Serendipity header shows `llm_summary_context` (one paragraph per string) under the title, falling back to `request_context`, then `request_header_title`. The link runs one way: the request's `batch_id` points at the batch, while the batch's `suggestion_request_id` stays `null`, because `validateScope` rejects a Serendipity batch that names a request. Insert it with an idempotent `INSERT … ON CONFLICT (id) DO UPDATE`; order relative to the batch load does not matter, since `batch_id` has no foreign key. The feed joins titles through the batch's `suggestion_request_id`, so the feed itself still shows no title.
+
+```json suggestion_request record
+{
+  "id": "01a0d44a-d414-775e-bec7-5a0299afa5dd",
+  "user_id": "01a08264-0bf3-7842-8069-4cd2f6ae39b9",
+  "copilot_mode": "serendipity",
+  "status": "suggestion",
+  "request_panel_title": "AI & Media Events, Next 60 Days",
+  "request_header_title": "Events and conferences in AI & Media in the next 60 days",
+  "request_context": "Nine AI and media events in October, four of them in New York. Three worth blocking time for: the Paley International Council Summit, MIPCOM in Cannes and NAB Show New York.",
+  "class_slug": null,
+  "person_id": null,
+  "number_of_results": 9,
+  "deliver_format": null,
+  "llm_summary_context": [
+    "Nine AI and media events in October, four of them in New York. Three worth blocking time for:",
+    "Paley International Council Summit, Oct 19–21, NYC. Sony, Take-Two and John Malone in one Midtown room. On October 20, Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick talk gaming, culture and the future of entertainment, and the summit debuts the Dr. John C. Malone Annual Keynote with Malone and Liberty Global CEO Mike Fries. A Delegate pass is $2,999; no invitation needed.",
+    "MIPCOM, Oct 12–15, Cannes. MIPCOM gives AI studios their own stage. The first MIP AI Entertainment Forum opens with Utopai Studios CEO Cecilia Shen, inside a market of 10,600+ attendees and 3,300+ buyers from 110+ countries. Worth the flight if a licensing deal or an AI-studio partnership is on the Q4 roadmap.",
+    "NAB Show New York, Oct 21–22, Javits. Same week as Paley, and the operators are at Javits: 225+ exhibitors and 60+ sessions, including CNN and Scripps on AI in newsrooms and a media-consolidation panel with BofA, JP Morgan and Apollo. A subway ride away."
+  ],
+  "modified": false,
+  "organization_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
+  "universe_job_id": null,
+  "batch_id": "01a0d477-58ea-744d-9015-4c9591acdc30",
+  "next_poll_at": null,
+  "poll_attempts": 0,
+  "poll_deadline_at": null,
+  "failure_reason": null,
+  "context_version": 0,
+  "intake_context": {},
+  "submission_receipt": null
+}
+```
+
+## Package
+
+One `serendipity` package in the CLI's loadable form: scope comes from flags, `suggestion_request_id` is `null`, and `entity_type` values are table names. Each ready card has one action group holding a `create_task` (the calendar block). Placeholders carry only their rank, target and entity registry. Trajectories, sequencing, hooks, paths and evidence stay empty.
+
+```json AI & Media Serendipity package expandable
+{
+  "schema_version": 2,
+  "suggestion_request_id": null,
+  "status": "complete",
+  "generated_at": "2026-09-24T16:00:00Z",
+  "suggestions": [
+    {
+      "source_ref": "event-paley-international-council-summit-2026",
+      "rank": 1,
+      "entity_id": "01a0d443-9d84-78ed-b5e8-5d7d71ae2493",
+      "entity_type": "live_events",
+      "content_status": "ready",
+      "suggestion_mode": "new_connection",
+      "badge": "SERENDIPITY",
+      "why": {
+        "headline": "Sony, Take-Two and John Malone in one Midtown room.",
+        "body": [
+          "On October 20, Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick talk gaming, culture and the future of entertainment. The same summit debuts the Dr. John C. Malone Annual Keynote, with Malone and Liberty Global CEO Mike Fries.",
+          "The rest of the roster is media and money: David Solomon (Goldman Sachs), Jim Lanzone (Yahoo), Kevin Mayer (Candle Media) and Mark Lazarus (Versant). It runs October 19–21 at the Paley Museum on West 52nd Street. No travel.",
+          "It isn't invitation-only. A Delegate pass is $2,999, and Media Council membership includes it."
+        ]
+      },
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-9d84-78ed-b5e8-5d7d71ae2493",
+          "entity_type": "live_events",
+          "role": "target"
+        },
+        {
+          "entity_id": "01a07050-1aa5-72a8-9142-59f882ef6734",
+          "entity_type": "companies",
+          "role": "target_org"
+        }
+      ],
+      "action_groups": [
+        {
+          "ref": "g-paley",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-paley-register",
+          "action_type": "register",
+          "rank": 1,
+          "label": "Register for the Paley Summit",
+          "target_entity_id": "01a0d443-9d84-78ed-b5e8-5d7d71ae2493",
+          "group_ref": "g-paley",
+          "params": {
+            "url": "https://www.paleycenter.org/industry-events/paley-international-council-summit"
+          }
+        },
+        {
+          "ref": "a-paley-block",
+          "action_type": "create_task",
+          "rank": 2,
+          "label": "Block Oct 19–21 for the Paley Summit",
+          "target_entity_id": "01a0d443-9d84-78ed-b5e8-5d7d71ae2493",
+          "group_ref": "g-paley",
+          "params": {
+            "due_in_days": 7
+          }
+        }
+      ]
+    },
+    {
+      "source_ref": "event-mipcom-cannes-2026",
+      "rank": 2,
+      "entity_id": "01a0d443-960f-72ee-9dc2-1a1a266269f4",
+      "entity_type": "live_events",
+      "content_status": "ready",
+      "suggestion_mode": "new_connection",
+      "badge": "SERENDIPITY",
+      "why": {
+        "headline": "MIPCOM gives AI studios their own stage.",
+        "body": [
+          "The first MIP AI Entertainment Forum opens October 12 with a main-stage keynote from Cecilia Shen, CEO of Utopai Studios, an AI-native studio valued at over $1B. Its three tracks follow the money: creation, production workflow, and licensing and distribution.",
+          "Around it is the market itself: 10,600+ attendees, 3,300+ buyers and 1,500+ exhibiting companies from 110+ countries, with Netflix, BBC Studios, Banijay, Fremantle, Lionsgate and YouTube on site.",
+          "Worth the flight if a licensing deal or an AI-studio partnership is on the Q4 roadmap. Passes run €1,240–€3,580 plus VAT."
+        ]
+      },
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-960f-72ee-9dc2-1a1a266269f4",
+          "entity_type": "live_events",
+          "role": "target"
+        },
+        {
+          "entity_id": "01a0d441-0bfd-7ae1-869f-d5f559079e07",
+          "entity_type": "companies",
+          "role": "target_org"
+        }
+      ],
+      "action_groups": [
+        {
+          "ref": "g-mipcom",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-mipcom-register",
+          "action_type": "register",
+          "rank": 1,
+          "label": "Register for MIPCOM Cannes",
+          "target_entity_id": "01a0d443-960f-72ee-9dc2-1a1a266269f4",
+          "group_ref": "g-mipcom",
+          "params": {
+            "url": "https://www.mipcom.com/en-gb/visit.html"
+          }
+        },
+        {
+          "ref": "a-mipcom-decide",
+          "action_type": "create_task",
+          "rank": 2,
+          "label": "Decide on Cannes: MIPCOM Oct 12–15",
+          "target_entity_id": "01a0d443-960f-72ee-9dc2-1a1a266269f4",
+          "group_ref": "g-mipcom",
+          "params": {
+            "due_in_days": 5
+          }
+        }
+      ]
+    },
+    {
+      "source_ref": "event-nab-show-new-york-2026",
+      "rank": 3,
+      "entity_id": "01a0d443-9fcf-7bf6-b8d3-5b41e8e7e19a",
+      "entity_type": "live_events",
+      "content_status": "ready",
+      "suggestion_mode": "new_connection",
+      "badge": "SERENDIPITY",
+      "why": {
+        "headline": "Same week as Paley, and the operators are at Javits.",
+        "body": [
+          "October 21–22 at the Javits Center, overlapping Paley's last day: 225+ exhibitors, 150+ speakers and 60+ sessions across AI, streaming, sports and broadcasting.",
+          "The AI track is about what ships: CNN's Ryan Struyk and Scripps' Christina Hartman on AI in newsrooms. Michael Kassan runs a creator-economy session, and Jessica Reif Ehrlich (BofA Securities), Eric Menell (JP Morgan) and Aaron Sobel (Apollo) take on media consolidation.",
+          "Last year drew 11,500 attendees from 95 countries. It's a subway ride away."
+        ]
+      },
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-9fcf-7bf6-b8d3-5b41e8e7e19a",
+          "entity_type": "live_events",
+          "role": "target"
+        },
+        {
+          "entity_id": "01a0d441-1791-75b3-b1b6-1e830db0bbb0",
+          "entity_type": "companies",
+          "role": "target_org"
+        }
+      ],
+      "action_groups": [
+        {
+          "ref": "g-nab",
+          "rank": 1,
+          "trajectory_ref": null
+        }
+      ],
+      "actions": [
+        {
+          "ref": "a-nab-register",
+          "action_type": "register",
+          "rank": 1,
+          "label": "Register for NAB Show New York",
+          "target_entity_id": "01a0d443-9fcf-7bf6-b8d3-5b41e8e7e19a",
+          "group_ref": "g-nab",
+          "params": {
+            "url": "https://registration.experientevent.com/ShowNAB268/Flow/ATT/?MarketingCode=NY26Web"
+          }
+        },
+        {
+          "ref": "a-nab-block",
+          "action_type": "create_task",
+          "rank": 2,
+          "label": "Block Oct 21–22 for NAB Show New York",
+          "target_entity_id": "01a0d443-9fcf-7bf6-b8d3-5b41e8e7e19a",
+          "group_ref": "g-nab",
+          "params": {
+            "due_in_days": 14
+          }
+        }
+      ]
+    },
+    {
+      "source_ref": "event-advertising-week-new-york-2026",
+      "rank": 4,
+      "entity_id": "01a0d443-8ae5-743a-b7cb-369dcf3fdc23",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-8ae5-743a-b7cb-369dcf3fdc23",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "event-world-summit-ai-amsterdam-2026",
+      "rank": 5,
+      "entity_id": "01a0d443-9029-7ee0-af2a-3a4caf606b7c",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-9029-7ee0-af2a-3a4caf606b7c",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "event-inma-media-tech-ai-week-2026",
+      "rank": 6,
+      "entity_id": "01a0d443-939e-7e7e-b13e-584c62772399",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-939e-7e7e-b13e-584c62772399",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "event-ai-engineer-new-york-2026",
+      "rank": 7,
+      "entity_id": "01a0d443-9854-7dde-b12e-97a5535b27a6",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-9854-7dde-b12e-97a5535b27a6",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "event-techcrunch-disrupt-san-francisco-2026",
+      "rank": 8,
+      "entity_id": "01a0d443-9a9e-708c-9c16-c3925363bfab",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-9a9e-708c-9c16-c3925363bfab",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    },
+    {
+      "source_ref": "event-tiffcom-tokyo-2026",
+      "rank": 9,
+      "entity_id": "01a0d443-a357-7606-888d-0751e196a979",
+      "entity_type": "live_events",
+      "content_status": "placeholder",
+      "suggestion_mode": "new_connection",
+      "badge": null,
+      "why": null,
+      "score": {},
+      "trajectories": [],
+      "suggested_sequencing": [],
+      "key_people": null,
+      "hooks": null,
+      "paths": [],
+      "evidence": [],
+      "entities": [
+        {
+          "entity_id": "01a0d443-a357-7606-888d-0751e196a979",
+          "entity_type": "live_events",
+          "role": "target"
+        }
+      ],
+      "action_groups": [],
+      "actions": []
+    }
+  ]
+}
+```
+
+### Envelope wrap for the v2 receiver
+
+If this package is ever sent to `POST /v1/ingest/suggestions` instead of the CLI, wrap it in the documented Serendipity envelope from [Leverage Outcome & Serendipity](/guides/open-work/suggestion-delivery-and-tables/leverage-outcome-and-serendipity#serendipity): `origin: "agent_generated"`, null request, requester and beneficiary, `trigger_source` naming the producer, and `entity_type` back to the singular taxonomy values.
+
+```json Serendipity envelope scope fields
+{
+  "schema_version": 2,
+  "batch_id": "01a0d477-58ea-744d-9015-4c9591acdc30",
+  "request_suggestion_id": null,
+  "org_id": "01a08264-0ef6-744c-b4f5-5f398dc2f98e",
+  "requested_by": null,
+  "suggestion_type": "serendipity",
+  "beneficiary_contact_id": null,
+  "origin": "agent_generated",
+  "trigger_source": "events_scan:ai_media:2026-10",
+  "status": "complete",
+  "generated_at": "2026-09-24T16:00:00Z",
+  "suggestions": []
+}
+```
+
+## WHY sources
+
+Every claim in the three WHYs, with where it was read on 2026-09-24. Re-check before reusing the copy: speaker lists and counts move as the events approach.
+
+**Paley International Council Summit**
+- Oct 19–21 at the Paley Museum, 25 W 52nd St; $2,999 Delegate pass or Media Council membership. [Summit page](https://www.paleycenter.org/industry-events/paley-international-council-summit), [FAQ](https://www.paleycenter.org/industry-events/paley-international-council-summit/faq)
+- Totoki (Sony) and Zelnick (Take-Two) on gaming, culture and the future of entertainment, Oct 20. [Variety](https://variety.com/2026/tv/news/mark-lazarus-hannah-storm-paley-international-council-1236845151/)
+- The inaugural Dr. John C. Malone Annual Keynote with Malone and Mike Fries; Solomon, Lanzone, Mayer and Lazarus on the program. [Speakers](https://www.paleycenter.org/industry-events/paley-international-council-summit/speakers)
+
+**MIPCOM Cannes**
+- 10,600+ attendees, 1,500+ exhibiting companies, 3,300+ buyers, 110+ countries. [mipcom.com](https://www.mipcom.com/)
+- The MIP AI Entertainment Forum, its three tracks, and Utopai Studios as headline partner with Cecilia Shen's Oct 12 keynote. [MIPCOM press releases](https://www.mipcom.com/)
+- Netflix, BBC Studios, Banijay, Fremantle, Lionsgate and YouTube in the 2026 program. [Tubefilter](https://www.tubefilter.com/2026/09/17/mipcom-2026-conference-programming-vertial-series-branded-content-gen-ai/)
+- Pass prices. [Visit page](https://www.mipcom.com/en-gb/visit.html)
+
+**NAB Show New York**
+- 225+ exhibitors, 150+ speakers, 60+ sessions; the AI in Newsrooms, creator-economy and consolidation sessions. [NAB press release, Sept 24](https://www.globenewswire.com/news-release/2026/09/24/3368468/0/en/nab-show-new-york-2026-brings-media-s-biggest-business-and-technology-shifts-to-the-stage-oct-21-22.html)
+- 2025 drew 11,500 attendees from 95 countries. [NAB registration release](https://www.nabshow.com/press-release/registration-opens-for-nab-show-new-york-2026-the-east-coast-marketplace-for-media-innovation/)
+
+## Events
+
+| Rank | Event | Dates | City | Status | Graph label | Dev `live_events` ID | Identity link |
+| --: | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Paley International Council Summit 2026 | Oct 19–21 | New York | `ready` | `Live_Summit` | `01a0d443-9d84-78ed-b5e8-5d7d71ae2493` | [paleycenter.org](https://www.paleycenter.org/industry-events/paley-international-council-summit) |
+| 2 | MIPCOM Cannes 2026 | Oct 12–15 | Cannes | `ready` | `Live_Event` | `01a0d443-960f-72ee-9dc2-1a1a266269f4` | [mipcom.com](https://www.mipcom.com/) |
+| 3 | NAB Show New York 2026 | Oct 21–22 | New York | `ready` | `Live_Event` | `01a0d443-9fcf-7bf6-b8d3-5b41e8e7e19a` | [nabshow.com](https://www.nabshow.com/resources/new-york/) |
+| 4 | Advertising Week New York 2026 | Oct 5–8 | New York | `placeholder` | `Live_Conference` | `01a0d443-8ae5-743a-b7cb-369dcf3fdc23` | [advertisingweek.com](https://advertisingweek.com/awnewyork-2026/) |
+| 5 | World Summit AI 2026 | Oct 7–8 | Amsterdam | `placeholder` | `Live_Summit` | `01a0d443-9029-7ee0-af2a-3a4caf606b7c` | [worldsummit.ai](https://worldsummit.ai/) |
+| 6 | INMA Media Tech & AI Week 2026 | Oct 8–15 | San Francisco | `placeholder` | `Live_Conference` | `01a0d443-939e-7e7e-b13e-584c62772399` | [inma.org](https://www.inma.org/modules/event/2026MediaTechAIWeek/index.html) |
+| 7 | AI Engineer New York 2026 | Oct 12–14 | New York | `placeholder` | `Live_Conference` | `01a0d443-9854-7dde-b12e-97a5535b27a6` | [ai.engineer](https://ai.engineer/nyc/2026) |
+| 8 | TechCrunch Disrupt 2026 | Oct 13–15 | San Francisco | `placeholder` | `Live_Conference` | `01a0d443-9a9e-708c-9c16-c3925363bfab` | [techcrunch.com](https://techcrunch.com/events/techcrunch-disrupt/) |
+| 9 | TIFFCOM 2026 | Oct 28–30 | Tokyo | `placeholder` | `Live_Event` | `01a0d443-a357-7606-888d-0751e196a979` | [tiffcom.jp](https://tiffcom.jp/en/) |
+
+Ranks 1–3 follow the response copy; 4–9 are chronological. Four of the nine are in New York. Sept 30–Oct 1 spillovers (Bloomberg Screentime, Sifted Summit, The AI Conference, VidSummit) are out of scope for this package.
+
+The graph label is `Live_<event_type>`, as `seed-live-events` writes it. MIPCOM, NAB Show New York and TIFFCOM carry `event_type: "Event"`, so they are plain `Live_Event` nodes rather than `Live_Trade_Show`. Relabeling them means changing `event_type` in both the seed record and the graph node. The ID is the same in Universe `live_events`, the graph node and the backend row.
+
+### Organizers
+
+The three ready cards declare their organizer as `target_org` so the card header reads event plus organizer, the same pattern as Outcome's target plus `target_org`.
+
+| Company | Role | Identity link | Dev company ID |
+| --- | --- | --- | --- |
+| The Paley Center for Media | Organizer of the Paley Summit | [paleycenter.org](https://www.paleycenter.org/) | `01a07050-1aa5-72a8-9142-59f882ef6734` |
+| RX Global | Organizer of MIPCOM | [rxglobal.com](https://rxglobal.com/) | `01a0d441-0bfd-7ae1-869f-d5f559079e07` |
+| National Association of Broadcasters | Organizer of NAB Show New York | [nab.org](https://www.nab.org/) | `01a0d441-1791-75b3-b1b6-1e830db0bbb0` |
+
+## Actions
+
+Each ready card has one action group with `trajectory_ref: null` and two actions, both targeting the event:
+
+| Action | Type | `params` | Why |
+| --- | --- | --- | --- |
+| Register | `register` | `{ "url": "<registration page>" }` | The row's `REGISTER` chip opens the URL in a new tab. The URL must be an absolute http(s) link; `register` was added to the backend on `thursday_dev` (commit `fd5fa6f2`, not yet on `main`). |
+| Block the dates | `create_task` | `{ "due_in_days": n }` | On an event card the row's `ADD TO CALENDAR` chip opens a prefilled all-day Google Calendar event built from the event's dates, name, city and website; nothing is stored. Task execution is later work. `due_in_days` counts from `generated_at`: 7 for Paley, 5 for MIPCOM (a Cannes booking decision by Oct 1), 14 for NAB. |
+
+The registration pages, checked on 2026-09-24:
+
+| Event | Registration URL | Note |
+| --- | --- | --- |
+| Paley International Council Summit | [paleycenter.org](https://www.paleycenter.org/industry-events/paley-international-council-summit) | Not invitation-only: $2,999 Delegate pass, or complimentary with Media Council membership. |
+| MIPCOM Cannes | [mipcom.com/en-gb/visit.html](https://www.mipcom.com/en-gb/visit.html) | Visitor and Buyer passes, €1,240–€3,580 plus VAT. |
+| NAB Show New York | [registration.experientevent.com](https://registration.experientevent.com/ShowNAB268/Flow/ATT/?MarketingCode=NY26Web) | The attendee flow the nabshow.com page links to. |
+
+Placeholders carry no actions (`validatePlaceholder`), so the other six events keep their registration page on the event row's `registration_url` instead.
+
+There is no email action. `validateActionTarget` requires every action except `create_task` to target a person declared in the card's entities, and an event card declares none; a `draft_email` with a `null` target is rejected. Adding one would mean declaring a person on each card.
+
+## Resolve the entity IDs
+
+Done in dev on 2026-09-24. The steps below record what was run, so another environment can repeat them.
+
+<Steps>
+  <Step title="Seed the events into Universe">
+    None of the nine editions existed in Universe dev. They were seeded from the [seed records](#seed-records) with `cmd/seed-live-events` in `orbiter-universe`, which writes a `universe.live_events` row and a vectorized `Entity:Event:Live_*` graph node per event, and stamps `graph_node_uuid` only after the graph write returns. Run a `-dry-run` first. The tool's local-host guard treats `localhost` as local, so through the IAP tunnel it writes to dev; pass `-yes` knowingly.
+
+    ```bash
+    DB_DSN="postgres://mark%40orbiter.io:$(gcloud auth print-access-token)@localhost:5436/orbiter_universe?sslmode=require" go run ./cmd/seed-live-events -file events.seed.json -yes
+    ```
+
+    The canonical `universe.live_event` table and `live_event_display` are not written by this tool and stay empty.
+  </Step>
+  <Step title="Project the events into the backend">
+    The backend has no Universe-to-backend sync for `live_events`: nothing on `main` writes `live_events.live_events`. The nine rows were inserted by hand with an idempotent `INSERT … ON CONFLICT (id) DO UPDATE`, generated from the Universe rows, keeping the Universe ID as the backend `id` and `graph_node_uuid`. `display_label` is the node's `Live_<event_type>` label and `duration_days` is derived from the dates. The card reads `name` and `COALESCE(tagline, short_description)`.
+  </Step>
+  <Step title="Resolve the three organizers">
+    `POST /v1/companies/url-lookup` with each organizer's domain, as a signed-in dev user. Universe company enrichment has a population ceiling (`consumers.environment_variables`, `kill_switch_company` and `kill_switch_person`); dev was at 5,000/5,000 and skipped all three, so both were raised to 10,000. Paley returned `created` (via the backend provider fallback) and NAB returned `created` after the raise. RX returned a logo.dev brand match with no ID, which short-circuits before Universe, so it was created with `POST /v1/companies` (`brand_selected: false`, domain plus LinkedIn URL). That call also adds the company to the caller's contacts. None of the three is in Universe `master_companies` yet; they are bare cards until enrichment finishes.
+  </Step>
+  <Step title="Load">
+    Save the [package](#package) as `package.json` and load it from `orbiter-backend` on `thursday_dev`. Insert the [request record](#suggestion-request-record) too; it is not created by the CLI. Serendipity takes no `-request-id`, `-requested-by`, `-beneficiary` or `-paths`.
+
+    ```bash
+    DB_DSN="postgres://mark%40orbiter.io:$(gcloud auth print-access-token)@localhost:5436/orbiter?sslmode=require" go run ./cmd/ingestpackage -file package.json -type serendipity -org 01a08264-0ef6-744c-b4f5-5f398dc2f98e -batch-id 01a0d477-58ea-744d-9015-4c9591acdc30 -expect localhost:5436/orbiter
+    ```
+
+    Expected counts: 1 batch, 9 suggestions, 12 entity rows (`suggestion_node`), 3 action groups, 6 actions.
+  </Step>
+</Steps>
+
+### Seed records
+
+One record per event in the `seed-live-events` input shape (`event_key`, `event_url`, `series_name`, dates, venue, counts). Counts are organizer-published figures where available and `null` otherwise; `actual_attendance` and `linkedin_url` are unfilled. `logo_url` is logo.dev by the event website's domain, checked on 2026-09-24 to resolve to a real logo for all nine; when an event has no domain, the logo should come from the page scrape instead.
+
+```json live_event seed records expandable
+[
+  {
+    "id": 1,
+    "event_key": "advertising-week-new-york::2026",
+    "event_url": "https://advertisingweek.com/awnewyork-2026/",
+    "name": "Advertising Week New York 2026",
+    "slug": "advertising-week-new-york",
+    "series_name": "Advertising Week New York",
+    "series_slug": "advertising-week-new-york",
+    "edition_year": 2026,
+    "start_date": "2026-10-05",
+    "end_date": "2026-10-08",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Conference",
+    "industry": "Media & Advertising",
+    "category": "Marketing, Media & Creator Economy",
+    "venue_name": "The Penn District",
+    "city_name": "New York",
+    "region_name": "New York",
+    "country_name": "United States",
+    "website": "https://advertisingweek.com/",
+    "registration_url": "https://newyork2026.advertisingweek.com/register/",
+    "speaker_count": 1300,
+    "session_count": 500,
+    "expected_attendance": 12000,
+    "actual_attendance": null,
+    "tagline": "The industry all in one place",
+    "short_description": "Four days of programming across marketing, media, advertising and technology, with AI, commerce and the creator economy as headline themes.",
+    "long_description": "Advertising Week New York returns to The Penn District in Midtown Manhattan for four days of stages, summits and networking. The 2026 program runs 1,300+ speakers and 500+ sessions covering AI, creativity, commerce, media, technology, culture and the creator economy, plus dedicated summits such as Gaming. Attendees span CMOs, agency leaders, platforms, creators and media executives, making it the densest marketing and media crowd in New York each October.",
+    "logo_url": "https://img.logo.dev/advertisingweek.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "advertisingweek",
+    "source": "manual_seed"
+  },
+  {
+    "id": 2,
+    "event_key": "world-summit-ai-amsterdam::2026",
+    "event_url": "https://worldsummit.ai/",
+    "name": "World Summit AI 2026",
+    "slug": "world-summit-ai-amsterdam",
+    "series_name": "World Summit AI",
+    "series_slug": "world-summit-ai",
+    "edition_year": 2026,
+    "start_date": "2026-10-07",
+    "end_date": "2026-10-08",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Summit",
+    "industry": "Technology",
+    "category": "Artificial Intelligence",
+    "venue_name": "Taets Art & Event Park",
+    "city_name": "Amsterdam",
+    "region_name": "North Holland",
+    "country_name": "Netherlands",
+    "website": "https://worldsummit.ai/",
+    "registration_url": "https://worldsummit.ai/tickets/",
+    "speaker_count": 300,
+    "session_count": null,
+    "expected_attendance": 10000,
+    "actual_attendance": null,
+    "tagline": "Shaping the new AI paradigm",
+    "short_description": "10th anniversary edition of the Amsterdam AI summit: 10 tracks including AI Media, 300+ speakers and 10,000+ attendees from enterprise, big tech, startups and investors.",
+    "long_description": "World Summit AI anchors World AI Week in Amsterdam and gathers the full AI ecosystem: enterprise leaders, big tech, startups, investors, researchers and policymakers. The 2026 edition marks its 10th anniversary under the theme 'Shaping the new AI paradigm', with 10 tracks (Adopt AI, Build AI, AI Labs, AI Media and more), 300+ speakers and 100+ exhibitors. Speakers include Zico Kolter (Carnegie Mellon, OpenAI board) and C-suite executives from Tencent, AMD, Isomorphic Labs and Sony. Tickets start around EUR 1,099 plus tax.",
+    "logo_url": "https://img.logo.dev/worldsummit.ai?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "WorldSummitAI",
+    "source": "manual_seed"
+  },
+  {
+    "id": 3,
+    "event_key": "inma-media-tech-ai-week::2026",
+    "event_url": "https://www.inma.org/modules/event/2026MediaTechAIWeek/index.html",
+    "name": "INMA Media Tech & AI Week 2026",
+    "slug": "inma-media-tech-ai-week",
+    "series_name": "INMA Media Tech & AI Week",
+    "series_slug": "inma-media-tech-ai-week",
+    "edition_year": 2026,
+    "start_date": "2026-10-08",
+    "end_date": "2026-10-15",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Conference",
+    "industry": "Media & Publishing",
+    "category": "News Media & AI",
+    "venue_name": "KQED Headquarters",
+    "city_name": "San Francisco",
+    "region_name": "California",
+    "country_name": "United States",
+    "website": "https://www.inma.org/",
+    "registration_url": "https://www.inma.org/modules/event/2026MediaTechAIWeek/index.html",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": null,
+    "actual_attendance": null,
+    "tagline": "Media Tech & AI Week: conference and study tour",
+    "short_description": "INMA's second annual San Francisco week pairing a two-day conference with a Silicon Valley study tour, bridging news publishers and the major AI and platform players.",
+    "long_description": "INMA Media Tech & AI Week combines a two-day conference at KQED with INMA's eighth San Francisco study tour of leading tech and AI companies. The conference puts frontier AI companies, technology platforms, publishers and researchers on one stage to work through LLMs, content rights management, licensing standards, discoverability and the economics of content in an AI-first world. The 2026 program includes a keynote conversation with Substack co-founder Hamish McKenzie and sessions drawing on IAB Tech Lab standards work. Built for media executives deciding how to license, attribute and monetize content with AI players.",
+    "logo_url": "https://img.logo.dev/inma.org?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": null,
+    "source": "manual_seed"
+  },
+  {
+    "id": 4,
+    "event_key": "mipcom-cannes::2026",
+    "event_url": "https://www.mipcom.com/",
+    "name": "MIPCOM Cannes 2026",
+    "slug": "mipcom-cannes",
+    "series_name": "MIPCOM",
+    "series_slug": "mipcom",
+    "edition_year": 2026,
+    "start_date": "2026-10-12",
+    "end_date": "2026-10-15",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Event",
+    "industry": "Media & Entertainment",
+    "category": "Content Market",
+    "venue_name": "Palais des Festivals et des Congrès",
+    "city_name": "Cannes",
+    "region_name": "Provence-Alpes-Côte d'Azur",
+    "country_name": "France",
+    "website": "https://www.mipcom.com/",
+    "registration_url": "https://www.mipcom.com/en-gb/visit.html",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": 10600,
+    "actual_attendance": null,
+    "tagline": "Where the industry creates what's next",
+    "short_description": "The global content business market: studios, streamers, broadcasters, YouTube, brands, AI innovators and investors from 100+ countries across four days in Cannes, preceded by MIPJUNIOR Oct 10-11.",
+    "long_description": "MIPCOM is the largest global market for the content business, run by RX at the Palais des Festivals in Cannes. The 42nd edition expects 10,600+ delegates including 3,300+ buyers and 350+ exhibiting companies. The 2026 program expands into the creator economy, AI, brand-funded storytelling and a new Microdrama & Vertical Content Programme, alongside the Innovation Lab and curated matchmaking meetings. A pre-opening Headliner session on Sunday Oct 11 features Dhar Mann. MIPJUNIOR runs Oct 10-11 ahead of the main market. The room where distribution, co-production and financing deals get done for the year ahead.",
+    "logo_url": "https://img.logo.dev/mipcom.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "mipcom",
+    "source": "manual_seed"
+  },
+  {
+    "id": 5,
+    "event_key": "ai-engineer-new-york::2026",
+    "event_url": "https://ai.engineer/nyc/2026",
+    "name": "AI Engineer New York 2026",
+    "slug": "ai-engineer-new-york",
+    "series_name": "AI Engineer",
+    "series_slug": "ai-engineer",
+    "edition_year": 2026,
+    "start_date": "2026-10-12",
+    "end_date": "2026-10-14",
+    "status": "scheduled",
+    "format": "hybrid",
+    "event_type": "Conference",
+    "industry": "Technology",
+    "category": "AI Engineering",
+    "venue_name": "Sheraton New York Times Square",
+    "city_name": "New York",
+    "region_name": "New York",
+    "country_name": "United States",
+    "website": "https://ai.engineer/",
+    "registration_url": "https://ai.engineer/nyc/2026",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": 1500,
+    "actual_attendance": null,
+    "tagline": "Where AI engineering meets financial services",
+    "short_description": "Flagship technical conference for engineers shipping production AI, with a 2026 tilt toward financial services; 1,000-1,500 in person plus a large online audience.",
+    "long_description": "AI Engineer New York is the East Coast flagship of the AI Engineer conference series, built for practitioners rather than theorists. The 2026 edition runs three days at the Sheraton New York Times Square: hands-on deep-dive workshops and expo preview on Oct 12, keynotes and breakouts on Oct 13, closing sessions on Oct 14. This year's program targets technical leaders deploying AI across banking, hedge funds, fintech, insurance and asset management, with past speakers drawn from Google DeepMind, Anthropic, OpenAI, Cursor, Netflix and Meta. Talks are livestreamed and recorded; side events cluster around the conference across Manhattan.",
+    "logo_url": "https://img.logo.dev/ai.engineer?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "aiDotEngineer",
+    "source": "manual_seed"
+  },
+  {
+    "id": 6,
+    "event_key": "techcrunch-disrupt-san-francisco::2026",
+    "event_url": "https://techcrunch.com/events/techcrunch-disrupt/",
+    "name": "TechCrunch Disrupt 2026",
+    "slug": "techcrunch-disrupt-san-francisco",
+    "series_name": "TechCrunch Disrupt",
+    "series_slug": "techcrunch-disrupt",
+    "edition_year": 2026,
+    "start_date": "2026-10-13",
+    "end_date": "2026-10-15",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Conference",
+    "industry": "Technology",
+    "category": "Startups & Venture Capital",
+    "venue_name": "Moscone West",
+    "city_name": "San Francisco",
+    "region_name": "California",
+    "country_name": "United States",
+    "website": "https://techcrunch.com/events/",
+    "registration_url": "https://techcrunch.com/events/techcrunch-disrupt/tickets/",
+    "speaker_count": 250,
+    "session_count": null,
+    "expected_attendance": 10000,
+    "actual_attendance": null,
+    "tagline": "Innovation for every stage",
+    "short_description": "10,000+ founders, investors and operators, six industry stages, Startup Battlefield 200 and AI-powered matchmaking; 2026 stages feature OpenAI, Anthropic and Replit.",
+    "long_description": "TechCrunch Disrupt is the startup ecosystem's flagship gathering, returning to Moscone West in San Francisco for three days. Expect 10,000+ attendees, 300+ startups in the Expo Hall, six industry stages spanning AI, SaaS, fintech, biotech, climate and space, and the Startup Battlefield pitch competition whose alumni have raised $32B+. The 2026 lineup includes OpenAI, Anthropic and Replit; the audience carries one of the highest concentrations of active VCs of any conference, from a16z and Sequoia to hundreds of seed funds. A full week of side events runs across the city Oct 12-15.",
+    "logo_url": "https://img.logo.dev/techcrunch.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "TechCrunch",
+    "source": "manual_seed"
+  },
+  {
+    "id": 7,
+    "event_key": "paley-international-council-summit::2026",
+    "event_url": "https://www.paleycenter.org/industry-events/paley-international-council-summit",
+    "name": "Paley International Council Summit 2026",
+    "slug": "paley-international-council-summit",
+    "series_name": "Paley International Council Summit",
+    "series_slug": "paley-international-council-summit",
+    "edition_year": 2026,
+    "start_date": "2026-10-19",
+    "end_date": "2026-10-21",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Summit",
+    "industry": "Media & Entertainment",
+    "category": "Media Leadership",
+    "venue_name": "The Paley Museum",
+    "city_name": "New York",
+    "region_name": "New York",
+    "country_name": "United States",
+    "website": "https://www.paleycenter.org/",
+    "registration_url": "https://www.paleycenter.org/industry-events/paley-international-council-summit",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": null,
+    "actual_attendance": null,
+    "tagline": "Global Media in Focus: Power, Platforms, and Perspective",
+    "short_description": "The 'Davos of Media': an invitation-style gathering of media, tech, sports and gaming CEOs and global dignitaries at the Paley Museum in Midtown Manhattan.",
+    "long_description": "The Paley International Council Summit convenes chief executives, dignitaries and industry leaders from media, entertainment, technology, sports and gaming for two days of substantive dialogue. The 2026 edition, themed 'Global Media in Focus: Power, Platforms, and Perspective', launches the inaugural Dr. John C. Malone Annual Keynote (Malone with Liberty Global CEO Mike Fries) alongside the Henry A. Kissinger Annual Keynote. Agenda highlights include Sony CEO Hiroki Totoki and Take-Two CEO Strauss Zelnick on gaming, culture and the future of entertainment, the evolution of Hollywood, women's sports and the 'new economics of attention'. Speakers include Versant Media CEO Mark Lazarus, Yahoo's Jim Lanzone, Adam Silver and Phil Spencer. Delegate registration without membership runs about $2,999.",
+    "logo_url": "https://img.logo.dev/paleycenter.org?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "paleycenter",
+    "source": "manual_seed"
+  },
+  {
+    "id": 8,
+    "event_key": "nab-show-new-york::2026",
+    "event_url": "https://www.nabshow.com/resources/new-york/",
+    "name": "NAB Show New York 2026",
+    "slug": "nab-show-new-york",
+    "series_name": "NAB Show New York",
+    "series_slug": "nab-show-new-york",
+    "edition_year": 2026,
+    "start_date": "2026-10-21",
+    "end_date": "2026-10-22",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Event",
+    "industry": "Media & Entertainment",
+    "category": "Media Technology & Broadcasting",
+    "venue_name": "Jacob K. Javits Convention Center",
+    "city_name": "New York",
+    "region_name": "New York",
+    "country_name": "United States",
+    "website": "https://www.nabshow.com/",
+    "registration_url": "https://registration.experientevent.com/ShowNAB268/Flow/ATT/?MarketingCode=NY26Web",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": 11500,
+    "actual_attendance": null,
+    "tagline": "Where media, entertainment and storytelling converge",
+    "short_description": "The East Coast marketplace for media innovation: two days of exhibits and programs on AI, the creator economy, streaming, sports and broadcasting at the Javits Center.",
+    "long_description": "Produced by the National Association of Broadcasters, NAB Show New York brings creators, producers, broadcasters, technologists and media business leaders to the Javits Center for two days. The 2026 program is organized around five themes: artificial intelligence, the creator economy, streaming, sports, and TV and radio broadcasting. Day 1 (Oct 21), 'Big Media, Big Tech, Big Tools', covers sports media, the future of journalism, media investment perspectives, newsroom AI and broadcast innovation; Day 2 shifts to workflows, cloud production and tech strategy. Around 11,500 attendees are expected alongside exhibits, the SMPTE ST 2110 IP Media Roadshow and the NAB Marconi Radio Awards.",
+    "logo_url": "https://img.logo.dev/nabshow.com?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "NABShow",
+    "source": "manual_seed"
+  },
+  {
+    "id": 9,
+    "event_key": "tiffcom-tokyo::2026",
+    "event_url": "https://tiffcom.jp/en/",
+    "name": "TIFFCOM 2026",
+    "slug": "tiffcom-tokyo",
+    "series_name": "TIFFCOM",
+    "series_slug": "tiffcom",
+    "edition_year": 2026,
+    "start_date": "2026-10-28",
+    "end_date": "2026-10-30",
+    "status": "scheduled",
+    "format": "in_person",
+    "event_type": "Event",
+    "industry": "Media & Entertainment",
+    "category": "Content Market",
+    "venue_name": "Tokyo Metropolitan Industrial Trade Center Hamamatsucho-Kan",
+    "city_name": "Tokyo",
+    "region_name": "Tokyo",
+    "country_name": "Japan",
+    "website": "https://tiffcom.jp/en/",
+    "registration_url": "https://tiffcom.jp/en/visitor/",
+    "speaker_count": null,
+    "session_count": null,
+    "expected_attendance": 4600,
+    "actual_attendance": null,
+    "tagline": "Asia's leading content market",
+    "short_description": "The Tokyo International Film Festival's affiliated market for film, TV and anime rights, with a 2026 conference keynote from AGBO on technology, AI and storytelling.",
+    "long_description": "TIFFCOM is the audiovisual content market affiliated with the Tokyo International Film Festival (Oct 26 - Nov 4), organized by METI, MIC and UNIJAPAN. It runs three days at the Tokyo Metropolitan Industrial Trade Center and draws buyers, producers and rights holders across film, television and animation from Asia and worldwide; the 2025 edition recorded 4,610 participants including 1,905 international attendees from 46 countries. The 2026 conference lineup includes a keynote from AGBO executives on technology, AI and storytelling, global IP strategy sessions from Nippon TV, TBS and BEAJ, the Tokyo Gap-Financing Market and the Tokyo IP Market: Adaptation & Remake.",
+    "logo_url": "https://img.logo.dev/tiffcom.jp?token=pk_Twvl42WzTX2-ySNbnZKlSA",
+    "linkedin_url": null,
+    "twitter_handle": "TIFFCOM_Tokyo",
+    "source": "manual_seed"
+  }
+]
+```
+
+## Load notes
+
+- The twelve entities exist in dev as of 2026-09-24. Batch `01a0d477-58ea-744d-9015-4c9591acdc30` is the live load; the request record's `batch_id` points at it.
+- `live_events` is accepted by `nodespub.ValidEntityType`, but no demo has loaded a non-person, non-company target before. Expect the card header and hydration path to need work: `live_event_display` is card-only by default, and the Outcome header logic assumes a person or company target.
+- `suggestion_mode: "new_connection"` is a stand-in. If an event mode is added to the taxonomy, update all nine suggestions in a new batch.
+- The `hooks` array is `null` on every card. The Serendipity content contract has not confirmed whether ready cards need hooks; add them in a later batch if the view uses them.
+- The batch belongs to the organization, not a user. For another org, reload with its `-org` and a fresh batch ID.
+- INMA Media Tech & AI Week may be Oct 19–23, not Oct 8–15: search results and two third-party listings say so, but inma.org refused automated reads on 2026-09-24. Confirm on inma.org before relying on the dates in its seed record.
+- Event dates and figures were verified against organizer sites on 2026-09-22. Check registration URLs at load time; several organizers move pages once registration closes.
+
+[Back to Suggestion Delivery and Tables](/guides/open-work/suggestion-delivery-and-tables).
