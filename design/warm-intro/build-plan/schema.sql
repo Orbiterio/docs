@@ -13,12 +13,14 @@ CREATE TABLE warm_intros.introductions (
     source_action_ref                  text NOT NULL,
     source_key                         text NOT NULL,
     source_snapshot                    jsonb NOT NULL,
-    previous_introduction_id           uuid REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT,
+    previous_introduction_id           uuid,
     state                              text NOT NULL,
     revision                           bigint NOT NULL DEFAULT 1,
     current_context_version_id         uuid,
     launch_context_version_id          uuid,
     current_stage                      text NOT NULL,
+    dispatch_blocked_at                timestamptz,
+    dispatch_block_reason              text,
     stream_seq                         bigint NOT NULL DEFAULT 0,
     created_at                         timestamptz NOT NULL DEFAULT now(),
     updated_at                         timestamptz NOT NULL DEFAULT now(),
@@ -26,7 +28,8 @@ CREATE TABLE warm_intros.introductions (
     closed_at                          timestamptz,
     archived_at                        timestamptz,
     active_source_key                  text,
-    UNIQUE (id, owner_user_id)
+    UNIQUE (id, owner_user_id),
+    FOREIGN KEY (previous_introduction_id, owner_user_id) REFERENCES warm_intros.introductions(id, owner_user_id) ON DELETE RESTRICT
 );
 CREATE INDEX introductions_owner_history_idx ON warm_intros.introductions(owner_user_id, created_at DESC, id DESC);
 CREATE INDEX introductions_owner_state_idx ON warm_intros.introductions(owner_user_id, state, created_at DESC, id DESC);
@@ -52,15 +55,16 @@ CREATE TABLE warm_intros.context_versions (
     id                                 uuid PRIMARY KEY,
     introduction_id                    uuid NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT,
     version                            bigint NOT NULL,
-    source_why_text                    text,
-    why_connect                        text,
+    source_why                         jsonb,
+    why_connect                        jsonb,
     sender_intent                      text,
     why_status                         text NOT NULL,
     why_provenance                     jsonb NOT NULL,
     private_context                    jsonb NOT NULL DEFAULT '{}'::jsonb,
     recipient_safe_facts               jsonb NOT NULL,
-    public_why                         text,
+    public_why                         jsonb,
     sender_snapshot                    jsonb NOT NULL,
+    presentation_snapshot              jsonb NOT NULL,
     participant_snapshots              jsonb NOT NULL,
     first_participant_id               uuid NOT NULL,
     second_participant_id              uuid NOT NULL,
@@ -106,7 +110,7 @@ CREATE TABLE warm_intros.message_versions (
     author_type                        text NOT NULL,
     author_user_id                     uuid REFERENCES users.users(id) ON DELETE SET NULL,
     generation_run_id                  uuid,
-    supersedes_version_id              uuid REFERENCES warm_intros.message_versions(id) ON DELETE RESTRICT,
+    supersedes_version_id              uuid,
     created_at                         timestamptz NOT NULL DEFAULT now(),
     UNIQUE (introduction_id, id),
     UNIQUE (message_id, id),
@@ -138,6 +142,7 @@ CREATE TABLE warm_intros.invitations (
     participant_id                     uuid NOT NULL,
     context_version_id                 uuid NOT NULL,
     message_id                         uuid NOT NULL,
+    public_snapshot                    jsonb NOT NULL,
     token_hash                         bytea NOT NULL UNIQUE,
     token_version                      integer NOT NULL DEFAULT 1,
     state                              text NOT NULL,
@@ -189,7 +194,7 @@ CREATE TABLE warm_intros.generation_runs (
     message_id                         uuid NOT NULL,
     context_version_id                 uuid NOT NULL,
     base_message_version_id            uuid,
-    parent_run_id                      uuid REFERENCES warm_intros.generation_runs(id) ON DELETE RESTRICT,
+    parent_run_id                      uuid,
     status                             text NOT NULL,
     model_id                           text NOT NULL,
     provider_generation_id             text,
@@ -205,6 +210,7 @@ CREATE TABLE warm_intros.generation_runs (
     finish_reason                      text,
     error_code                         text,
     lease_until                        timestamptz,
+    lease_token                        uuid,
     next_attempt_at                    timestamptz NOT NULL DEFAULT now(),
     started_at                         timestamptz,
     completed_at                       timestamptz,
@@ -336,6 +342,9 @@ CREATE TABLE warm_intros.mutation_receipts (
 );
 
 -- Deferred creation-order links; application inserts draft root before children.
+ALTER TABLE warm_intros.message_versions ADD FOREIGN KEY (message_id, supersedes_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT;
+ALTER TABLE warm_intros.generation_runs ADD FOREIGN KEY (message_id, parent_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT;
+ALTER TABLE warm_intros.stream_events ADD FOREIGN KEY (message_id, run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT;
 ALTER TABLE warm_intros.introductions ADD FOREIGN KEY (id, current_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT;
 ALTER TABLE warm_intros.introductions ADD FOREIGN KEY (id, launch_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT;
 ALTER TABLE warm_intros.messages ADD FOREIGN KEY (id, current_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT;

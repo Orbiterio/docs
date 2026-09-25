@@ -17,12 +17,14 @@ source_suggestion_id|uuid|REFERENCES suggestions.suggestion(id) ON DELETE SET NU
 source_action_ref|text|NOT NULL|Original make_intro action reference.
 source_key|text|NOT NULL|Immutable canonical batch/suggestion/action identity for duplicate-open handling.
 source_snapshot|jsonb|NOT NULL|Original IDs, title, source metadata and raw WHY; immutable, owner-private.
-previous_introduction_id|uuid|REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Intentional new attempt after a prior closed sequence.
+previous_introduction_id|uuid||Intentional new attempt after a prior closed sequence.
 state|text|NOT NULL|Go-validated lifecycle vocabulary.
 revision|bigint|NOT NULL DEFAULT 1|Optimistic concurrency counter for every owner-visible mutation.
 current_context_version_id|uuid||Current owner-reviewed working context; composite FK added after context table exists.
 launch_context_version_id|uuid||Frozen context at start, immutable afterward.
 current_stage|text|NOT NULL|draft, first_request, second_request, final_introduction, or closed.
+dispatch_blocked_at|timestamptz||When a safety/delivery hold was applied; stage and past consent remain unchanged.
+dispatch_block_reason|text||Go-validated reason such as recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, or unresolved_send. All active causes remain in events/delivery records.
 stream_seq|bigint|NOT NULL DEFAULT 0|Per-introduction durable SSE sequence allocated under this row lock.
 created_at|timestamptz|NOT NULL DEFAULT now()|Creation time, including drafts that never launch.
 updated_at|timestamptz|NOT NULL DEFAULT now()|Current activity time.
@@ -30,7 +32,7 @@ started_at|timestamptz||Explicit sender authorization time.
 closed_at|timestamptz||Terminal workflow milestone; preserve historical events.
 archived_at|timestamptz||Hide from default history, never delete correspondence.
 active_source_key|text||Set to source_key while active, cleared at terminal closure; enables deliberate restarts.
-''',indexes=["CREATE INDEX introductions_owner_history_idx ON warm_intros.introductions(owner_user_id, created_at DESC, id DESC)","CREATE INDEX introductions_owner_state_idx ON warm_intros.introductions(owner_user_id, state, created_at DESC, id DESC)","CREATE UNIQUE INDEX introductions_active_source_uq ON warm_intros.introductions(owner_user_id, active_source_key) WHERE active_source_key IS NOT NULL"],constraints=['UNIQUE (id, owner_user_id)'])
+''',indexes=["CREATE INDEX introductions_owner_history_idx ON warm_intros.introductions(owner_user_id, created_at DESC, id DESC)","CREATE INDEX introductions_owner_state_idx ON warm_intros.introductions(owner_user_id, state, created_at DESC, id DESC)","CREATE UNIQUE INDEX introductions_active_source_uq ON warm_intros.introductions(owner_user_id, active_source_key) WHERE active_source_key IS NOT NULL"],constraints=['UNIQUE (id, owner_user_id)','FOREIGN KEY (previous_introduction_id, owner_user_id) REFERENCES warm_intros.introductions(id, owner_user_id) ON DELETE RESTRICT'])
 table('participants','Two stable identities per introduction. Live links can disappear without losing the historical identity. The email/name/role actually approved for sending belongs in the context snapshot.', '''
 id|uuid|PRIMARY KEY|UUIDv7, stable across order changes.
 introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Owning introduction.
@@ -45,21 +47,22 @@ table('context_versions','Append-only WHY, sender intent, profile, address, and 
 id|uuid|PRIMARY KEY|UUIDv7.
 introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Owning introduction.
 version|bigint|NOT NULL|Monotonic context revision per introduction.
-source_why_text|text||Original natural-language WHY, verbatim with paragraph breaks; never replace with a label/score.
-why_connect|text||Working natural-language explanation of why the two people should connect.
+source_why|jsonb||Exact source suggestion.why object: headline plus ordered body[] paragraphs; preserve strings and boundaries without summarizing or flattening.
+why_connect|jsonb||Working WHY object with the same headline/body[] shape; initially a deep copy of source_why, with every edit versioned.
 sender_intent|text||Separate natural-language explanation of what the sender wants to accomplish; nullable if not supplied.
 why_status|text|NOT NULL|present, partially_present, or not_provided; never fabricate missing rationale.
 why_provenance|jsonb|NOT NULL|For each text: source type, source ID/version, authored_by and captured_at; retain original and edited provenance.
 private_context|jsonb|NOT NULL DEFAULT '{}'::jsonb|Additional owner-private suggestion reasoning; never public DTO content.
 recipient_safe_facts|jsonb|NOT NULL|Allowlisted facts usable in recipient copy; distinct from private context.
-public_why|text||Sender-reviewed common explanation allowed in recipient-facing copy, when supplied; do not auto-publish private WHY.
+public_why|jsonb||Optional sender-approved headline/body[] explanation for recipient copy; no automatic publication of the full working WHY.
 sender_snapshot|jsonb|NOT NULL|Display name, verified reply address and signature policy at this version.
+presentation_snapshot|jsonb|NOT NULL|Versioned manifest of all four HTML/text assets, public copy/disclosures, sender envelope/signature, and policy values; immutable content hashes/references retained for the lifetime of the sequence.
 participant_snapshots|jsonb|NOT NULL|Exactly two keyed objects: participant ID, name, title/company, selected address/address source, safe profile and selected position.
 first_participant_id|uuid|NOT NULL|First execution recipient for this version.
 second_participant_id|uuid|NOT NULL|Second execution recipient for this version.
 recommended_first_participant_id|uuid||Recommendation kept independently from selected order.
 relationship_evidence|jsonb|NOT NULL DEFAULT '{}'::jsonb|Private comparable weight/evidence source and as-of time; no public exposure.
-change_reason|text|NOT NULL|source_loaded, why_edited, address_changed, order_changed, profile_changed, or sender_changed.
+change_reason|text|NOT NULL|source_loaded, why_edited, address_changed, order_changed, profile_changed, sender_changed, or presentation_changed.
 created_by_user_id|uuid|REFERENCES users.users(id) ON DELETE SET NULL|Editor identity; nullable for system capture.
 created_at|timestamptz|NOT NULL DEFAULT now()|Append time.
 ''',constraints=['UNIQUE (introduction_id, id)','UNIQUE (introduction_id, version)','FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT'])
@@ -87,7 +90,7 @@ content_sha256|bytea|NOT NULL|Hash of canonical subject/body, never a substitute
 author_type|text|NOT NULL|ai, sender, or system_template.
 author_user_id|uuid|REFERENCES users.users(id) ON DELETE SET NULL|Sender edit identity when applicable.
 generation_run_id|uuid||AI provenance reference, when generated.
-supersedes_version_id|uuid|REFERENCES warm_intros.message_versions(id) ON DELETE RESTRICT|Previous saved version for audit/review.
+supersedes_version_id|uuid||Previous saved version for audit/review.
 created_at|timestamptz|NOT NULL DEFAULT now()|Saved time.
 ''',constraints=['UNIQUE (introduction_id, id)','UNIQUE (message_id, id)','UNIQUE (message_id, version)','FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT'])
 table('reviews','Append-only sender approval receipts. A review is current only when its message version and approval dependency hash match the current draft. Invalidation does not delete prior reviews.', '''
@@ -106,6 +109,7 @@ introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE
 participant_id|uuid|NOT NULL|Recipient, scoped by composite FK.
 context_version_id|uuid|NOT NULL|Frozen launch context.
 message_id|uuid|NOT NULL|Approved request slot; version supplied through frozen slot.
+public_snapshot|jsonb|NOT NULL|Frozen allowlisted public view: profile, reviewed note/signature, truthful stage banner and exact consent disclosure. No capability or email addresses. Store before dispatch; server decides allowed actions separately.
 token_hash|bytea|NOT NULL UNIQUE|SHA-256 of a random 256-bit token; no plaintext token column.
 token_version|integer|NOT NULL DEFAULT 1|Bind requests to this capability version.
 state|text|NOT NULL|queued, active, decided, expired, or revoked.
@@ -140,7 +144,7 @@ introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE
 message_id|uuid|NOT NULL|Target slot.
 context_version_id|uuid|NOT NULL|Immutable input context; shared by the initial three runs.
 base_message_version_id|uuid||Version this run may replace, null on first generation.
-parent_run_id|uuid|REFERENCES warm_intros.generation_runs(id) ON DELETE RESTRICT|Retry/regeneration ancestry.
+parent_run_id|uuid||Retry/regeneration ancestry.
 status|text|NOT NULL|queued, streaming, completed, failed, cancelled, superseded.
 model_id|text|NOT NULL|Exact configured OpenRouter model slug.
 provider_generation_id|text||Provider correlation ID when returned.
@@ -156,6 +160,7 @@ usage|jsonb|NOT NULL DEFAULT '{}'::jsonb|Input/output/reasoning tokens and cost 
 finish_reason|text||Actual provider completion reason.
 error_code|text||Safe machine error; no raw tokens or sensitive request dumps.
 lease_until|timestamptz||Worker lease, heartbeat while streaming.
+lease_token|uuid||Fencing identity checked on every partial, heartbeat and completion; expired runs are failed and retried with a new run ID.
 next_attempt_at|timestamptz|NOT NULL DEFAULT now()|Queue eligibility; bounded retry policy.
 started_at|timestamptz||First model-call time.
 completed_at|timestamptz||Terminal time, including failure.
@@ -187,7 +192,7 @@ encryption_key_version|text||Key version for decrypting exact payload.
 payload_sha256|bytea||Hash of complete canonical provider request; stable on retry.
 provider_email_id|text|UNIQUE|Resend ID; durable confirmation beyond its idempotency window.
 provider_accepted_at|timestamptz||Send milestone.
-delivery_facts|jsonb|NOT NULL DEFAULT '{}'::jsonb|Per-envelope-recipient delivered/bounce/complaint evidence; preserve distinct facts.
+delivery_facts|jsonb|NOT NULL DEFAULT '{}'::jsonb|Provider delivery/bounce/complaint evidence with actual recipient scope; unidentified recipient outcomes stay unknown.
 attempt_count|integer|NOT NULL DEFAULT 0|Cached count; attempt rows are the full record.
 lease_until|timestamptz||Worker dispatch lease.
 lease_token|uuid||Fencing identity; late worker completion cannot override a newer owner.
@@ -252,6 +257,9 @@ response_snapshot|jsonb|NOT NULL|Bounded result/receipt, no token or stale unres
 created_at|timestamptz|NOT NULL DEFAULT now()|Commit time; same transaction as operation.
 ''',constraints=['UNIQUE (scope_type, scope_id, operation, idempotency_key)'])
 extra=[
+'ALTER TABLE warm_intros.message_versions ADD FOREIGN KEY (message_id, supersedes_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT',
+'ALTER TABLE warm_intros.generation_runs ADD FOREIGN KEY (message_id, parent_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT',
+'ALTER TABLE warm_intros.stream_events ADD FOREIGN KEY (message_id, run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT',
 'ALTER TABLE warm_intros.introductions ADD FOREIGN KEY (id, current_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT',
 'ALTER TABLE warm_intros.introductions ADD FOREIGN KEY (id, launch_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT',
 'ALTER TABLE warm_intros.messages ADD FOREIGN KEY (id, current_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT',
@@ -268,10 +276,16 @@ for i,t in enumerate(T,1):
     for c in t['columns']:
         null='required' if 'NOT NULL' in c['rule'] or 'PRIMARY KEY' in c['rule'] else 'nullable'
         md.append(f'| `{c["name"]}` | `{c["type"]}` · {null} | {c["meaning"]} |')
-    md+=['','**Keys and indexes:** '+('; '.join('`'+x+'`' for x in t['constraints']) if t['constraints'] else 'Primary key above.')]
+    keys = [f'PRIMARY KEY ({c["name"]})' for c in t['columns'] if 'PRIMARY KEY' in c['rule']]
+    keys += [f'UNIQUE ({c["name"]})' for c in t['columns'] if 'UNIQUE' in c['rule']]
+    keys += t['constraints']
+    keys += [x.split(' ADD ', 1)[1] for x in extra if x.startswith('ALTER TABLE warm_intros.' + t['name'] + ' ADD ')]
+    md+=['','**Keys and indexes:** '+('; '.join('`'+x+'`' for x in keys))]
     md += ['']+['- `'+x+'`' for x in t['indexes']]+['','</Accordion>','']
 sql+=['','-- Deferred creation-order links; application inserts draft root before children.']+[x+';' for x in extra]
 (root/'schema.sql').write_text('\n'.join(sql)+'\n')
+for t in T:
+    t['post_create_constraints'] = [x.split(' ADD ',1)[1] for x in extra if x.startswith('ALTER TABLE warm_intros.'+t['name']+' ADD ')]
 (root/'schema.json').write_text(json.dumps(T,indent=2)+'\n')
 (root/'tables.mdx').write_text('\n'.join(md))
 print(f'{len(T)} tables; {sum(len(t["columns"]) for t in T)} columns; SQL and field dictionary generated.')
