@@ -90,7 +90,7 @@ erDiagram
   introductions o|--o{ mutation_receipts : deduplicates
 ```
 
-The field dictionary below is generated from the same table definitions as the reference SQL in the [downloadable build package](/images/warm-intro/warm-intro-build-package.zip). The SQL is a **schema proposal**, not an applied migration. It deliberately uses UUIDv7 values supplied by Go and validated Go status enums instead of SQL enum/CHECK vocabularies. Nullability and foreign-key policies are explicit.
+The field dictionary below is generated from the same table definitions as the reference SQL in the [downloadable build package](/images/warm-intro/warm-intro-build-package.zip). The SQL is a **schema proposal**, not an applied migration. It deliberately uses UUIDv7 values supplied by Go and validated Go status enums instead of SQL enum/CHECK vocabularies. Nullability and foreign-key policies are explicit. The reference DDL requires **PostgreSQL 15 or later** (`UNIQUE NULLS NOT DISTINCT`); confirm the deployed engine version in Phase 0. Column-level `REFERENCES` to `users`, `organizations`, `suggestions` and `persons` schemas are environment-name assumptions shown so the FK intent is explicit — verify the real qualified names before writing migrations.
 
 <AccordionGroup>
 <Accordion title="1. introductions">
@@ -108,13 +108,13 @@ One durable record per attempted introduction, retained after completion, declin
 | `source_key` | `text` · required | Immutable canonical batch/suggestion/action identity for duplicate-open handling. |
 | `source_snapshot` | `jsonb` · required | Original IDs, title, source metadata and raw WHY; immutable, owner-private. |
 | `previous_introduction_id` | `uuid` · nullable | Intentional new attempt after a prior closed sequence. |
-| `state` | `text` · required | Go-validated lifecycle vocabulary. |
+| `state` | `text` · required | Go-validated lifecycle: draft, first_queued, awaiting_first, second_queued, awaiting_second, introduction_queued, introducing, introduced, declined, cancelled, expired, failed. |
 | `revision` | `bigint` · required | Optimistic concurrency counter for every owner-visible mutation. |
 | `current_context_version_id` | `uuid` · nullable | Current owner-reviewed working context; composite FK added after context table exists. |
 | `launch_context_version_id` | `uuid` · nullable | Frozen context at start, immutable afterward. |
-| `current_stage` | `text` · required | draft, first_request, second_request, final_introduction, or closed. |
-| `dispatch_blocked_at` | `timestamptz` · nullable | When a safety/delivery hold was applied; stage and past consent remain unchanged. |
-| `dispatch_block_reason` | `text` · nullable | Go-validated reason such as recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, or unresolved_send. All active causes remain in events/delivery records. |
+| `current_stage` | `text` · required | Furthest stage reached: draft, first_request, second_request, or final_introduction. Frozen at terminal closure so history keeps where the sequence stopped; the Closed filter reads state/closed_at, not this column. |
+| `dispatch_blocked_at` | `timestamptz` · nullable | Time the hold set became non-empty; cleared when the last hold clears. Stage and past consent remain unchanged. |
+| `dispatch_holds` | `jsonb` · required | Set of active dispatch holds, each `{cause, detail, set_at, set_by, optional delivery_id/participant_id evidence}`. Cause vocabulary: recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, unresolved_send. Multiple causes may be active; clearing one must not clear another. Mutated only under the introduction lock; every set/clear also writes an event. Durable evidence stays in events/delivery records. |
 | `stream_seq` | `bigint` · required | Per-introduction durable SSE sequence allocated under this row lock. |
 | `created_at` | `timestamptz` · required | Creation time, including drafts that never launch. |
 | `updated_at` | `timestamptz` · required | Current activity time. |
@@ -123,7 +123,7 @@ One durable record per attempted introduction, retained after completion, declin
 | `archived_at` | `timestamptz` · nullable | Hide from default history, never delete correspondence. |
 | `active_source_key` | `text` · nullable | Set to source_key while active, cleared at terminal closure; enables deliberate restarts. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (id, owner_user_id)`; `FOREIGN KEY (previous_introduction_id, owner_user_id) REFERENCES warm_intros.introductions(id, owner_user_id) ON DELETE RESTRICT`; `FOREIGN KEY (id, current_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, launch_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (owner_user_id) REFERENCES users.users(id) ON DELETE RESTRICT`; `FOREIGN KEY (organization_id) REFERENCES organizations.organizations(id) ON DELETE RESTRICT`; `FOREIGN KEY (source_batch_id) REFERENCES suggestions.suggestion_batch(id) ON DELETE SET NULL`; `FOREIGN KEY (source_suggestion_id) REFERENCES suggestions.suggestion(id) ON DELETE SET NULL`; `UNIQUE (id, owner_user_id)`; `FOREIGN KEY (previous_introduction_id, owner_user_id) REFERENCES warm_intros.introductions(id, owner_user_id) ON DELETE RESTRICT`; `FOREIGN KEY (id, current_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, launch_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
 
 - `CREATE INDEX introductions_owner_history_idx ON warm_intros.introductions(owner_user_id, created_at DESC, id DESC)`
 - `CREATE INDEX introductions_owner_state_idx ON warm_intros.introductions(owner_user_id, state, created_at DESC, id DESC)`
@@ -146,7 +146,7 @@ Two stable identities per introduction. Live links can disappear without losing 
 | `identity_snapshot` | `jsonb` · required | Original full name and source identifiers; supports historical labels. |
 | `created_at` | `timestamptz` · required | Creation time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, original_person_id)`; `UNIQUE (introduction_id, source_role)`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `FOREIGN KEY (contact_id) REFERENCES persons.contacts(id) ON DELETE SET NULL`; `FOREIGN KEY (person_id) REFERENCES persons.persons(id) ON DELETE SET NULL`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, original_person_id)`; `UNIQUE (introduction_id, source_role)`
 
 
 </Accordion>
@@ -168,18 +168,18 @@ Append-only WHY, sender intent, profile, address, and order history. Every messa
 | `private_context` | `jsonb` · required | Additional owner-private suggestion reasoning; never public DTO content. |
 | `recipient_safe_facts` | `jsonb` · required | Allowlisted facts usable in recipient copy; distinct from private context. |
 | `public_why` | `jsonb` · nullable | Optional sender-approved headline/body[] explanation for recipient copy; no automatic publication of the full working WHY. |
-| `sender_snapshot` | `jsonb` · required | Display name, verified reply address and signature policy at this version. |
+| `sender_snapshot` | `jsonb` · required | Display name, verified reply address, signature policy and the approved signature content at this version; post-launch profile edits cannot change frozen copy. |
 | `presentation_snapshot` | `jsonb` · required | Versioned manifest of all four HTML/text assets, public copy/disclosures, sender envelope/signature, and policy values; immutable content hashes/references retained for the lifetime of the sequence. |
 | `participant_snapshots` | `jsonb` · required | Exactly two keyed objects: participant ID, name, title/company, selected address/address source, safe profile and selected position. |
 | `first_participant_id` | `uuid` · required | First execution recipient for this version. |
 | `second_participant_id` | `uuid` · required | Second execution recipient for this version. |
 | `recommended_first_participant_id` | `uuid` · nullable | Recommendation kept independently from selected order. |
 | `relationship_evidence` | `jsonb` · required | Private comparable weight/evidence source and as-of time; no public exposure. |
-| `change_reason` | `text` · required | source_loaded, why_edited, address_changed, order_changed, profile_changed, sender_changed, or presentation_changed. |
+| `change_reason` | `text` · required | source_loaded, why_edited (covers sender_intent and public_why edits), address_changed, order_changed, profile_changed, sender_changed, or presentation_changed. |
 | `created_by_user_id` | `uuid` · nullable | Editor identity; nullable for system capture. |
 | `created_at` | `timestamptz` · required | Append time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, version)`; `FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `FOREIGN KEY (created_by_user_id) REFERENCES users.users(id) ON DELETE SET NULL`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, version)`; `FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -201,7 +201,7 @@ Stable logical message slots: two requests and one final introduction. Neutral c
 | `created_at` | `timestamptz` · required | Creation time. |
 | `updated_at` | `timestamptz` · required | Last slot update. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (introduction_id, id)`; `UNIQUE NULLS NOT DISTINCT (introduction_id, kind, participant_id)`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, current_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, approved_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, active_generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (introduction_id, id)`; `UNIQUE NULLS NOT DISTINCT (introduction_id, kind, participant_id)`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, current_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, approved_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (id, active_generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -226,7 +226,7 @@ Append-only saved draft and sent-message content. Each completed AI result or de
 | `supersedes_version_id` | `uuid` · nullable | Previous saved version for audit/review. |
 | `created_at` | `timestamptz` · required | Saved time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (introduction_id, id)`; `UNIQUE (message_id, id)`; `UNIQUE (message_id, version)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, supersedes_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `FOREIGN KEY (author_user_id) REFERENCES users.users(id) ON DELETE SET NULL`; `UNIQUE (introduction_id, id)`; `UNIQUE (message_id, id)`; `UNIQUE (message_id, version)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, supersedes_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -246,7 +246,7 @@ Append-only sender approval receipts. A review is current only when its message 
 | `reviewed_by_user_id` | `uuid` · required | Must equal introduction owner. |
 | `reviewed_at` | `timestamptz` · required | Approval timestamp. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (message_id, message_version_id, context_version_id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `FOREIGN KEY (reviewed_by_user_id) REFERENCES users.users(id) ON DELETE RESTRICT`; `UNIQUE (message_id, message_version_id, context_version_id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -264,14 +264,14 @@ Recipient-specific capability tied to one frozen invitation. Create the second i
 | `message_id` | `uuid` · required | Approved request slot; version supplied through frozen slot. |
 | `public_snapshot` | `jsonb` · required | Frozen allowlisted public view: profile, reviewed note/signature, truthful stage banner and exact consent disclosure. No capability or email addresses. Store before dispatch; server decides allowed actions separately. |
 | `token_hash` | `bytea` · required | SHA-256 of a random 256-bit token; no plaintext token column. |
-| `token_version` | `integer` · required | Bind requests to this capability version. |
+| `token_version` | `integer` · required | Bind requests to this capability version; the public API exposes it as token_version on resolve/decision. |
 | `state` | `text` · required | queued, active, decided, expired, or revoked. |
 | `first_send_attempt_at` | `timestamptz` · nullable | Deadline starts when the immutable send payload is first frozen for dispatch. |
 | `expires_at` | `timestamptz` · nullable | Exact deadline frozen before first attempt; set with payload in one transaction. |
 | `revoked_at` | `timestamptz` · nullable | Revocation time, if stopped. |
 | `created_at` | `timestamptz` · required | Creation time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (token_hash)`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, participant_id)`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (token_hash)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (introduction_id, id)`; `UNIQUE (introduction_id, participant_id)`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`
 
 - `CREATE INDEX invitations_expiry_idx ON warm_intros.invitations(expires_at, id) WHERE state IN ('queued', 'active')`
 
@@ -294,7 +294,7 @@ One immutable accept/decline per invitation. This records what was actually appr
 | `decided_at` | `timestamptz` · required | Server-recorded receipt time. |
 | `applied_at` | `timestamptz` · nullable | When prerequisites were confirmed and transition applied; deferred for send-outcome reconciliation. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (invitation_id)`; `UNIQUE (introduction_id, id)`; `FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (invitation_id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (introduction_id, id)`; `FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -312,7 +312,7 @@ Optional decline notes, private to the sender. Append revisions separately from 
 | `note` | `text` · required | Plain text, maximum 2000 Unicode characters; no automatic onward sharing. |
 | `created_at` | `timestamptz` · required | Submission time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (decision_id, revision)`; `FOREIGN KEY (introduction_id, decision_id) REFERENCES warm_intros.consent_decisions(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (decision_id, revision)`; `FOREIGN KEY (introduction_id, decision_id) REFERENCES warm_intros.consent_decisions(introduction_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -350,9 +350,10 @@ Durable generation queue and provenance for each of the three parallel LLM calls
 | `completed_at` | `timestamptz` · nullable | Terminal time, including failure. |
 | `created_at` | `timestamptz` · required | Enqueue time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (introduction_id, id)`; `UNIQUE (message_id, id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, parent_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, base_message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (introduction_id, id)`; `UNIQUE (message_id, id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, parent_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, base_message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`
 
 - `CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = 'queued'`
+- `CREATE INDEX generation_runs_lease_idx ON warm_intros.generation_runs(lease_until, id) WHERE status = 'streaming'`
 
 </Accordion>
 
@@ -370,7 +371,7 @@ Replayable SSE transport. Short-lived chunks can be compacted after completion b
 | `payload` | `jsonb` · required | Typed event payload, no chain-of-thought or provider secrets. |
 | `created_at` | `timestamptz` · required | Commit time. |
 
-**Keys and indexes:** `PRIMARY KEY (introduction_id, seq)`; `FOREIGN KEY (introduction_id, run_id) REFERENCES warm_intros.generation_runs(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `PRIMARY KEY (introduction_id, seq)`; `FOREIGN KEY (introduction_id, run_id) REFERENCES warm_intros.generation_runs(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT`
 
 
 </Accordion>
@@ -392,9 +393,9 @@ Durable outbox and one logical message send. The approved text, envelope, render
 | `template_name` | `text` · required | First request, second request, final, or neutral closure. |
 | `template_version` | `text` · required | Versioned renderer. |
 | `rendered_snapshot` | `jsonb` · required | Envelope, HTML and plain text with capability URL redacted in owner/history read models; exact text preserved separately in ciphertext. |
-| `payload_ciphertext` | `bytea` · nullable | Exact provider request, including capability URL; required before dispatch, encrypted at rest. |
+| `payload_ciphertext` | `bytea` · nullable | Exact provider request, including capability URL; populated in the same transaction that freezes the payload and required (non-null) before the first attempt reserves dispatch. Encrypted at rest. |
 | `encryption_key_version` | `text` · nullable | Key version for decrypting exact payload. |
-| `payload_sha256` | `bytea` · nullable | Hash of complete canonical provider request; stable on retry. |
+| `payload_sha256` | `bytea` · nullable | Hash of complete canonical provider request; populated at payload freeze, stable on every retry. |
 | `provider_email_id` | `text` · nullable | Resend ID; durable confirmation beyond its idempotency window. |
 | `provider_accepted_at` | `timestamptz` · nullable | Send milestone. |
 | `delivery_facts` | `jsonb` · required | Provider delivery/bounce/complaint evidence with actual recipient scope; unidentified recipient outcomes stay unknown. |
@@ -407,9 +408,10 @@ Durable outbox and one logical message send. The approved text, envelope, render
 | `created_at` | `timestamptz` · required | Atomic enqueue with transition. |
 | `updated_at` | `timestamptz` · required | Last delivery update. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (logical_key)`; `UNIQUE (provider_email_id)`; `UNIQUE (introduction_id, id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (logical_key)`; `UNIQUE (provider_email_id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (introduction_id, id)`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT`
 
 - `CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN ('queued', 'retryable_failed')`
+- `CREATE INDEX mail_deliveries_lease_idx ON warm_intros.mail_deliveries(lease_until, id) WHERE state = 'sending'`
 
 </Accordion>
 
@@ -432,7 +434,7 @@ Append-only record of every actual Resend API attempt. Attempts are not new logi
 | `error_code` | `text` · nullable | Sanitized machine category. |
 | `retry_after_seconds` | `integer` · nullable | Provider retry hint, when available. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (delivery_id, attempt_number)`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (delivery_id) REFERENCES warm_intros.mail_deliveries(id) ON DELETE RESTRICT`; `UNIQUE (delivery_id, attempt_number)`
 
 
 </Accordion>
@@ -445,7 +447,7 @@ Permanent introduction timeline, separate from short-lived streaming chunks. App
 | --- | --- | --- |
 | `id` | `uuid` · required | UUIDv7, stable cursor tiebreaker. |
 | `introduction_id` | `uuid` · required | Owning introduction. |
-| `event_type` | `text` · required | Canonical event name; examples documented below. |
+| `event_type` | `text` · required | Canonical event name; the V1 vocabulary is defined in the sequence-state section below. |
 | `actor_type` | `text` · required | sender, recipient_capability, system_worker, provider. |
 | `actor_user_id` | `uuid` · nullable | Known owner actor when relevant. |
 | `participant_id` | `uuid` · nullable | Recipient identity when relevant. |
@@ -457,7 +459,7 @@ Permanent introduction timeline, separate from short-lived streaming chunks. App
 | `metadata` | `jsonb` · required | Structured safe facts, version IDs and stage changes; no token, full note or raw draft body. |
 | `occurred_at` | `timestamptz` · required | Server event time. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, delivery_id) REFERENCES warm_intros.mail_deliveries(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `FOREIGN KEY (actor_user_id) REFERENCES users.users(id) ON DELETE SET NULL`; `FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, delivery_id) REFERENCES warm_intros.mail_deliveries(introduction_id, id) ON DELETE RESTRICT`; `FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT`
 
 - `CREATE INDEX events_intro_timeline_idx ON warm_intros.events(introduction_id, occurred_at, id)`
 
@@ -481,7 +483,7 @@ Durable verified webhook inbox, including unmatched events arriving before the s
 | `processed_at` | `timestamptz` · nullable | Application time. |
 | `error_code` | `text` · nullable | Safe reconciliation error. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (provider_event_id)`
+**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (provider_event_id)`; `FOREIGN KEY (delivery_id) REFERENCES warm_intros.mail_deliveries(id) ON DELETE RESTRICT`
 
 - `CREATE INDEX provider_events_unmatched_idx ON warm_intros.provider_events(received_at, id) WHERE status IN ('pending', 'unmatched', 'failed')`
 
@@ -499,12 +501,12 @@ Durable request idempotency for create, save, review, start, decisions, notes, a
 | `operation` | `text` · required | Canonical operation, including target identity. |
 | `idempotency_key` | `text` · required | Validated client-generated request identity. |
 | `request_sha256` | `bytea` · required | Canonical body hash; changed replay is conflict. |
-| `introduction_id` | `uuid` · nullable | Committed resource, null before a create completes. |
+| `introduction_id` | `uuid` · nullable | Committed introduction for this mutation; populated for every successful introduction-scoped operation. Nullable only so a create receipt can be inserted before the root row exists within the same transaction. |
 | `response_status` | `integer` · required | Original result code. |
 | `response_snapshot` | `jsonb` · required | Bounded result/receipt, no token or stale unrestricted source data. |
 | `created_at` | `timestamptz` · required | Commit time; same transaction as operation. |
 
-**Keys and indexes:** `PRIMARY KEY (id)`; `UNIQUE (scope_type, scope_id, operation, idempotency_key)`
+**Keys and indexes:** `PRIMARY KEY (id)`; `FOREIGN KEY (introduction_id) REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT`; `UNIQUE (scope_type, scope_id, operation, idempotency_key)`
 
 
 </Accordion>
@@ -521,6 +523,8 @@ Durable request idempotency for create, save, review, start, decisions, notes, a
 - Store all server-accepted message saves and WHY/context edits. Debounced autosave produces a version per saved edit, not per browser keystroke. Never overwrite the launched version when a source contact or suggestion changes.
 - Use UTC storage and localized display. “Queued,” “provider accepted,” and “delivered” have separate timestamps; a later failure does not erase an earlier event.
 - `active_source_key` prevents duplicate active sequences from repeated opens. If a previous sequence is closed, show its history and require deliberate **Start a new introduction** with `restart_of`; the new record points to the previous one.
+- `restart_of` must resolve to a **closed** introduction owned by the same sender. The composite FK on `previous_introduction_id` enforces same-owner; the service additionally verifies the predecessor is in a terminal state before creating the attempt — a restart of a still-active sequence is rejected.
+- A neutral closure is materialized lazily inside the stop transition's transaction: insert the `neutral_closure` slot for each already-accepted participant, a `message_versions` row with `author_type=system_template` carrying the fixed approved copy, and the `mail_deliveries` outbox row — unless that recipient's address must not be contacted (suppression/complaint), in which case the closure is suppressed, not sent. Never create a closure for a participant who was never invited.
 - Stream chunks may be compacted after their replay window. Keep completed outputs, prompt/input/model provenance, all introduction events and communication records. Never apply stream cleanup to permanent history tables.
 
 ### Approval dependency hashes
@@ -536,6 +540,8 @@ A global context-version change is too broad for review validity: changing Katel
 Order, WHY/intent, public profile or sender changes invalidate all affected scopes. A text edit invalidates only that slot. At launch, Go compares all three current hashes and freezes the current complete context. Reviews remain in history even when stale; do not delete them or allow the client to assert validity.
 
 Generation staleness uses a **different hash**: the sanitized model inputs. Recipient email addresses and execution position are not needed in the writing prompt. An address/order-only change can preserve useful ongoing generation while still invalidating review as required. Changes to the permitted rationale, names, facts or sender text supersede generation that depended on them.
+
+Both hashes must use one shared canonicalization or two components will disagree on whether bytes match. Compute them in a single feature-owned helper (`approvalScopeHash` and `modelInputHash`) over canonical JSON: UTF-8, recursively sorted object keys, no insignificant whitespace, arrays in the documented field order for each dependency. Pin the helper with golden-vector tests so review, start, and staleness checks always hash identical input.
 
 ### Freeze everything the sender and recipients review
 
@@ -636,6 +642,10 @@ Store the recommendation, evidence version/time, and selected order separately. 
 
 ### Sequence state
 
+`introductions.state` holds the full lifecycle vocabulary: `draft`, `first_queued`, `awaiting_first`, `second_queued`, `awaiting_second`, `introduction_queued`, `introducing`, `introduced`, `declined`, `cancelled`, `expired`, `failed`. The last five are terminal: they set `closed_at`, clear `active_source_key`, and freeze `current_stage` at the furthest stage reached.
+
+`current_stage` is the coarse funnel marker — `draft`, `first_request`, `second_request`, or `final_introduction` — derived from `state` on every transition by one Go mapping (`first_queued`/`awaiting_first` → `first_request`; `second_queued`/`awaiting_second` → `second_request`; `introduction_queued`/`introducing` → `final_introduction`; terminal states keep the stage where the sequence ended). It is not an independent vocabulary and never moves backwards: a sequence declined while `awaiting_second` keeps `current_stage=second_request`, so history shows where it stopped. The tracking **Closed** filter reads `closed_at IS NOT NULL`, not a stage value.
+
 | State | Allowed next event | Result |
 | --- | --- | --- |
 | `draft` | Sender starts the exact reviewed revision | `first_queued`; freeze the approved snapshot and create the first send task atomically |
@@ -648,15 +658,41 @@ Store the recommendation, evidence version/time, and selected order separately. 
 | A currently invited person declines | Atomic decision wins before any conflicting transition | `declined`; stop future stages and queue only the applicable neutral closure |
 | Eligible sender cancellation | Cancellation wins before final dispatch is reserved | `cancelled`; revoke active decision capability and suppress unsent work |
 | Active invitation expires | Server deadline passes without a decision | `expired`; suppress later stages |
-| Operator abandons a definitively unsent final | Evidence proves provider non-acceptance and all attempts are resolved | `failed`; set closed time/stage, suppress further final dispatch, clear active source key and retain both acceptances; no transition from an unknown outcome |
+| Operator abandons a definitively unsent final | Evidence proves provider non-acceptance and all attempts are resolved | `failed`; set closed time, keep `current_stage=final_introduction`, suppress further final dispatch, clear active source key and retain both acceptances; no transition from an unknown outcome |
 
 Dispatch state belongs to each logical delivery: `queued`, `sending`, `provider_accepted`, `retryable_failed`, `permanent_failed`, `unknown`, or `suppressed`. Delivered/bounced/complained evidence belongs in `delivery_facts`, not a conflicting second vocabulary for the state column. It is separate from consent and the logical sequence stage. A final delivery error does not erase the fact that both accepted or that a message was already sent.
 
 Use database transactions and a locked sequence row for transitions. Workers, decision handlers, cancellation, and expiry all use the same guards. A valid decision arriving during `*_queued` after the provider has sent but before the send-result write must be retained for reconciliation, not lost or used to skip prerequisites. Reconcile the message receipt, then apply that decision once.
 
+The backend states map to the [tracking labels in the design](/guides/open-work/warm-intro-feature/warm-intro-design#tracking-states) as follows; resolve the named person from the active invitation's participant, never from column position:
+
+|| Tracking label | Backend condition |
+|| --- | --- |
+|| Draft | `state=draft` |
+|| Sending request to `{first person}` | `state=first_queued` (delivery not yet provider-accepted) |
+|| Waiting for `{first person}` | `state=awaiting_first` |
+|| Sending request to `{second person}` | `state=second_queued` |
+|| Waiting for `{second person}` | `state=awaiting_second` |
+|| Sending introduction | `state` in `introduction_queued`, `introducing` |
+|| Introduced | `state=introduced` |
+|| Declined / Expired / Cancelled | matching terminal `state` |
+|| Delivery issue / Needs attention | `dispatch_holds` non-empty, or any delivery `permanent_failed`/`unknown` |
+
+The **In progress** list filter is `state` non-terminal and non-draft; **Introduced** is `state=introduced`; **Closed** is any other terminal state; **Drafts** is `state=draft`. **All** ignores state.
+
+`events.event_type` is a closed V1 vocabulary — extend deliberately in code review, never rename emitted names:
+
+- Lifecycle: `created`, `resumed`, `started`, `cancelled`, `expired`, `declined`, `introduced`, `failed`, `archived`, `restored`
+- Draft and review: `context_version_appended`, `message_version_saved`, `review_recorded`, `review_invalidated`
+- Generation: `generation_queued`, `generation_started`, `generation_completed`, `generation_failed`, `generation_cancelled`, `generation_superseded`
+- Dispatch: `invitation_created`, `delivery_queued`, `delivery_sending`, `delivery_provider_accepted`, `delivery_retryable_failed`, `delivery_permanent_failed`, `delivery_unknown`, `delivery_suppressed`, `delivery_reconciled`
+- Consent: `decision_recorded`, `decision_applied`, `decline_note_added`
+- Holds and operator: `dispatch_hold_set`, `dispatch_hold_cleared`, `operator_reconciled`
+- Webhooks: `provider_event_received`, `provider_event_applied`, `provider_event_unmatched`, `provider_event_failed`
+
 ### Holds, deadlines, and uncertain outcomes
 
-`dispatch_blocked_at` and `dispatch_block_reason` are a hold on future sends, independent of lifecycle stage and immutable consent. Record every cause/change as an event and keep delivery-specific evidence. A permanent request failure, suppression/complaint, lost sender/source eligibility, missing pinned asset, or unreconciled send sets a hold and an owner-visible **Needs attention** status. A late acceptance may be recorded if its link is still valid, but no next email dispatches through a hold. Clearing one cause must not clear another unresolved cause. Ordinary transient backoff is visible delivery status, not a permanent hold.
+`dispatch_blocked_at` and `dispatch_holds` are a hold on future sends, independent of lifecycle stage and immutable consent. `dispatch_holds` carries the **set of active causes** — one entry per cause `{cause, detail, set_at, set_by, delivery_id?, participant_id?}` — so two causes can coexist and clearing one never clears another; the set is only mutated under the introduction lock. `dispatch_blocked_at` records when the set became non-empty and clears when it empties. Record every set/clear as an event and keep delivery-specific evidence. A permanent request failure, suppression/complaint, lost sender/source eligibility, missing pinned asset, or unreconciled send adds a hold and an owner-visible **Needs attention** status. A late acceptance may be recorded if its link is still valid, but no next email dispatches through a hold. Ordinary transient backoff is visible delivery status, not a permanent hold.
 
 | Situation | Required behavior |
 | --- | --- |
@@ -682,24 +718,27 @@ All paths below are new contracts. Protected routes use the existing WorkOS veri
 | --- | --- |
 | `POST /v1/warm-intros` | Body: source IDs and `action_ref`, optionally explicit `restart_of`. Idempotently create or resume the owner’s active draft. Resolve source, recipients, recommendation, and queue three generation jobs. Return persisted draft and generation state. |
 | `GET /v1/warm-intros/{id}` | Owner detail including drafts/reviews before launch or frozen communication record afterward. |
-| `PATCH /v1/warm-intros/{id}` | Versioned draft edits: order, selected known address, subjects/notes. Apply review invalidation server-side; reject changes after start. |
-| `POST /v1/warm-intros/{id}/messages/{message_id}/generate` | Queue generation/retry for one draft. Require the current revision and explicit overwrite intent for human-edited text. Keep existing text until replacement succeeds. |
+| `PATCH /v1/warm-intros/{id}` | Versioned draft edits as a discriminated operation: `{expected_revision, operation, ...payload}` where `operation` is `save_text`, `edit_context`, `change_address`, or `switch_order` (fields per the mutation table below). Apply review invalidation server-side; reject changes after start. |
+| `POST /v1/warm-intros/{id}/messages/{message_id}/generation` | Queue generation/retry for one draft. Require the current revision and explicit overwrite intent for human-edited text. Keep existing text until replacement succeeds. |
+| `POST /v1/warm-intros/{id}/messages/{message_id}/generation/cancel` | Cancel the slot's active run (expected revision + `run_id`). Late provider results cannot commit after ownership is revoked. |
 | `POST /v1/warm-intros/{id}/messages/{message_id}/review` | Validate and persist approval of the exact saved message/context version. |
 | `POST /v1/warm-intros/{id}/start` | Requires client idempotency key and expected revision. Atomically validate, freeze, and queue first request. Repeated identical start returns the same sequence. |
+| `GET /v1/warm-intros/{id}/stream` | Authenticated SSE replay of `stream_events` after `Last-Event-ID`/`after_seq`; protocol exception to the JSON envelope (see streaming section). |
 | `GET /v1/warm-intros?status=...&query=...&limit=...&cursor=...` | Owner-only history, stable cursor order, filter counts, current stage, and delivery attention state. |
+| `POST /v1/warm-intros/{id}/archive` / `POST /v1/warm-intros/{id}/restore` | Expected-revision visibility toggle; no effect on running sends, consent, or retained history. |
 | `POST /v1/warm-intros/{id}/cancel` | Version-checked cancellation; return conflict/current state if final dispatch already won. |
 | `POST /v1/public/warm-intros/resolve` | Accept invitation token in the body. Return only that recipient’s safe view and current action availability. Resolving does not accept or decline. |
-| `POST /v1/public/warm-intros/decision` | Token, invitation version, `accept` or `decline`, optional private note, client idempotency key. Atomically record the decision and next task. Repeating the same decision returns its receipt; a conflicting decision returns the already-recorded outcome. |
+| `POST /v1/public/warm-intros/decision` | Token, `token_version`, `accept` or `decline`, `consent_copy_version`, optional private note, `idempotency_key` in the body. Atomically record the decision and next task. Repeating the same decision returns its receipt; a conflicting decision returns the already-recorded outcome. |
 | `POST /v1/public/warm-intros/decline-note` | Permit the same declined recipient to add the optional private note after declining. No state transition or email trigger. Require a declined invitation and bounded note length. |
 | `POST /v1/webhooks/resend/warm-intros` | Provider signature verification over raw bytes; durable event insertion before acknowledging. No user session or consent token accepted here. |
 
-The public DTO contains introducer display name/avatar, intended recipient first name, other person’s safe profile, the reviewed personal note, invitation state/expiry, and consent disclosure. It excludes email addresses, contact IDs, private WHY, weights, internal events, and the other participant’s token. After a decision, show a minimal receipt; do not turn the link into a contact-directory page.
+The public DTO contains introducer display name/avatar, intended recipient first name, other person’s safe profile, the reviewed personal note, invitation state/expiry, `token_version`, `consent_copy_version`, and the exact disclosure text. It excludes email addresses, contact IDs, private WHY, weights, internal events, and the other participant’s token. After a decision, show a minimal receipt that **includes the opaque `decision_id`** the decline-note endpoint needs; do not turn the link into a contact-directory page.
 
 Public decision calls can continue without an Orbiter account. A bearer invitation proves possession of its link, not independently verified personal identity; a forwarded link is usable by its holder. This is the no-login design’s explicit boundary.
 
 ### HTTP request and response details
 
-Use real UUIDs in implementation; symbolic IDs below make relationships readable. Owner mutations require both `Idempotency-Key` and `expected_revision` except initial create. Return `409 CONFLICT` with the current resource revision for a stale edit or changed idempotency replay. In the transaction, authenticate/resolve the target, look up an existing actor-scoped receipt and compare its body hash, then check the current revision only for a new operation. Checking revision first would incorrectly reject a successful retry. Authorization runs before returning an old receipt. A version mismatch must never erase the user’s unsaved buffer.
+Use real UUIDs in implementation; symbolic IDs below make relationships readable. Owner mutations require both `Idempotency-Key` and `expected_revision` except initial create. Public mutations carry the equivalent `idempotency_key` (plus `token_version`) in the body, since public clients share no session headers. Return `409 CONFLICT` with the current resource revision for a stale edit or changed idempotency replay. In the transaction, authenticate/resolve the target, look up an existing actor-scoped receipt and compare its body hash, then check the current revision only for a new operation. Checking revision first would incorrectly reject a successful retry. Authorization runs before returning an old receipt. A version mismatch must never erase the user’s unsaved buffer.
 
 ```json Create body — POST /v1/warm-intros
 {
@@ -709,7 +748,7 @@ Use real UUIDs in implementation; symbolic IDs below make relationships readable
 }
 ```
 
-Go returns `201` for new or `200` for a resumed active introduction; if already launched, return its tracking view without adding generation jobs or resetting reviews. A closed source returns its history and `restart_available`; only a separate explicit request with `restart_of` may create another attempt. Revalidate source access and participants for that new attempt; never regenerate automatically just because a prior sequence ended. Creation commits the root, exactly two participants, context v1 with full source WHY, three message slots, and three generation runs before answering. Return their IDs immediately; no model output is needed to open the workspace.
+Go returns `201` for new or `200` for a resumed active introduction; if already launched, return its tracking view without adding generation jobs or resetting reviews. `source_key` is the canonical string `batch:{batch_uuid}/suggestion:{suggestion_uuid}/action:{action_ref}` — one shared format so the duplicate-open guard compares identical bytes. A closed source returns its history and `restart_available`; only a separate explicit request with `restart_of` may create another attempt, and the referenced introduction must be a closed record owned by the sender. Revalidate source access and participants for that new attempt; never regenerate automatically just because a prior sequence ended. Creation commits the root, exactly two participants, context v1 with full source WHY, three message slots, and three generation runs before answering. Return their IDs immediately; no model output is needed to open the workspace.
 
 ```json Owner response data — required shape, abbreviated
 {
@@ -737,6 +776,8 @@ Go returns `201` for new or `200` for a resumed active introduction; if already 
 }
 ```
 
+`can_start` is server-computed only — the client never asserts it. `validation_issues` enumerates blocking reasons with stable codes: `missing_address`, `invalid_address`, `duplicate_recipient_address`, `address_matches_sender`, `draft_empty`, `generation_in_progress`, `review_required`, `review_stale`. The UI renders a precise disabled-start reason per code.
+
 | Mutation | Exact required inputs and write effect |
 | --- | --- |
 | Save text | `expected_revision`, `message_id`, `subject`, `body`. Append one `message_versions` row, update its slot pointer, increment root revision, record event; preserve other slots. |
@@ -744,13 +785,13 @@ Go returns `201` for new or `200` for a resumed active introduction; if already 
 | Change address | `expected_revision`, `participant_id`, selected authorized contact-email reference. Resolve its value server-side; append context, invalidate that recipient’s request and final review. Unrelated recipient review remains valid by dependency hash. |
 | Switch order | `expected_revision`, ordered array of the same two participant IDs. Append context, preserve stable message identities/text, invalidate all three reviews. |
 | Review | `expected_revision`, `message_version_id`, `context_version_id` displayed. Validate, require no active replacement run for that slot, compute approval hash, append review receipt. Flush/cancel generation explicitly before review; a generating preview is never reviewable. Do not trust a client `reviewed: true`. |
-| Generate/regenerate | `expected_revision`, `message_id`, `base_message_version_id`, `overwrite_human_edits`, optional `revision_request`. Queue one new run; return `202` and its ID. Current text remains until candidate completion. |
+| Generate/regenerate | `POST .../generation` with `expected_revision`, `message_id`, `base_message_version_id`, `overwrite_human_edits`, optional `revision_request` (bounded to 500 characters). Queue one new run; return `202` and its ID. Current text remains until candidate completion. |
 | Cancel generation | `POST /v1/warm-intros/{id}/messages/{message_id}/generation/cancel`, expected revision and active `run_id`. Invalidate run ownership before aborting provider stream; late results cannot commit. |
 | Start | `expected_revision`, `context_version_id`, and the three displayed `message_version_id` values. Server resolves matching current reviews and freezes all approved content in one transaction. Return `202`, introduction ID, and `first_queued`. |
 | Archive/restore | `POST /v1/warm-intros/{id}/archive` / `/restore`, expected revision. Change visibility metadata only; no effect on running sends, consent, or retained history. |
 | Cancel sequence | `expected_revision`, optional bounded cancellation note visible only to owner. Return committed cancellation or current state/conflict; never falsely promise recall. |
-| Resolve public link | `token`. Return recipient-safe context, invitation version, exact disclosure/version, deadline, and allowed actions. No mutation to consent. |
-| Decide | `token`, `invitation_version`, `decision`, `consent_copy_version`, optional private note. Server verifies the shown disclosure version, capability, stage and deadline, then writes the winning receipt and event. Same decision replay returns same result. |
+| Resolve public link | `token`. Return recipient-safe context, `token_version`, exact disclosure/version, deadline, and allowed actions. No mutation to consent. |
+| Decide | `token`, `token_version`, `decision`, `consent_copy_version`, `idempotency_key`, optional private note. Server verifies the shown disclosure version, capability, stage and deadline, then writes the winning receipt and event. Same decision replay returns same result; the receipt includes the `decision_id` for the decline-note call. |
 | Add decline note | `token`, `decision_id`, `note`, client idempotency key. Confirm the capability owns that declined invitation. Append note revision; never send it to the counterpart. |
 
 Use separate public schemas with an explicit field allowlist. Do not take an owner DTO and remove a few fields before returning it publicly. Before launch, owner previews come from authenticated preview endpoints and use no live consent capability:
@@ -763,9 +804,9 @@ Use separate public schemas with an explicit field allowlist. Do not take an own
 
 ### Query and error behavior
 
-Owner history supports `status`, `archived`, `participant_id`, `source_suggestion_id`, `query`, `limit`, and `cursor`. Use `(created_at,id)` for stable newest-first pagination; counts use the same owner/source authorization. Search names and retained WHY/intent without returning an unrelated person’s private source. Start with scoped text search; add a generated search document/GIN index only when measured history size warrants it.
+Owner history supports `status`, `archived`, `participant_id`, `source_suggestion_id`, `query`, `limit`, and `cursor`. `status` accepts the tracking-filter rollups `in_progress` (non-terminal, non-draft), `introduced`, `closed` (terminal other than introduced), `drafts`, or an exact state name from the lifecycle vocabulary. Use `(created_at,id)` for stable newest-first pagination; counts use the same owner/source authorization. Search names and retained WHY/intent without returning an unrelated person’s private source. Start with scoped text search; add a generated search document/GIN index only when measured history size warrants it.
 
-Missing inaccessible rows answer NotFound. Invalid content/address reports typed field validation; missing login is Unauthorized. Expired/decided public links return a controlled recipient-state response after token verification, without exposing internal owner/contact/source IDs. A decision receipt may include the opaque `decision_id` needed by the decline-note endpoint; it is never authorization by itself. Invalid tokens return a generic unavailable invitation, not whether a person exists.
+Missing inaccessible rows answer NotFound. Invalid content/address reports typed field validation; missing login is Unauthorized. Expired/decided public links return a controlled recipient-state response after token verification, without exposing internal owner/contact/source IDs. A decision receipt always includes the opaque `decision_id` needed by the decline-note endpoint; it is never authorization by itself. Invalid tokens return a generic unavailable invitation, not whether a person exists.
 
 A start with an uncertain network result is retried using the same idempotency key; the client then loads the resource. It must not create a second introduction. Keys are scoped to actor, operation and target, and the persisted body hash rejects changed retries.
 
@@ -859,7 +900,7 @@ The existing cold-email implementation stops when its client disconnects. Reuse 
 
 ### Generate all three together
 
-Create three bounded generation tasks immediately when the draft is created. Use the existing Go OpenRouter client behind a feature interface, configured model IDs, timeout/concurrency limits, and runtime prompt assets such as `assets/prompts/warm-intro-request.md` and `warm-intro-final.md`. Follow the backend’s prompt/config registration rules.
+Create three bounded generation tasks immediately when the draft is created. Use the existing Go OpenRouter client behind a feature interface, configured model IDs, timeout/concurrency limits, and runtime prompt assets such as `assets/prompts/warm-intro-request.md` and `warm-intro-final.md`. Follow the backend’s prompt/config registration rules. Message-level `generation_status` moves `idle → queued → streaming → ready` on a committed version, `failed` when the run ends with nothing pending, and `cancelled` only on explicit cancel; `superseded` applies to runs, not the slot status.
 
 Inputs are sender identity, the two resolved contacts, the structured working WHY from the authorized suggestion reader, allowed profile facts, and an optional reference draft. Include the full headline and summary; exclude unrelated private source data. Reference drafts need order-neutral validation and are never proof of consent. Treat source text as data, not instructions. Validate structured subject/body results and length limits; never permit the model to choose addresses, invoke sending, claim consent, or add unsupported personal claims. Do not insert untrusted HTML into email templates.
 
@@ -875,11 +916,13 @@ The public draft must remain editable if the model is unavailable. Do not route 
 
 Add `src/features/warm-intros` for setup, tracking, DTO schemas, Query hooks, and public invitation components. Add a protected full-screen route, proposed `/warm-intros/{id}`, outside the normal narrow composer container. Add a public route, proposed `/i/warm-intro`, outside both login-only and authenticated-user redirect groups.
 
+The screen-level spec lives in the design doc; do not re-derive it: [setup screen organization, interactions, and states](/guides/open-work/warm-intro-feature/warm-intro-design#1-full-screen-setup), [public-page hierarchy, consent language, and state table](/guides/open-work/warm-intro-feature/warm-intro-design#2-public-invitation-on-a-phone), [tracking list/detail](/guides/open-work/warm-intro-feature/warm-intro-design#4-warm-introductions-tracking-modal), [email family](/guides/open-work/warm-intro-feature/warm-intro-design#3-the-communication-family), and the [visual/interaction specification](/guides/open-work/warm-intro-feature/warm-intro-design#visual-and-interaction-specification) for tokens, the 650 px composer-stacking and 740 px modal-sheet breakpoints, and the accessibility requirements.
+
 Use the existing suggestion action as the entry point, carrying source references. On opening, create/resume the server draft and show all three independent generation states. Poll only while jobs or sending are pending; use slower refresh for an open history detail and stop polling when hidden or terminal. A closed tab never pauses sequence execution.
 
 Implement the selected horizontal stages and three mini composers, independent review controls, editable address selection, order swap, WHY disclosure, email/public previews, saved/error/conflict states, and one start action. Debounce autosave, flush before review/start, and expose save failures. Reopening after refresh restores server data, not local HTML state.
 
-For the public route, put the opaque token in the invitation URL fragment, read it into page memory, and send it to the resolve/decision endpoints in request bodies. Avoid tokens in query strings, access logs, analytics, screenshots, error reports, and referrers. Set `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and `noindex`; use no third-party trackers on this page. Confirm root providers and auth interceptors do not redirect anonymous recipients or cache their DTOs under authenticated query keys.
+For the public route, invitation links use the concrete form `{WARM_INTRO_PUBLIC_ORIGIN}/i/warm-intro#k={token}` — the opaque token travels in the URL fragment (base64url, 256-bit random), is read into page memory, and goes to the resolve/decision endpoints in request bodies only. Fragments never reach server logs. Avoid tokens in query strings, access logs, analytics, screenshots, error reports, and referrers. Set `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and `noindex`; use no third-party trackers on this page. Confirm root providers and auth interceptors do not redirect anonymous recipients or cache their DTOs under authenticated query keys.
 
 Use cryptographically random, unguessable recipient-specific tokens; store lookup hashes, bind them to the frozen invitation revision, and enforce state, expiry, and revocation on every decision. Rate-limit resolution/decisions and cap payload sizes. GETs, link scanners, and provider click events remain read-only. Keep an already-decided capability usable only for its minimal receipt and permitted private note until expiry.
 
@@ -919,7 +962,7 @@ Render responsive HTML plus plain text server-side. Invitation links use the con
 
 Commit each transition and its unique outbox row together. Publish only a work identifier; the worker reloads the durable row and rechecks stage prerequisites. A recovery sweep republishes stranded work if publish failed. Use leases and compare-and-set completion to prevent concurrent workers from owning the same attempt.
 
-Freeze the complete rendered provider payload before the first attempt, including its token URL and template version. Retries use the identical payload and a deterministic key such as `warm-intro/{introduction_id}/{message_id}/{snapshot_version}`. Persist the provider email ID and accepted time as the durable success record. Resend’s own idempotency window lasts **24 hours**; it does not provide indefinite deduplication. [Resend idempotency documentation](https://resend.com/docs/dashboard/emails/idempotency-keys).
+Freeze the complete rendered provider payload before the first attempt, including its token URL and template version. Retries use the identical payload and a deterministic key such as `warm-intro/{introduction_id}/{message_id}/{context_version_id}` — the frozen launch context for request/final deliveries, and the closure's own context version for neutral closures; deterministic per logical send. Persist the provider email ID and accepted time as the durable success record. Resend’s own idempotency window lasts **24 hours**; it does not provide indefinite deduplication. [Resend idempotency documentation](https://resend.com/docs/dashboard/emails/idempotency-keys).
 
 Retry transient transport, rate-limit, and server failures with bounded backoff and jitter, using the same key. Handle provider idempotency conflicts by their specific error code; a payload mismatch is a bug, not permission to mint a new key. A timeout can mean the provider already accepted the message: mark it unknown, reconcile provider/webhook evidence, and retry only within the safe idempotency window. If an outcome remains unknown beyond that window, park it for operator reconciliation instead of blindly sending again.
 
@@ -957,7 +1000,7 @@ Use **three independent OpenRouter calls** with the initially proposed model `z-
 
 Initial staging settings: temperature `0.5`, reasoning effort `low`, 4,000 output-token budget, 90-second overall timeout, and 30-second first-content timeout. These inherit the adjacent low-reasoning drafting pattern but need a real availability/latency test. Do not show or store chain-of-thought in stream events. Keep model accounting metadata only. If the configured model is unavailable or rejects a parameter, report the configuration error; do not silently change models or drop a control.
 
-Proposed limits: three concurrent runs per introduction; six active runs per sender across all instances; 20 new introduction generations per sender per rolling day; six explicit regenerations per introduction per day. Make these server configuration, not UI constants. Reserve capacity/quota atomically. Permit at most one automatic full-run retry per failed message for transient provider failures. Keep it under the same user action but give it a new run ID and clean candidate buffer. No automatic fallback model is configured initially; add one only after the same evaluation corpus passes, and record every fallback’s actual model/run provenance.
+Proposed limits: three concurrent runs per introduction; six active runs per sender across all instances; 20 new introduction generations per sender per rolling day; six explicit regenerations per introduction per day. Make these server configuration, not UI constants. Reserve capacity/quota atomically. Permit at most one automatic full-run retry per failed message for transient provider failures — two total attempts (`full_run_attempts_per_message: 2`). Keep it under the same user action but give it a new run ID and clean candidate buffer. No automatic fallback model is configured initially; add one only after the same evaluation corpus passes, and record every fallback’s actual model/run provenance.
 
 Before pilot, run a fixed evaluation set with ordinary professional introductions, a sender-intent-only case, missing WHY, multiple paragraph WHY, non-investor introductions, long names, unavailable email, order reversal, malicious instructions embedded in context, and confidential sender notes. Inspect all three messages for factual fidelity, distinct audience wording, privacy, length, absence of premature acceptance claims, and useful preservation of the WHY. Capture time to first visible content per composer, total latency, token usage, and failures. Human review remains the sending gate; model self-assessment cannot mark a draft reviewed.
 
@@ -1145,7 +1188,18 @@ Four HTML templates and four plain-text fallbacks are supplied in the build pack
 | `final-introduction.html.tmpl` / `.txt.tmpl` | `Subject`, `Preheader`, `SenderFirstName`, `FirstPersonName`, `SecondPersonName`, `Paragraphs`, `Body`, `SignatureLines`, `Footer`; no consent URL |
 | `neutral-closure.html.tmpl` / `.txt.tmpl` | `Subject`, `Preheader`, `RecipientFirstName`, `SenderName`, `Footer`; fixed neutral copy, no private decline note |
 
-The template format is Go `html/template` for HTML and `text/template` for plain text. Use `missingkey=error`, typed render data, automatic escaping, and a configured/validated HTTPS invitation origin. Do not cast model/user strings to `template.HTML`, `template.URL`, or an equivalent trust bypass. Split the approved body on blank lines into `Paragraphs`; preserve safe line breaks inside paragraphs using escaped text/explicit renderer logic. `SignatureLines` is an empty array in first-name mode; for external-signature mode it contains the approved saved sender signature as escaped plain-text lines, so it is added exactly once in HTML and text. No images, remote font, JavaScript, or recipient-side HTML generation is required.
+The template format is Go `html/template` for HTML and `text/template` for plain text. Use `missingkey=error`, typed render data, automatic escaping, and a configured/validated HTTPS invitation origin. Do not cast model/user strings to `template.HTML`, `template.URL`, or an equivalent trust bypass. Split the approved body on blank lines into `Paragraphs`; preserve safe line breaks inside paragraphs using escaped text/explicit renderer logic. `SignatureLines` is an empty array in first-name mode; for external-signature mode it contains the approved saved sender signature from `sender_snapshot` as escaped plain-text lines, so it is added exactly once in HTML and text. No images, remote font, JavaScript, or recipient-side HTML generation is required.
+
+Every variable derives from the frozen context/invitation snapshots, never live lookups at send time:
+
+|| Variable | Source |
+|| --- | --- |
+|| `Subject`, `Body`, `Paragraphs` | The approved `message_versions` row; `Paragraphs` is `Body` split on blank lines. |
+|| `SenderName`, `SenderFirstName`, `RecipientFirstName`, `CounterpartFirstName`, `FirstPersonName`, `SecondPersonName` | `sender_snapshot` and `participant_snapshots` (or `identity_snapshot` for closures); long names render unwrapped per the design. |
+|| `Preheader` | Fixed per-template line in the approved copy (e.g. a variant of “A personal introduction from {SenderName}”); never generated from private WHY. |
+|| `InvitationURL` | `{WARM_INTRO_PUBLIC_ORIGIN}/i/warm-intro#k={token}` built at payload freeze; identical string in HTML and text. |
+|| `ExpiresAtLabel` | Absolute date rendered from the stored `expires_at` at freeze time (e.g. “October 9, 2026”), in the sender's display locale — not a relative countdown. |
+|| `Footer` | One configured compliance block shared by all four templates: Orbiter identity, “sent on behalf of {SenderName}” disclosure, and the configured postal/contact line. Versioned in the presentation manifest. |
 
 The HTML uses a light inbox canvas, table layout, inline styling, and a large review button consistent with the email design. The public page stays in Orbiter’s dark style. Treat the supplied templates as implementation sources to validate in email clients, not a promise of identical rendering across every Outlook/Gmail/Apple Mail version.
 
@@ -1153,7 +1207,7 @@ The HTML uses a light inbox canvas, table layout, inline styling, and a large re
 
 ```json First or second request — server constructs this payload
 {
-  "from": "Mark via Orbiter <intro@configured-verified-domain>",
+  "from": "Mark Pederson via Orbiter <intro@configured-verified-domain>",
   "to": ["invited-person@example.com"],
   "reply_to": "verified-sender@example.com",
   "subject": "Exact approved request subject",
@@ -1165,7 +1219,7 @@ The HTML uses a light inbox canvas, table layout, inline styling, and a large re
 
 ```json Final introduction — ONE provider request
 {
-  "from": "Mark via Orbiter <intro@configured-verified-domain>",
+  "from": "Mark Pederson via Orbiter <intro@configured-verified-domain>",
   "to": ["katelyn@example.invalid", "ethan@example.invalid"],
   "cc": ["verified-sender@example.com"],
   "reply_to": "verified-sender@example.com",
@@ -1346,7 +1400,7 @@ No action is needed.
 </Accordion>
 </AccordionGroup>
 
-Neutral closure is a fixed template that the sender can preview before launch. Include its version in the launch snapshot; generate its participant-specific envelope only when required. After a first-person decline, do not send a closure to the second person who was never invited. After second-person decline or expiration, notify the already-accepted first person without revealing the private reason. Never send the “address has not been shared” closure after final dispatch has begun or its outcome is unknown.
+Neutral closure is a fixed template that the sender can preview before launch. Include its version in the launch snapshot; generate its participant-specific envelope only when required. After a first-person decline, do not send a closure to the second person who was never invited. After second-person decline or expiration, notify the already-accepted first person without revealing the private reason. Never send the “address has not been shared” closure after final dispatch has begun or its outcome is unknown. A sequence closed as `failed` therefore sends **no automatic closure** — dispatch began, so that copy may be false even though the final was proven unsent; accepted recipients are handled by direct sender follow-up, and a distinct failure-notification template is a product decision to settle before pilot.
 
 ### Template and provider acceptance checks
 
@@ -1358,7 +1412,7 @@ This is the execution checklist after reviewing the table design. Each step has 
 
 | Step | Build exactly this | Dependencies / exit gate |
 | --- | --- | --- |
-| **1. Confirm schema contracts** | Review all 16 tables, field dictionary, reference SQL, identity mapping, WHY/privacy rules, and history invariants. Confirm PostgreSQL support and existing owner/contact/source FKs against the chosen environment. | Signed-off schema proposal and recorded baseline; no live schema changes as part of documentation. |
+| **1. Confirm schema contracts** | Review all 16 tables, field dictionary, reference SQL, identity mapping, WHY/privacy rules, and history invariants. Confirm PostgreSQL 15+ (`UNIQUE NULLS NOT DISTINCT`) and the real qualified names for the owner/contact/source foreign keys against the chosen environment. | Signed-off schema proposal and recorded baseline; no live schema changes as part of documentation. |
 | **2. Create actual migrations** | Generate goose migration filenames, create feature schema/tables/indexes/FKs, add SQLC configuration/queries, grant required runtime access. Insert circular pointers only after child rows exist. | Up/down on a disposable empty fixture and up on a representative existing fixture; reject cross-owner/message references, preserve source rows, verify indexes and column-scoped runtime permissions. After real usage, rollback via feature flags/forward fixes rather than dropping history. |
 | **3. Add module and contracts** | `warmintros` domain types, service/repo interfaces, typed HTTP DTOs/mappers, OpenAPI envelopes, module routing, composition wiring and depguard rule. Add dedicated scoped source reader. | Module compiles; protected routes fail closed; foreign owners/source IDs cannot resolve. |
 | **4. Implement draft persistence and history first** | Create/resume, two participants, initial WHY/context version, three slots, versioned text/context edits, archived history, context/message history reads. Add mutation receipts. | Full original WHY and sender intent survive edits, refresh, source deletion, completion and archival. No email path is enabled. |
@@ -1367,10 +1421,10 @@ This is the execution checklist after reviewing the table design. Each step has 
 | **7. Add email renderer and Resend client support** | Four HTML/text templates, server preview endpoints, verified From/Reply-To/Cc, deterministic payload freezing, encryption and tags, typed provider errors. | Fixture rendering passes privacy/escaping checks; exact request bytes/hash survive retries. Existing account-review sends still pass. |
 | **8. Implement generation services** | Prompt assets, configured models, three independent run rows, bounded concurrent workers, input hashes, quotas, strict output parser, versions/provenance, retry/supersession. | Three calls run concurrently against fixtures/real staging model; one failure does not discard other completed results. Expired workers cannot write with a stale lease token. No run can send mail. |
 | **9. Implement durable SSE** | Authenticated multiplex endpoint, ordered stream event persistence, replay/snapshot reset, heartbeat, proxy settings, reconnect, explicit cancel. | Close/reopen browser mid-generation and recover all three results without a duplicate model job; stale deltas never corrupt edited text. |
-| **10. Build the full-screen setup** | Leverage Loop action mapping, known people/WHY, three live composers, generation/error states, recipient-based editing, order switching, autosave/conflict states, previews and review/start UI. | Browser-to-DB assertions for each save/review; serialize all three autosaves and start only the exact visible saved version. Non-Warm-Intro actions remain intact. |
-| **11. Build public mobile route** | Unauthenticated invite shell, token-in-fragment resolver, safe profile/note, exact consent disclosures, accept/decline/private-note and all terminal/error states. | Separate clean browser sessions accept in sequence; no login requirement or shared authenticated data cache. Scanner GETs cause no consent. |
+| **10. Build the full-screen setup** | Leverage Loop action mapping, known people/WHY, three live composers, generation/error states, recipient-based editing, order switching, autosave/conflict states, previews and review/start UI. Screen spec: [design §1](/guides/open-work/warm-intro-feature/warm-intro-design#1-full-screen-setup) (organization, interactions, setup states) and the [visual spec](/guides/open-work/warm-intro-feature/warm-intro-design#visual-and-interaction-specification). | Browser-to-DB assertions for each save/review; serialize all three autosaves and start only the exact visible saved version. Non-Warm-Intro actions remain intact. |
+| **11. Build public mobile route** | Unauthenticated invite shell, token-in-fragment resolver, safe profile/note, exact consent disclosures, accept/decline/private-note and all terminal/error states. Screen spec: [design §2](/guides/open-work/warm-intro-feature/warm-intro-design#2-public-invitation-on-a-phone) (hierarchy, consent language, state table, mobile boundaries). | Separate clean browser sessions accept in sequence; no login requirement or shared authenticated data cache. Scanner GETs cause no consent. |
 | **12. Add mail workers and webhook inbox** | Leased outbox dispatch, attempt history, stable provider key, atomic completion, signed webhook processing, out-of-order reconciliation, hard-failure handling and recovery sweeps. | Crash/timeout/redelivery tests show no new logical send; uncertain outcomes beyond dedup window are parked, not blindly retried. |
-| **13. Build tracking modal and detail** | All/pending/introduced/declined/expired/cancelled/failed/needs-attention views, timestamps, WHY/intent, original vs reviewed context, sent messages, consent steps, delivery attempts and cancellation. | Every synthetic scenario has a complete readable timeline; archive changes visibility only. Owner history never exposes another sender’s introductions. |
+| **13. Build tracking modal and detail** | All/pending/introduced/declined/expired/cancelled/failed/needs-attention views, timestamps, WHY/intent, original vs reviewed context, sent messages, consent steps, delivery attempts and cancellation. Labels come from the state→label mapping in [Sequence state](#sequence-state) and [design §4](/guides/open-work/warm-intro-feature/warm-intro-design#4-warm-introductions-tracking-modal). | Every synthetic scenario has a complete readable timeline; archive changes visibility only. Owner history never exposes another sender’s introductions. |
 | **14. Add operator recovery and observability** | Paused dispatch, queue-age/failure dashboards, redacted logs, unmatched webhook reconciliation, unknown-send runbook, retention/archival behavior, sender quotas. | An operator can determine whether a message left before choosing recovery; pause does not break invitation receipts. |
 | **15. Run end-to-end staging matrix** | One sender and two distinct controlled inboxes, both orders, accepts/declines/expiry/cancellation, browser refresh/reconnect, real model streams and actual Resend delivery. | Evidence joins one intro ID to context, three approvals, two decisions, logical deliveries, attempts, provider IDs and UI screenshots. |
 | **16. Internal pilot, then rollout** | Enable creation for internal senders, decision route, then dispatch after domain/webhook/config checks. Expand only after observing complete and failure paths. | Rollback switches and recovery owner documented. Report actual builds/checks; do not label untested cases passed. |
@@ -1453,7 +1507,22 @@ The second review found implementable gaps, not a need to restart the design. Th
 | P2 | Per-recipient delivery facts were assumed for shared final mail | Require provider evidence; retain message-level ambiguity until mixed-recipient staging verifies attribution. |
 | P2 | UI/previews preceded their renderer dependency | Move renderer/contracts before setup/public screen integration; add account lifecycle and operational gates before pilot. |
 
-**Verified now:** the exact UI/payload headline and four paragraphs match; all three model-input fixtures preserve them; reference email fixtures use Ethan/Katelyn in both orders. Also verified: revised reference DDL and scoped keys in a disposable PostgreSQL cluster, retained WHY/source snapshots, template rendering checks, regenerated dictionary/package consistency and MDX/Mintlify checks as recorded with the change. **Still to verify during implementation:** state/lease races, API authorization, actual provider outcomes, sender revocation, model behavior, and browser/inbox compatibility. Documentation checks do not prove an unbuilt runtime.
+A follow-up builder's-lens review (what an implementing agent would hit first) found a second class of gaps — underspecification rather than design errors — also incorporated above:
+
+|| Priority | Finding | Resolution / evidence required |
+|| --- | --- | --- |
+|| P1 | `dispatch_block_reason` was a single value but concurrent holds are required | `dispatch_holds` JSONB cause set, mutated only under the introduction lock; same 16-table/216-column footprint. |
+|| P1 | `state` and `current_stage` vocabularies were never defined or mapped | Full 12-state lifecycle enumerated; `current_stage` is a derived furthest-stage marker frozen at terminal close, so history keeps where the sequence stopped. |
+|| P2 | Field dictionary omitted column-level foreign keys the DDL declares | Generator now emits them; `delivery_attempts`, `provider_events`, `mutation_receipts` and the external `users`/`persons`/`suggestions` references are listed. Qualified external names remain a Phase-0 environment check. |
+|| P2 | No sweep path for expired leases on `streaming` runs or `sending` deliveries | Two partial indexes on `lease_until`; due indexes already cover queued work. |
+|| P2 | API contract drift: missing routes and inconsistent names | `stream`, `archive`, `restore`, and `generation/cancel` rows added; generation verbs unified under `/generation`; `token_version` named consistently; `status` rollup filters and `validation_issues` codes enumerated. |
+|| P2 | Shared formats unspecified | Canonical-hash helper contract, `source_key` composition, `#k=` fragment token URL, `logical_key` context-version component, and `event_type` V1 vocabulary defined. |
+|| P2 | UI build steps did not reference the design sections | Design-section links added to the routes section and steps 10/11/13, plus the state→tracking-label bridge table. |
+|| P2 | `failed` sequences left closure behavior undefined | Explicit rule: no automatic closure once final dispatch began; failure-notification template added to decisions to settle. |
+|| P3 | Template variables had no content spec | `Preheader`/`Footer`/`ExpiresAtLabel`/`InvitationURL` derivation table; sender signature content frozen in `sender_snapshot`; From uses the full display name. |
+|| P3 | Nullability semantics ambiguous | `payload_ciphertext`/`payload_sha256` populated at payload freeze inside the dispatch transaction; `mutation_receipts.introduction_id` populated for every committed introduction-scoped mutation. |
+
+**Verified now:** the exact UI/payload headline and four paragraphs match; all three model-input fixtures preserve them; reference email fixtures use Ethan/Katelyn in both orders. Also verified: revised reference DDL and scoped keys in a disposable PostgreSQL cluster (re-run after the `dispatch_holds` change — still 16 tables, 216 columns, 63 foreign keys), retained WHY/source snapshots, template rendering checks, byte-identical embedded prompts/templates vs the package, regenerated dictionary/package consistency and MDX/Mintlify checks as recorded with the change. **Still to verify during implementation:** state/lease races, API authorization, actual provider outcomes, sender revocation, model behavior, and browser/inbox compatibility. Documentation checks do not prove an unbuilt runtime.
 
 Keep the first release bounded: no extra workflow engine, no extra LLM for privacy or consent, no auto-reminders and no attempt to infer successful business outcomes. The 16 existing proposed tables are sufficient for these fixes.
 
@@ -1474,5 +1543,6 @@ Track generation latency/failure, oldest pending outbox age, send failures/unkno
 | Recipient withdrawal | V1 has no self-service reversal of an immutable decision; a recipient can contact the introducer, who may cancel before final reservation. Confirm this policy and receipt wording before dispatch; adding withdrawal needs a separate audited event/transition. |
 | Sender progress notifications | V1 uses persistent tracking/Needs attention plus sender Cc on the final email. Confirm whether out-of-app owner alerts are required; if so, add a separate template/outbox slot before pilot. |
 | Data retention | Choose retention for approved correspondence, private notes, webhook evidence, and expired token-bearing ciphertext before release. Do not inherit an indefinite default accidentally. |
+| Failed-sequence recipient notice | V1 sends no automatic closure after a `failed` final (dispatch began, so "address has not been shared" copy is unsafe). Confirm whether a distinct failure-notification template is wanted before pilot; it would be a new reviewed asset and outbox slot. |
 
 The first implementation slice is **table review, migrations in an isolated development environment, and persisted history APIs**. The three-composer prototype is the visual reference; backend state and API contracts make it safe to connect the screens to real sending.

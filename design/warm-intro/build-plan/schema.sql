@@ -20,7 +20,7 @@ CREATE TABLE warm_intros.introductions (
     launch_context_version_id          uuid,
     current_stage                      text NOT NULL,
     dispatch_blocked_at                timestamptz,
-    dispatch_block_reason              text,
+    dispatch_holds                     jsonb NOT NULL DEFAULT '[]'::jsonb,
     stream_seq                         bigint NOT NULL DEFAULT 0,
     created_at                         timestamptz NOT NULL DEFAULT now(),
     updated_at                         timestamptz NOT NULL DEFAULT now(),
@@ -221,6 +221,7 @@ CREATE TABLE warm_intros.generation_runs (
     FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT
 );
 CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = 'queued';
+CREATE INDEX generation_runs_lease_idx ON warm_intros.generation_runs(lease_until, id) WHERE status = 'streaming';
 
 -- Replayable SSE transport. Short-lived chunks can be compacted after completion because final versions and run provenance remain; history is not dependent on chunks.
 CREATE TABLE warm_intros.stream_events (
@@ -270,6 +271,7 @@ CREATE TABLE warm_intros.mail_deliveries (
     FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT
 );
 CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN ('queued', 'retryable_failed');
+CREATE INDEX mail_deliveries_lease_idx ON warm_intros.mail_deliveries(lease_until, id) WHERE state = 'sending';
 
 -- Append-only record of every actual Resend API attempt. Attempts are not new logical emails.
 CREATE TABLE warm_intros.delivery_attempts (
