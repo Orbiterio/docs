@@ -1,0 +1,1474 @@
+[
+  {
+    "name": "introductions",
+    "purpose": "One durable record per attempted introduction, retained after completion, decline, expiry, cancellation, or archival. A deliberate restart creates a new ID linked to its predecessor.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "Application-issued UUIDv7."
+      },
+      {
+        "name": "owner_user_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES users.users(id) ON DELETE RESTRICT",
+        "meaning": "Sender and history owner; never accepted from request body."
+      },
+      {
+        "name": "organization_id",
+        "type": "uuid",
+        "rule": "REFERENCES organizations.organizations(id) ON DELETE RESTRICT",
+        "meaning": "Source scope when applicable; not a grant of shared history access."
+      },
+      {
+        "name": "source_batch_id",
+        "type": "uuid",
+        "rule": "REFERENCES suggestions.suggestion_batch(id) ON DELETE SET NULL",
+        "meaning": "Live source link; snapshot survives source removal."
+      },
+      {
+        "name": "source_suggestion_id",
+        "type": "uuid",
+        "rule": "REFERENCES suggestions.suggestion(id) ON DELETE SET NULL",
+        "meaning": "Live source link; source tuple is checked by the source reader."
+      },
+      {
+        "name": "source_action_ref",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Original make_intro action reference."
+      },
+      {
+        "name": "source_key",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Immutable canonical batch/suggestion/action identity for duplicate-open handling."
+      },
+      {
+        "name": "source_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Original IDs, title, source metadata and raw WHY; immutable, owner-private."
+      },
+      {
+        "name": "previous_introduction_id",
+        "type": "uuid",
+        "rule": "REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Intentional new attempt after a prior closed sequence."
+      },
+      {
+        "name": "state",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Go-validated lifecycle vocabulary."
+      },
+      {
+        "name": "revision",
+        "type": "bigint",
+        "rule": "NOT NULL DEFAULT 1",
+        "meaning": "Optimistic concurrency counter for every owner-visible mutation."
+      },
+      {
+        "name": "current_context_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Current owner-reviewed working context; composite FK added after context table exists."
+      },
+      {
+        "name": "launch_context_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Frozen context at start, immutable afterward."
+      },
+      {
+        "name": "current_stage",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "draft, first_request, second_request, final_introduction, or closed."
+      },
+      {
+        "name": "stream_seq",
+        "type": "bigint",
+        "rule": "NOT NULL DEFAULT 0",
+        "meaning": "Per-introduction durable SSE sequence allocated under this row lock."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Creation time, including drafts that never launch."
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Current activity time."
+      },
+      {
+        "name": "started_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Explicit sender authorization time."
+      },
+      {
+        "name": "closed_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Terminal workflow milestone; preserve historical events."
+      },
+      {
+        "name": "archived_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Hide from default history, never delete correspondence."
+      },
+      {
+        "name": "active_source_key",
+        "type": "text",
+        "rule": "",
+        "meaning": "Set to source_key while active, cleared at terminal closure; enables deliberate restarts."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX introductions_owner_history_idx ON warm_intros.introductions(owner_user_id, created_at DESC, id DESC)",
+      "CREATE INDEX introductions_owner_state_idx ON warm_intros.introductions(owner_user_id, state, created_at DESC, id DESC)",
+      "CREATE UNIQUE INDEX introductions_active_source_uq ON warm_intros.introductions(owner_user_id, active_source_key) WHERE active_source_key IS NOT NULL"
+    ],
+    "constraints": [
+      "UNIQUE (id, owner_user_id)"
+    ]
+  },
+  {
+    "name": "participants",
+    "purpose": "Two stable identities per introduction. Live links can disappear without losing the historical identity. The email/name/role actually approved for sending belongs in the context snapshot.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7, stable across order changes."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "contact_id",
+        "type": "uuid",
+        "rule": "REFERENCES persons.contacts(id) ON DELETE SET NULL",
+        "meaning": "Live sender-owned contact; authorize at creation and launch."
+      },
+      {
+        "name": "person_id",
+        "type": "uuid",
+        "rule": "REFERENCES persons.persons(id) ON DELETE SET NULL",
+        "meaning": "Live master-person pointer."
+      },
+      {
+        "name": "original_person_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Immutable original identity even after merges/deletion."
+      },
+      {
+        "name": "source_role",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "beneficiary or suggested; independent of selected send order."
+      },
+      {
+        "name": "identity_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Original full name and source identifiers; supports historical labels."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Creation time."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE (introduction_id, original_person_id)",
+      "UNIQUE (introduction_id, source_role)"
+    ]
+  },
+  {
+    "name": "context_versions",
+    "purpose": "Append-only WHY, sender intent, profile, address, and order history. Every message review, consent, and send can resolve the exact context used at that point.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "version",
+        "type": "bigint",
+        "rule": "NOT NULL",
+        "meaning": "Monotonic context revision per introduction."
+      },
+      {
+        "name": "source_why_text",
+        "type": "text",
+        "rule": "",
+        "meaning": "Original natural-language WHY, verbatim with paragraph breaks; never replace with a label/score."
+      },
+      {
+        "name": "why_connect",
+        "type": "text",
+        "rule": "",
+        "meaning": "Working natural-language explanation of why the two people should connect."
+      },
+      {
+        "name": "sender_intent",
+        "type": "text",
+        "rule": "",
+        "meaning": "Separate natural-language explanation of what the sender wants to accomplish; nullable if not supplied."
+      },
+      {
+        "name": "why_status",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "present, partially_present, or not_provided; never fabricate missing rationale."
+      },
+      {
+        "name": "why_provenance",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "For each text: source type, source ID/version, authored_by and captured_at; retain original and edited provenance."
+      },
+      {
+        "name": "private_context",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '{}'::jsonb",
+        "meaning": "Additional owner-private suggestion reasoning; never public DTO content."
+      },
+      {
+        "name": "recipient_safe_facts",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Allowlisted facts usable in recipient copy; distinct from private context."
+      },
+      {
+        "name": "public_why",
+        "type": "text",
+        "rule": "",
+        "meaning": "Sender-reviewed common explanation allowed in recipient-facing copy, when supplied; do not auto-publish private WHY."
+      },
+      {
+        "name": "sender_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Display name, verified reply address and signature policy at this version."
+      },
+      {
+        "name": "participant_snapshots",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Exactly two keyed objects: participant ID, name, title/company, selected address/address source, safe profile and selected position."
+      },
+      {
+        "name": "first_participant_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "First execution recipient for this version."
+      },
+      {
+        "name": "second_participant_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Second execution recipient for this version."
+      },
+      {
+        "name": "recommended_first_participant_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Recommendation kept independently from selected order."
+      },
+      {
+        "name": "relationship_evidence",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '{}'::jsonb",
+        "meaning": "Private comparable weight/evidence source and as-of time; no public exposure."
+      },
+      {
+        "name": "change_reason",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "source_loaded, why_edited, address_changed, order_changed, profile_changed, or sender_changed."
+      },
+      {
+        "name": "created_by_user_id",
+        "type": "uuid",
+        "rule": "REFERENCES users.users(id) ON DELETE SET NULL",
+        "meaning": "Editor identity; nullable for system capture."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Append time."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE (introduction_id, version)",
+      "FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "messages",
+    "purpose": "Stable logical message slots: two requests and one final introduction. Neutral closure slots are created only when applicable. Reordering never changes a request\u2019s participant.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "kind",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "request, final_introduction, or neutral_closure."
+      },
+      {
+        "name": "participant_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Request/closure recipient; null for shared final introduction."
+      },
+      {
+        "name": "current_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Current saved text version; composite FK added after versions exist."
+      },
+      {
+        "name": "approved_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Frozen launch-approved version; immutable after start."
+      },
+      {
+        "name": "active_generation_run_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Generation allowed to replace current text; stale runs cannot write through this pointer."
+      },
+      {
+        "name": "generation_status",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "idle, queued, streaming, ready, failed, or cancelled."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Creation time."
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Last slot update."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE NULLS NOT DISTINCT (introduction_id, kind, participant_id)",
+      "FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "message_versions",
+    "purpose": "Append-only saved draft and sent-message content. Each completed AI result or debounced human save produces a new version; keep all server-accepted versions, not every keystroke.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Stable slot."
+      },
+      {
+        "name": "version",
+        "type": "bigint",
+        "rule": "NOT NULL",
+        "meaning": "Monotonic within message."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "WHY/order/profile context used when authored."
+      },
+      {
+        "name": "subject",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Exact saved subject, limit 160 Unicode characters in service."
+      },
+      {
+        "name": "body",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Exact plain-text note including paragraphs, greeting and sign-off; limit 3000 Unicode characters."
+      },
+      {
+        "name": "content_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Hash of canonical subject/body, never a substitute for stored text."
+      },
+      {
+        "name": "author_type",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "ai, sender, or system_template."
+      },
+      {
+        "name": "author_user_id",
+        "type": "uuid",
+        "rule": "REFERENCES users.users(id) ON DELETE SET NULL",
+        "meaning": "Sender edit identity when applicable."
+      },
+      {
+        "name": "generation_run_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "AI provenance reference, when generated."
+      },
+      {
+        "name": "supersedes_version_id",
+        "type": "uuid",
+        "rule": "REFERENCES warm_intros.message_versions(id) ON DELETE RESTRICT",
+        "meaning": "Previous saved version for audit/review."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Saved time."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE (message_id, id)",
+      "UNIQUE (message_id, version)",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "reviews",
+    "purpose": "Append-only sender approval receipts. A review is current only when its message version and approval dependency hash match the current draft. Invalidation does not delete prior reviews.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Approved slot."
+      },
+      {
+        "name": "message_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Exact text approved."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Exact context viewed when approving; provenance is retained even if an unrelated address later changes."
+      },
+      {
+        "name": "approval_scope_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Canonical hash of this message text and its relevant people/order/WHY/address/sender dependencies. Start recomputes and compares it."
+      },
+      {
+        "name": "reviewed_by_user_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES users.users(id) ON DELETE RESTRICT",
+        "meaning": "Must equal introduction owner."
+      },
+      {
+        "name": "reviewed_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Approval timestamp."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (message_id, message_version_id, context_version_id)",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "invitations",
+    "purpose": "Recipient-specific capability tied to one frozen invitation. Create the second invitation only after the first acceptance applies. No account is needed to resolve it.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "participant_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Recipient, scoped by composite FK."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Frozen launch context."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Approved request slot; version supplied through frozen slot."
+      },
+      {
+        "name": "token_hash",
+        "type": "bytea",
+        "rule": "NOT NULL UNIQUE",
+        "meaning": "SHA-256 of a random 256-bit token; no plaintext token column."
+      },
+      {
+        "name": "token_version",
+        "type": "integer",
+        "rule": "NOT NULL DEFAULT 1",
+        "meaning": "Bind requests to this capability version."
+      },
+      {
+        "name": "state",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "queued, active, decided, expired, or revoked."
+      },
+      {
+        "name": "first_send_attempt_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Deadline starts when the immutable send payload is first frozen for dispatch."
+      },
+      {
+        "name": "expires_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Exact deadline frozen before first attempt; set with payload in one transaction."
+      },
+      {
+        "name": "revoked_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Revocation time, if stopped."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Creation time."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX invitations_expiry_idx ON warm_intros.invitations(expires_at, id) WHERE state IN ('queued', 'active')"
+    ],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE (introduction_id, participant_id)",
+      "FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "consent_decisions",
+    "purpose": "One immutable accept/decline per invitation. This records what was actually approved, independent of later mail outcomes.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "invitation_id",
+        "type": "uuid",
+        "rule": "NOT NULL UNIQUE",
+        "meaning": "One winning decision; conflicting later responses cannot overwrite it."
+      },
+      {
+        "name": "decision",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "accept or decline."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Exact frozen context recipient decided on."
+      },
+      {
+        "name": "consent_copy_version",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Version of disclosure displayed when deciding."
+      },
+      {
+        "name": "consent_copy_snapshot",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Exact disclosure text, for historical reconstruction."
+      },
+      {
+        "name": "request_id",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Server correlation ID; not the invitation token."
+      },
+      {
+        "name": "decided_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Server-recorded receipt time."
+      },
+      {
+        "name": "applied_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "When prerequisites were confirmed and transition applied; deferred for send-outcome reconciliation."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "decision_notes",
+    "purpose": "Optional decline notes, private to the sender. Append revisions separately from immutable consent and from generic activity summaries.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "decision_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Must reference a decline, enforced by service."
+      },
+      {
+        "name": "revision",
+        "type": "bigint",
+        "rule": "NOT NULL",
+        "meaning": "Monotonic note revision."
+      },
+      {
+        "name": "note",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Plain text, maximum 2000 Unicode characters; no automatic onward sharing."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Submission time."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (decision_id, revision)",
+      "FOREIGN KEY (introduction_id, decision_id) REFERENCES warm_intros.consent_decisions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "generation_runs",
+    "purpose": "Durable generation queue and provenance for each of the three parallel LLM calls. A retry/fallback has a new run ID; retain failed and superseded runs.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Target slot."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Immutable input context; shared by the initial three runs."
+      },
+      {
+        "name": "base_message_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Version this run may replace, null on first generation."
+      },
+      {
+        "name": "parent_run_id",
+        "type": "uuid",
+        "rule": "REFERENCES warm_intros.generation_runs(id) ON DELETE RESTRICT",
+        "meaning": "Retry/regeneration ancestry."
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "queued, streaming, completed, failed, cancelled, superseded."
+      },
+      {
+        "name": "model_id",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Exact configured OpenRouter model slug."
+      },
+      {
+        "name": "provider_generation_id",
+        "type": "text",
+        "rule": "",
+        "meaning": "Provider correlation ID when returned."
+      },
+      {
+        "name": "prompt_name",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Asset path/logical prompt name."
+      },
+      {
+        "name": "prompt_version",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Version label."
+      },
+      {
+        "name": "prompt_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Hash of exact system prompt asset."
+      },
+      {
+        "name": "input_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Exact permitted facts and WHY passed to this run; owner-private."
+      },
+      {
+        "name": "input_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Hash of sanitized model input, excluding execution order and private addresses; used for relevant-context staleness checks."
+      },
+      {
+        "name": "settings",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Temperature, reasoning, token budget, timeout, provider policy and prompt asset snapshot/reference."
+      },
+      {
+        "name": "partial_subject",
+        "type": "text",
+        "rule": "NOT NULL DEFAULT ''",
+        "meaning": "Latest persisted coalesced stream output."
+      },
+      {
+        "name": "partial_body",
+        "type": "text",
+        "rule": "NOT NULL DEFAULT ''",
+        "meaning": "Latest persisted coalesced stream output; not reviewable yet."
+      },
+      {
+        "name": "usage",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '{}'::jsonb",
+        "meaning": "Input/output/reasoning tokens and cost if reported; unknown remains null/absent."
+      },
+      {
+        "name": "finish_reason",
+        "type": "text",
+        "rule": "",
+        "meaning": "Actual provider completion reason."
+      },
+      {
+        "name": "error_code",
+        "type": "text",
+        "rule": "",
+        "meaning": "Safe machine error; no raw tokens or sensitive request dumps."
+      },
+      {
+        "name": "lease_until",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Worker lease, heartbeat while streaming."
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Queue eligibility; bounded retry policy."
+      },
+      {
+        "name": "started_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "First model-call time."
+      },
+      {
+        "name": "completed_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Terminal time, including failure."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Enqueue time."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = 'queued'"
+    ],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "UNIQUE (message_id, id)",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "stream_events",
+    "purpose": "Replayable SSE transport. Short-lived chunks can be compacted after completion because final versions and run provenance remain; history is not dependent on chunks.",
+    "columns": [
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Stream scope; authorize before subscribing/replaying."
+      },
+      {
+        "name": "seq",
+        "type": "bigint",
+        "rule": "NOT NULL",
+        "meaning": "Allocate under introduction row lock in the same commit as run partial text; prevents commit-order gaps."
+      },
+      {
+        "name": "run_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Generation identity for message deltas."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Composer routing identity, not column position."
+      },
+      {
+        "name": "kind",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "snapshot, draft.started, draft.delta, draft.completed, draft.failed, draft.superseded, generation.completed."
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Typed event payload, no chain-of-thought or provider secrets."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Commit time."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "PRIMARY KEY (introduction_id, seq)",
+      "FOREIGN KEY (introduction_id, run_id) REFERENCES warm_intros.generation_runs(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "mail_deliveries",
+    "purpose": "Durable outbox and one logical message send. The approved text, envelope, rendered HTML/text, and provider result remain inspectable even when retries occur.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Logical slot."
+      },
+      {
+        "name": "message_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Exact text sent."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Frozen context snapshot."
+      },
+      {
+        "name": "invitation_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Request capability, null for final/closure."
+      },
+      {
+        "name": "logical_key",
+        "type": "text",
+        "rule": "NOT NULL UNIQUE",
+        "meaning": "Deterministic send identity reused on all transport retries."
+      },
+      {
+        "name": "state",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "queued, sending, provider_accepted, retryable_failed, permanent_failed, unknown, suppressed."
+      },
+      {
+        "name": "template_name",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "First request, second request, final, or neutral closure."
+      },
+      {
+        "name": "template_version",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Versioned renderer."
+      },
+      {
+        "name": "rendered_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Envelope, HTML and plain text with capability URL redacted in owner/history read models; exact text preserved separately in ciphertext."
+      },
+      {
+        "name": "payload_ciphertext",
+        "type": "bytea",
+        "rule": "",
+        "meaning": "Exact provider request, including capability URL; required before dispatch, encrypted at rest."
+      },
+      {
+        "name": "encryption_key_version",
+        "type": "text",
+        "rule": "",
+        "meaning": "Key version for decrypting exact payload."
+      },
+      {
+        "name": "payload_sha256",
+        "type": "bytea",
+        "rule": "",
+        "meaning": "Hash of complete canonical provider request; stable on retry."
+      },
+      {
+        "name": "provider_email_id",
+        "type": "text",
+        "rule": "UNIQUE",
+        "meaning": "Resend ID; durable confirmation beyond its idempotency window."
+      },
+      {
+        "name": "provider_accepted_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Send milestone."
+      },
+      {
+        "name": "delivery_facts",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '{}'::jsonb",
+        "meaning": "Per-envelope-recipient delivered/bounce/complaint evidence; preserve distinct facts."
+      },
+      {
+        "name": "attempt_count",
+        "type": "integer",
+        "rule": "NOT NULL DEFAULT 0",
+        "meaning": "Cached count; attempt rows are the full record."
+      },
+      {
+        "name": "lease_until",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Worker dispatch lease."
+      },
+      {
+        "name": "lease_token",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Fencing identity; late worker completion cannot override a newer owner."
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Retry scheduling."
+      },
+      {
+        "name": "first_attempt_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Start of provider idempotency safety window."
+      },
+      {
+        "name": "last_error_code",
+        "type": "text",
+        "rule": "",
+        "meaning": "Safe operator code."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Atomic enqueue with transition."
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Last delivery update."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN ('queued', 'retryable_failed')"
+    ],
+    "constraints": [
+      "UNIQUE (introduction_id, id)",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "delivery_attempts",
+    "purpose": "Append-only record of every actual Resend API attempt. Attempts are not new logical emails.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "delivery_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.mail_deliveries(id) ON DELETE RESTRICT",
+        "meaning": "Logical send."
+      },
+      {
+        "name": "attempt_number",
+        "type": "integer",
+        "rule": "NOT NULL",
+        "meaning": "Monotonic under delivery lock."
+      },
+      {
+        "name": "lease_token",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Worker ownership used for this attempt."
+      },
+      {
+        "name": "request_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Must match frozen delivery payload."
+      },
+      {
+        "name": "started_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Before network call."
+      },
+      {
+        "name": "finished_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Null if process died; sweeper reconciles."
+      },
+      {
+        "name": "outcome",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "in_flight, accepted, retryable_error, permanent_error, unknown."
+      },
+      {
+        "name": "http_status",
+        "type": "integer",
+        "rule": "",
+        "meaning": "Null if no HTTP response."
+      },
+      {
+        "name": "provider_email_id",
+        "type": "text",
+        "rule": "",
+        "meaning": "Response ID, if received."
+      },
+      {
+        "name": "error_code",
+        "type": "text",
+        "rule": "",
+        "meaning": "Sanitized machine category."
+      },
+      {
+        "name": "retry_after_seconds",
+        "type": "integer",
+        "rule": "",
+        "meaning": "Provider retry hint, when available."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (delivery_id, attempt_number)"
+    ]
+  },
+  {
+    "name": "events",
+    "purpose": "Permanent introduction timeline, separate from short-lived streaming chunks. Append in the same transaction as the state change.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7, stable cursor tiebreaker."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Owning introduction."
+      },
+      {
+        "name": "event_type",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Canonical event name; examples documented below."
+      },
+      {
+        "name": "actor_type",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "sender, recipient_capability, system_worker, provider."
+      },
+      {
+        "name": "actor_user_id",
+        "type": "uuid",
+        "rule": "REFERENCES users.users(id) ON DELETE SET NULL",
+        "meaning": "Known owner actor when relevant."
+      },
+      {
+        "name": "participant_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Recipient identity when relevant."
+      },
+      {
+        "name": "message_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Message involved."
+      },
+      {
+        "name": "delivery_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Logical send involved."
+      },
+      {
+        "name": "context_version_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "WHY/context at this milestone."
+      },
+      {
+        "name": "causation_id",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Decision/job/mutation that caused the event."
+      },
+      {
+        "name": "request_id",
+        "type": "text",
+        "rule": "",
+        "meaning": "Cross-service trace correlation."
+      },
+      {
+        "name": "metadata",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '{}'::jsonb",
+        "meaning": "Structured safe facts, version IDs and stage changes; no token, full note or raw draft body."
+      },
+      {
+        "name": "occurred_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Server event time."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX events_intro_timeline_idx ON warm_intros.events(introduction_id, occurred_at, id)"
+    ],
+    "constraints": [
+      "FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, delivery_id) REFERENCES warm_intros.mail_deliveries(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ]
+  },
+  {
+    "name": "provider_events",
+    "purpose": "Durable verified webhook inbox, including unmatched events arriving before the send receipt.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "provider_event_id",
+        "type": "text",
+        "rule": "NOT NULL UNIQUE",
+        "meaning": "Provider webhook delivery/event identity, used for deduplication."
+      },
+      {
+        "name": "provider_email_id",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Correlates to logical delivery when available."
+      },
+      {
+        "name": "delivery_id",
+        "type": "uuid",
+        "rule": "REFERENCES warm_intros.mail_deliveries(id) ON DELETE RESTRICT",
+        "meaning": "Nullable until correlation succeeds."
+      },
+      {
+        "name": "event_type",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "sent/delivered/bounced/etc.; never a consent action."
+      },
+      {
+        "name": "provider_occurred_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "Provider event time."
+      },
+      {
+        "name": "received_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Receipt time."
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Verified minimal event data, recipient details restricted to authorized operators."
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "pending, applied, unmatched, ignored, failed."
+      },
+      {
+        "name": "processed_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "Application time."
+      },
+      {
+        "name": "error_code",
+        "type": "text",
+        "rule": "",
+        "meaning": "Safe reconciliation error."
+      }
+    ],
+    "indexes": [
+      "CREATE INDEX provider_events_unmatched_idx ON warm_intros.provider_events(received_at, id) WHERE status IN ('pending', 'unmatched', 'failed')"
+    ],
+    "constraints": []
+  },
+  {
+    "name": "mutation_receipts",
+    "purpose": "Durable request idempotency for create, save, review, start, decisions, notes, archive and cancel. Store no bearer token in the scope.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "rule": "PRIMARY KEY",
+        "meaning": "UUIDv7."
+      },
+      {
+        "name": "scope_type",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "owner or invitation."
+      },
+      {
+        "name": "scope_id",
+        "type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "Verified owner user ID or resolved invitation ID."
+      },
+      {
+        "name": "operation",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Canonical operation, including target identity."
+      },
+      {
+        "name": "idempotency_key",
+        "type": "text",
+        "rule": "NOT NULL",
+        "meaning": "Validated client-generated request identity."
+      },
+      {
+        "name": "request_sha256",
+        "type": "bytea",
+        "rule": "NOT NULL",
+        "meaning": "Canonical body hash; changed replay is conflict."
+      },
+      {
+        "name": "introduction_id",
+        "type": "uuid",
+        "rule": "REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "meaning": "Committed resource, null before a create completes."
+      },
+      {
+        "name": "response_status",
+        "type": "integer",
+        "rule": "NOT NULL",
+        "meaning": "Original result code."
+      },
+      {
+        "name": "response_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Bounded result/receipt, no token or stale unrestricted source data."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "Commit time; same transaction as operation."
+      }
+    ],
+    "indexes": [],
+    "constraints": [
+      "UNIQUE (scope_type, scope_id, operation, idempotency_key)"
+    ]
+  }
+]
