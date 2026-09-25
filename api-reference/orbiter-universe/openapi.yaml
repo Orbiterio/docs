@@ -111,7 +111,7 @@ paths:
       description: |
         Returns the entity plus everything one hop away, as nodes and edges copied verbatim from the graph, for a consumer to write into its own graph unchanged.
         This projection is derived from the graph, not from Postgres rows. The row-derived projections carry only what has rows; several edge types have none, FOUNDED among them, so a consumer that rebuilds relationships from those loses them with no error.
-        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
+        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH and MediaAppearance nodes) is always excluded: a shared podcast, session or article is evidence, not closeness, and include_reference_nodes does not bring it back. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
         Only edges incident to the anchor are returned. An edge between two neighbours belongs to their own neighbourhoods.
         Node and edge properties are returned verbatim and are deliberately untyped: the same key carries different types across labels, so updated_at is a string on Person and an integer on Company.
         Embeddings are returned as arrays of numbers. A consumer must re-wrap them as vectors on write, or its vector index will not see them and search will silently return nothing.
@@ -147,7 +147,7 @@ paths:
             default: true
         - name: include_reference_nodes
           in: query
-          description: Include direct geography and expertise neighbors for answer context. Defaults to false for graph-copy consumers.
+          description: Include direct geography and expertise neighbors for answer context. Never includes media appearance evidence. Defaults to false for graph-copy consumers.
           schema:
             type: boolean
             default: false
@@ -190,7 +190,7 @@ paths:
         Returns the nodes nearest the query, each with its one-hop edges, in the same node/edge shape as the subgraph projection.
         The counterpart to the subgraph read: that one needs an id you already hold, this one is how you find an id you do not. The query is embedded server-side with the same model that wrote the node vectors — vectors from two models are not comparable, so a consumer cannot supply its own vector.
         score is a DISTANCE: lower is closer, and 0 would be identical. Matched nodes carry it and sort first; a node pulled in by expansion has score null and is_match false. Relevance is cut both absolutely and relative to the best hit, so a query with one good answer returns one node no matter what limit says — limit is an upper bound, not a page size, and there is no pagination.
-        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Tombstoned nodes are always excluded.
+        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH, MediaAppearance nodes) is always excluded. Tombstoned nodes are always excluded.
         A client with entity-type entitlements is narrowed to those types automatically; asking only for types it may not read is a 403, not an empty result. Neighbours are not filtered by entity type — a match's surroundings describe it, and cutting them would misdescribe it.
         Requires scope `graph:search`.
       security:
@@ -227,7 +227,7 @@ paths:
         Returns the best route from each source entity to the target, one path per source that can reach it.
         Ids are entity ids, not graph node uuids: an entity id is what a consumer stores, and it resolves through the merge chain. Every path echoes both the canonical and the requested source id so a stored reference can be healed.
         Fewest hops wins per source; ties and ordering across sources go by total_weight, where LOWER is stronger — the weight scale is a distance, so paths come back strongest first.
-        Geography and expertise are excluded from every route: both are hubs that connect everyone to everyone, so a path through one is not a connection anybody can act on. This is policy, not an option.
+        Geography and expertise are excluded from every route: both are hubs that connect everyone to everyone, so a path through one is not a connection anybody can act on. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH, MediaAppearance nodes) is excluded too: two people on the same podcast or at the same conference are not thereby connected. This is policy, not an option.
         A source with no route within max_hops is listed in unreachable_source_entity_ids. One that could not be traversed at all — unknown to Universe, or not yet written to the graph — is listed in skipped_source_entity_ids instead, and never silently dropped. 404 means the TARGET is not in the graph yet.
         Entitlements are checked on the target only. An interior node is part of how two entities connect, not something the response hands over: it carries a name and type, never a property bag.
         Requires scope `graph:paths`.
@@ -1800,108 +1800,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
-  /v1/falkordb:
-    get:
-      operationId: listFalkorDBInstances
-      tags:
-        - Graph
-      summary: List graph connection-config rows
-      description: |
-        Operator-only. Returns every falkordb.falkordb row, newest first. The OLDEST row is the one read at boot to build the graph client. Credentials are included by design. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: All connection-config rows.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceListEnvelope'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/Internal'
-    post:
-      operationId: createFalkorDBInstance
-      tags:
-        - Graph
-      summary: Create a graph connection-config row
-      description: |
-        Operator-only. Inserts a falkordb.falkordb row; the config is read at boot, so it takes effect on the next process start. db_connection or host is required. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                graph_name:
-                  type: string
-                user_name:
-                  type: string
-                password:
-                  type: string
-                host:
-                  type: string
-                port:
-                  type: string
-                db_connection:
-                  type: string
-                  description: |
-                    Full endpoint (redis:// / falkors:// URL or host:port); used verbatim when set.
-      responses:
-        '201':
-          description: The created row.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /v1/falkordb/{id}:
-    delete:
-      operationId: deleteFalkorDBInstance
-      tags:
-        - Graph
-      summary: Delete a graph connection-config row
-      description: |
-        Operator-only. Removes a falkordb.falkordb row; effective on the next process start. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: Deleted (data is null).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EmptyEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/Internal'
   /v1/admin/entities/reviews/{id}/merge:
     post:
       operationId: mergeReviewItem
@@ -2399,6 +2297,111 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SeedMusicEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/youtube/add/queue:
+    post:
+      operationId: appearancesYouTubeEnqueue
+      tags:
+        - Admin
+      summary: Admit one YouTube video to the appearances queue (management plane)
+      description: |
+        Keys the video by its id (`youtube_video_id`), creates the `media_appearance` entity when it is new (under the entity cap) and queues one `youtube_item` job. Idempotent: the same video answers the existing entity and job. No provider call happens here; the drain tick reads the video through the social lane. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceYouTubeEnqueueRequest'
+      responses:
+        '200':
+          description: The episode entity and its job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceYouTubeEnqueueEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The video id belongs to an entity of another type, or the entity cap is full.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/youtube/add/channel:
+    post:
+      operationId: appearancesYouTubeAddChannel
+      tags:
+        - Admin
+      summary: Admit one entity's stored YouTube channel videos to the queue (management plane)
+      description: |
+        Reads the person's or company's YouTube videos the social lane already stored (newest first, `ENRICHMENT_MEDIA_YOUTUBE_VIDEOS_PER_CHANNEL` of them), skips anything shorter than `ENRICHMENT_MEDIA_YOUTUBE_MIN_DURATION` or without a known length, mints each remaining episode under the entity cap and queues its `youtube_item` job. The `socialmedia.video_posts_ready_for_media_appearance` event does the same after every channel refresh. No provider call here. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceYouTubeChannelRequest'
+      responses:
+        '200':
+          description: The pass's tally.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceYouTubeChannelEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The social lane is not wired in this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/queue/drain:
+    post:
+      operationId: appearancesQueueDrain
+      tags:
+        - Admin
+      summary: Run one appearances queue drain tick now (management plane)
+      description: |
+        The same work as the `appearances.queue_drain_requested` tick: give episodes keyed by a video id their job (`backlog` of them), free expired leases, claim `batch` jobs and run them. A `youtube_item` job reads the video's details (and transcript when `ENRICHMENT_MEDIA_YOUTUBE_TRANSCRIPTS_ENABLED`) through the social lane, extracts who appeared, files the people it can resolve by a strong key and leaves the rest as `needs_review` mentions. Honours `ENRICHMENT_MEDIA_YOUTUBE_ENABLED`: off, every job waits. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceQueueDrainRequest'
+      responses:
+        '200':
+          description: The tick's tally.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceQueueDrainEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -6341,7 +6344,7 @@ components:
         include_reference_nodes:
           type: boolean
           default: false
-          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards.
+          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards. Never includes media appearance evidence.
         entity_types:
           type: array
           items:
@@ -9028,17 +9031,6 @@ components:
           maxLength: 64
           examples:
             - scrapecreators
-        account_ref:
-          type: string
-          maxLength: 192
-          default: default
-          description: The provider account or purchased pack the limit belongs to. Defaults to `default`.
-        scope_key:
-          type: string
-          maxLength: 192
-          default: account
-          description: |
-            The slice of the account this limit covers. Defaults to `account` (the whole account); a value like `lane:socialmedia` splits one account between lanes. Must match what the paying lane reserves with.
         metric:
           type: string
           maxLength: 64
@@ -9988,66 +9980,6 @@ components:
         - data
         - error
         - meta
-    Instance:
-      type: object
-      description: |
-        One graph connection-config row. Credentials included by design — the point is to hand back connection details.
-      properties:
-        id:
-          type: integer
-          format: int64
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-      required:
-        - id
-        - graph_name
-        - user_name
-        - password
-        - host
-        - port
-        - db_connection
-        - created_at
-    InstanceListEnvelope:
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Instance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-      required:
-        - data
-        - error
-        - meta
-    InstanceEnvelope:
-      type: object
-      properties:
-        data:
-          $ref: '#/components/schemas/Instance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-      required:
-        - data
-        - error
-        - meta
     ReviewMergeEnvelope:
       type: object
       properties:
@@ -10517,6 +10449,165 @@ components:
         - data
         - error
         - meta
+    AppearanceYouTubeEnqueueRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - video_url
+      properties:
+        video_url:
+          type: string
+          format: uri
+          description: A YouTube watch, youtu.be, shorts or live URL; the video id is the key.
+    AppearanceYouTubeEnqueueResponse:
+      type: object
+      required:
+        - episode_entity_id
+        - entity_created
+        - job_id
+        - job_created
+        - job_state
+      properties:
+        episode_entity_id:
+          type: string
+          format: uuid
+        entity_created:
+          type: boolean
+          description: True when this call minted the media_appearance entity.
+        job_id:
+          type: string
+          format: uuid
+        job_created:
+          type: boolean
+          description: False when the video already had its job.
+        job_state:
+          type: string
+          enum:
+            - queued
+            - running
+            - retry_wait
+            - complete
+            - failed
+            - cancelled
+    AppearanceYouTubeEnqueueEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceYouTubeEnqueueResponse'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+    AppearanceYouTubeChannelRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - entity_id
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+          description: The person or company whose stored channel videos to admit.
+    AppearanceYouTubeChannelResponse:
+      type: object
+      required:
+        - entity_id
+        - videos
+        - admitted
+        - queued
+        - skipped
+        - cap_blocked
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        videos:
+          type: integer
+          description: Stored long-form videos considered.
+        admitted:
+          type: integer
+          description: Videos with an episode entity after this pass.
+        queued:
+          type: integer
+          description: Jobs new to the queue.
+        skipped:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Counts by reason (too_short, no_duration, no_video_id, entity_cap).
+        cap_blocked:
+          type: boolean
+          description: True when the entity cap stopped the pass.
+    AppearanceYouTubeChannelEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceYouTubeChannelResponse'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+    AppearanceQueueDrainRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        backlog:
+          type: integer
+          minimum: 0
+          maximum: 200
+          description: Episodes keyed by a video id to give a job in this tick; omit for 0.
+        batch:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Jobs to claim and run; omit for 10.
+    AppearanceQueueDrainResponse:
+      type: object
+      required:
+        - enqueued
+        - claimed
+        - complete
+        - failed
+        - waiting
+      properties:
+        enqueued:
+          type: integer
+        claimed:
+          type: integer
+        complete:
+          type: integer
+        failed:
+          type: integer
+        waiting:
+          type: integer
+          description: 'Jobs put back to retry_wait: switch off, budget blocked, or a retryable error.'
+    AppearanceQueueDrainEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceQueueDrainResponse'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
     PersonAvatarBackfill:
       type: object
       properties:
