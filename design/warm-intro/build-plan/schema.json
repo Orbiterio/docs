@@ -54,7 +54,7 @@
       {
         "name": "previous_introduction_id",
         "type": "uuid",
-        "rule": "REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
+        "rule": "",
         "meaning": "Intentional new attempt after a prior closed sequence."
       },
       {
@@ -86,6 +86,18 @@
         "type": "text",
         "rule": "NOT NULL",
         "meaning": "draft, first_request, second_request, final_introduction, or closed."
+      },
+      {
+        "name": "dispatch_blocked_at",
+        "type": "timestamptz",
+        "rule": "",
+        "meaning": "When a safety/delivery hold was applied; stage and past consent remain unchanged."
+      },
+      {
+        "name": "dispatch_block_reason",
+        "type": "text",
+        "rule": "",
+        "meaning": "Go-validated reason such as recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, or unresolved_send. All active causes remain in events/delivery records."
       },
       {
         "name": "stream_seq",
@@ -136,7 +148,12 @@
       "CREATE UNIQUE INDEX introductions_active_source_uq ON warm_intros.introductions(owner_user_id, active_source_key) WHERE active_source_key IS NOT NULL"
     ],
     "constraints": [
-      "UNIQUE (id, owner_user_id)"
+      "UNIQUE (id, owner_user_id)",
+      "FOREIGN KEY (previous_introduction_id, owner_user_id) REFERENCES warm_intros.introductions(id, owner_user_id) ON DELETE RESTRICT"
+    ],
+    "post_create_constraints": [
+      "FOREIGN KEY (id, current_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (id, launch_context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
     ]
   },
   {
@@ -197,7 +214,8 @@
       "UNIQUE (introduction_id, id)",
       "UNIQUE (introduction_id, original_person_id)",
       "UNIQUE (introduction_id, source_role)"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "context_versions",
@@ -222,16 +240,16 @@
         "meaning": "Monotonic context revision per introduction."
       },
       {
-        "name": "source_why_text",
-        "type": "text",
+        "name": "source_why",
+        "type": "jsonb",
         "rule": "",
-        "meaning": "Original natural-language WHY, verbatim with paragraph breaks; never replace with a label/score."
+        "meaning": "Exact source suggestion.why object: headline plus ordered body[] paragraphs; preserve strings and boundaries without summarizing or flattening."
       },
       {
         "name": "why_connect",
-        "type": "text",
+        "type": "jsonb",
         "rule": "",
-        "meaning": "Working natural-language explanation of why the two people should connect."
+        "meaning": "Working WHY object with the same headline/body[] shape; initially a deep copy of source_why, with every edit versioned."
       },
       {
         "name": "sender_intent",
@@ -265,15 +283,21 @@
       },
       {
         "name": "public_why",
-        "type": "text",
+        "type": "jsonb",
         "rule": "",
-        "meaning": "Sender-reviewed common explanation allowed in recipient-facing copy, when supplied; do not auto-publish private WHY."
+        "meaning": "Optional sender-approved headline/body[] explanation for recipient copy; no automatic publication of the full working WHY."
       },
       {
         "name": "sender_snapshot",
         "type": "jsonb",
         "rule": "NOT NULL",
         "meaning": "Display name, verified reply address and signature policy at this version."
+      },
+      {
+        "name": "presentation_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Versioned manifest of all four HTML/text assets, public copy/disclosures, sender envelope/signature, and policy values; immutable content hashes/references retained for the lifetime of the sequence."
       },
       {
         "name": "participant_snapshots",
@@ -309,7 +333,7 @@
         "name": "change_reason",
         "type": "text",
         "rule": "NOT NULL",
-        "meaning": "source_loaded, why_edited, address_changed, order_changed, profile_changed, or sender_changed."
+        "meaning": "source_loaded, why_edited, address_changed, order_changed, profile_changed, sender_changed, or presentation_changed."
       },
       {
         "name": "created_by_user_id",
@@ -331,7 +355,8 @@
       "FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "messages",
@@ -403,6 +428,11 @@
       "UNIQUE (introduction_id, id)",
       "UNIQUE NULLS NOT DISTINCT (introduction_id, kind, participant_id)",
       "FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT"
+    ],
+    "post_create_constraints": [
+      "FOREIGN KEY (id, current_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (id, approved_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (id, active_generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT"
     ]
   },
   {
@@ -478,7 +508,7 @@
       {
         "name": "supersedes_version_id",
         "type": "uuid",
-        "rule": "REFERENCES warm_intros.message_versions(id) ON DELETE RESTRICT",
+        "rule": "",
         "meaning": "Previous saved version for audit/review."
       },
       {
@@ -495,6 +525,10 @@
       "UNIQUE (message_id, version)",
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ],
+    "post_create_constraints": [
+      "FOREIGN KEY (message_id, supersedes_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (message_id, generation_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT"
     ]
   },
   {
@@ -556,7 +590,8 @@
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "invitations",
@@ -591,6 +626,12 @@
         "type": "uuid",
         "rule": "NOT NULL",
         "meaning": "Approved request slot; version supplied through frozen slot."
+      },
+      {
+        "name": "public_snapshot",
+        "type": "jsonb",
+        "rule": "NOT NULL",
+        "meaning": "Frozen allowlisted public view: profile, reviewed note/signature, truthful stage banner and exact consent disclosure. No capability or email addresses. Store before dispatch; server decides allowed actions separately."
       },
       {
         "name": "token_hash",
@@ -644,7 +685,8 @@
       "FOREIGN KEY (introduction_id, participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "consent_decisions",
@@ -716,7 +758,8 @@
       "UNIQUE (introduction_id, id)",
       "FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "decision_notes",
@@ -763,7 +806,8 @@
     "constraints": [
       "UNIQUE (decision_id, revision)",
       "FOREIGN KEY (introduction_id, decision_id) REFERENCES warm_intros.consent_decisions(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "generation_runs",
@@ -802,7 +846,7 @@
       {
         "name": "parent_run_id",
         "type": "uuid",
-        "rule": "REFERENCES warm_intros.generation_runs(id) ON DELETE RESTRICT",
+        "rule": "",
         "meaning": "Retry/regeneration ancestry."
       },
       {
@@ -896,6 +940,12 @@
         "meaning": "Worker lease, heartbeat while streaming."
       },
       {
+        "name": "lease_token",
+        "type": "uuid",
+        "rule": "",
+        "meaning": "Fencing identity checked on every partial, heartbeat and completion; expired runs are failed and retried with a new run ID."
+      },
+      {
         "name": "next_attempt_at",
         "type": "timestamptz",
         "rule": "NOT NULL DEFAULT now()",
@@ -928,6 +978,10 @@
       "UNIQUE (message_id, id)",
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
+    ],
+    "post_create_constraints": [
+      "FOREIGN KEY (message_id, parent_run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT",
+      "FOREIGN KEY (message_id, base_message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT"
     ]
   },
   {
@@ -982,6 +1036,9 @@
       "PRIMARY KEY (introduction_id, seq)",
       "FOREIGN KEY (introduction_id, run_id) REFERENCES warm_intros.generation_runs(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT"
+    ],
+    "post_create_constraints": [
+      "FOREIGN KEY (message_id, run_id) REFERENCES warm_intros.generation_runs(message_id, id) ON DELETE RESTRICT"
     ]
   },
   {
@@ -1088,7 +1145,7 @@
         "name": "delivery_facts",
         "type": "jsonb",
         "rule": "NOT NULL DEFAULT '{}'::jsonb",
-        "meaning": "Per-envelope-recipient delivered/bounce/complaint evidence; preserve distinct facts."
+        "meaning": "Provider delivery/bounce/complaint evidence with actual recipient scope; unidentified recipient outcomes stay unknown."
       },
       {
         "name": "attempt_count",
@@ -1148,7 +1205,8 @@
       "FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "delivery_attempts",
@@ -1230,7 +1288,8 @@
     "indexes": [],
     "constraints": [
       "UNIQUE (delivery_id, attempt_number)"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "events",
@@ -1323,7 +1382,8 @@
       "FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, delivery_id) REFERENCES warm_intros.mail_deliveries(introduction_id, id) ON DELETE RESTRICT",
       "FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT"
-    ]
+    ],
+    "post_create_constraints": []
   },
   {
     "name": "provider_events",
@@ -1399,7 +1459,8 @@
     "indexes": [
       "CREATE INDEX provider_events_unmatched_idx ON warm_intros.provider_events(received_at, id) WHERE status IN ('pending', 'unmatched', 'failed')"
     ],
-    "constraints": []
+    "constraints": [],
+    "post_create_constraints": []
   },
   {
     "name": "mutation_receipts",
@@ -1469,6 +1530,7 @@
     "indexes": [],
     "constraints": [
       "UNIQUE (scope_type, scope_id, operation, idempotency_key)"
-    ]
+    ],
+    "post_create_constraints": []
   }
 ]
