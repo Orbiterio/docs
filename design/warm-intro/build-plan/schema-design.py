@@ -1,5 +1,5 @@
 from pathlib import Path
-import json
+import json,re
 root=Path(__file__).parent
 T=[]
 def table(name,purpose,fields,indexes=(),constraints=()):
@@ -18,13 +18,13 @@ source_action_ref|text|NOT NULL|Original make_intro action reference.
 source_key|text|NOT NULL|Immutable canonical batch/suggestion/action identity for duplicate-open handling.
 source_snapshot|jsonb|NOT NULL|Original IDs, title, source metadata and raw WHY; immutable, owner-private.
 previous_introduction_id|uuid||Intentional new attempt after a prior closed sequence.
-state|text|NOT NULL|Go-validated lifecycle vocabulary.
+state|text|NOT NULL|Go-validated lifecycle: draft, first_queued, awaiting_first, second_queued, awaiting_second, introduction_queued, introducing, introduced, declined, cancelled, expired, failed.
 revision|bigint|NOT NULL DEFAULT 1|Optimistic concurrency counter for every owner-visible mutation.
 current_context_version_id|uuid||Current owner-reviewed working context; composite FK added after context table exists.
 launch_context_version_id|uuid||Frozen context at start, immutable afterward.
-current_stage|text|NOT NULL|draft, first_request, second_request, final_introduction, or closed.
-dispatch_blocked_at|timestamptz||When a safety/delivery hold was applied; stage and past consent remain unchanged.
-dispatch_block_reason|text||Go-validated reason such as recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, or unresolved_send. All active causes remain in events/delivery records.
+current_stage|text|NOT NULL|Furthest stage reached: draft, first_request, second_request, or final_introduction. Frozen at terminal closure so history keeps where the sequence stopped; the Closed filter reads state/closed_at, not this column.
+dispatch_blocked_at|timestamptz||Time the hold set became non-empty; cleared when the last hold clears. Stage and past consent remain unchanged.
+dispatch_holds|jsonb|NOT NULL DEFAULT '[]'::jsonb|Set of active dispatch holds, each `{cause, detail, set_at, set_by, optional delivery_id/participant_id evidence}`. Cause vocabulary: recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, unresolved_send. Multiple causes may be active; clearing one must not clear another. Mutated only under the introduction lock; every set/clear also writes an event. Durable evidence stays in events/delivery records.
 stream_seq|bigint|NOT NULL DEFAULT 0|Per-introduction durable SSE sequence allocated under this row lock.
 created_at|timestamptz|NOT NULL DEFAULT now()|Creation time, including drafts that never launch.
 updated_at|timestamptz|NOT NULL DEFAULT now()|Current activity time.
@@ -55,14 +55,14 @@ why_provenance|jsonb|NOT NULL|For each text: source type, source ID/version, aut
 private_context|jsonb|NOT NULL DEFAULT '{}'::jsonb|Additional owner-private suggestion reasoning; never public DTO content.
 recipient_safe_facts|jsonb|NOT NULL|Allowlisted facts usable in recipient copy; distinct from private context.
 public_why|jsonb||Optional sender-approved headline/body[] explanation for recipient copy; no automatic publication of the full working WHY.
-sender_snapshot|jsonb|NOT NULL|Display name, verified reply address and signature policy at this version.
+sender_snapshot|jsonb|NOT NULL|Display name, verified reply address, signature policy and the approved signature content at this version; post-launch profile edits cannot change frozen copy.
 presentation_snapshot|jsonb|NOT NULL|Versioned manifest of all four HTML/text assets, public copy/disclosures, sender envelope/signature, and policy values; immutable content hashes/references retained for the lifetime of the sequence.
 participant_snapshots|jsonb|NOT NULL|Exactly two keyed objects: participant ID, name, title/company, selected address/address source, safe profile and selected position.
 first_participant_id|uuid|NOT NULL|First execution recipient for this version.
 second_participant_id|uuid|NOT NULL|Second execution recipient for this version.
 recommended_first_participant_id|uuid||Recommendation kept independently from selected order.
 relationship_evidence|jsonb|NOT NULL DEFAULT '{}'::jsonb|Private comparable weight/evidence source and as-of time; no public exposure.
-change_reason|text|NOT NULL|source_loaded, why_edited, address_changed, order_changed, profile_changed, sender_changed, or presentation_changed.
+change_reason|text|NOT NULL|source_loaded, why_edited (covers sender_intent and public_why edits), address_changed, order_changed, profile_changed, sender_changed, or presentation_changed.
 created_by_user_id|uuid|REFERENCES users.users(id) ON DELETE SET NULL|Editor identity; nullable for system capture.
 created_at|timestamptz|NOT NULL DEFAULT now()|Append time.
 ''',constraints=['UNIQUE (introduction_id, id)','UNIQUE (introduction_id, version)','FOREIGN KEY (introduction_id, first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, second_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, recommended_first_participant_id) REFERENCES warm_intros.participants(introduction_id, id) ON DELETE RESTRICT'])
@@ -111,7 +111,7 @@ context_version_id|uuid|NOT NULL|Frozen launch context.
 message_id|uuid|NOT NULL|Approved request slot; version supplied through frozen slot.
 public_snapshot|jsonb|NOT NULL|Frozen allowlisted public view: profile, reviewed note/signature, truthful stage banner and exact consent disclosure. No capability or email addresses. Store before dispatch; server decides allowed actions separately.
 token_hash|bytea|NOT NULL UNIQUE|SHA-256 of a random 256-bit token; no plaintext token column.
-token_version|integer|NOT NULL DEFAULT 1|Bind requests to this capability version.
+token_version|integer|NOT NULL DEFAULT 1|Bind requests to this capability version; the public API exposes it as token_version on resolve/decision.
 state|text|NOT NULL|queued, active, decided, expired, or revoked.
 first_send_attempt_at|timestamptz||Deadline starts when the immutable send payload is first frozen for dispatch.
 expires_at|timestamptz||Exact deadline frozen before first attempt; set with payload in one transaction.
@@ -165,7 +165,7 @@ next_attempt_at|timestamptz|NOT NULL DEFAULT now()|Queue eligibility; bounded re
 started_at|timestamptz||First model-call time.
 completed_at|timestamptz||Terminal time, including failure.
 created_at|timestamptz|NOT NULL DEFAULT now()|Enqueue time.
-''',constraints=['UNIQUE (introduction_id, id)','UNIQUE (message_id, id)','FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT'],indexes=['CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = \'queued\''])
+''',constraints=['UNIQUE (introduction_id, id)','UNIQUE (message_id, id)','FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT'],indexes=['CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = \'queued\'','CREATE INDEX generation_runs_lease_idx ON warm_intros.generation_runs(lease_until, id) WHERE status = \'streaming\''])
 table('stream_events','Replayable SSE transport. Short-lived chunks can be compacted after completion because final versions and run provenance remain; history is not dependent on chunks.', '''
 introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Stream scope; authorize before subscribing/replaying.
 seq|bigint|NOT NULL|Allocate under introduction row lock in the same commit as run partial text; prevents commit-order gaps.
@@ -187,9 +187,9 @@ state|text|NOT NULL|queued, sending, provider_accepted, retryable_failed, perman
 template_name|text|NOT NULL|First request, second request, final, or neutral closure.
 template_version|text|NOT NULL|Versioned renderer.
 rendered_snapshot|jsonb|NOT NULL|Envelope, HTML and plain text with capability URL redacted in owner/history read models; exact text preserved separately in ciphertext.
-payload_ciphertext|bytea||Exact provider request, including capability URL; required before dispatch, encrypted at rest.
+payload_ciphertext|bytea||Exact provider request, including capability URL; populated in the same transaction that freezes the payload and required (non-null) before the first attempt reserves dispatch. Encrypted at rest.
 encryption_key_version|text||Key version for decrypting exact payload.
-payload_sha256|bytea||Hash of complete canonical provider request; stable on retry.
+payload_sha256|bytea||Hash of complete canonical provider request; populated at payload freeze, stable on every retry.
 provider_email_id|text|UNIQUE|Resend ID; durable confirmation beyond its idempotency window.
 provider_accepted_at|timestamptz||Send milestone.
 delivery_facts|jsonb|NOT NULL DEFAULT '{}'::jsonb|Provider delivery/bounce/complaint evidence with actual recipient scope; unidentified recipient outcomes stay unknown.
@@ -201,7 +201,7 @@ first_attempt_at|timestamptz||Start of provider idempotency safety window.
 last_error_code|text||Safe operator code.
 created_at|timestamptz|NOT NULL DEFAULT now()|Atomic enqueue with transition.
 updated_at|timestamptz|NOT NULL DEFAULT now()|Last delivery update.
-''',constraints=['UNIQUE (introduction_id, id)','FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT'],indexes=['CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN (\'queued\', \'retryable_failed\')'])
+''',constraints=['UNIQUE (introduction_id, id)','FOREIGN KEY (introduction_id, message_id) REFERENCES warm_intros.messages(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (message_id, message_version_id) REFERENCES warm_intros.message_versions(message_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, context_version_id) REFERENCES warm_intros.context_versions(introduction_id, id) ON DELETE RESTRICT','FOREIGN KEY (introduction_id, invitation_id) REFERENCES warm_intros.invitations(introduction_id, id) ON DELETE RESTRICT'],indexes=['CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN (\'queued\', \'retryable_failed\')','CREATE INDEX mail_deliveries_lease_idx ON warm_intros.mail_deliveries(lease_until, id) WHERE state = \'sending\''])
 table('delivery_attempts','Append-only record of every actual Resend API attempt. Attempts are not new logical emails.', '''
 id|uuid|PRIMARY KEY|UUIDv7.
 delivery_id|uuid|NOT NULL REFERENCES warm_intros.mail_deliveries(id) ON DELETE RESTRICT|Logical send.
@@ -219,7 +219,7 @@ retry_after_seconds|integer||Provider retry hint, when available.
 table('events','Permanent introduction timeline, separate from short-lived streaming chunks. Append in the same transaction as the state change.', '''
 id|uuid|PRIMARY KEY|UUIDv7, stable cursor tiebreaker.
 introduction_id|uuid|NOT NULL REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Owning introduction.
-event_type|text|NOT NULL|Canonical event name; examples documented below.
+event_type|text|NOT NULL|Canonical event name; the V1 vocabulary is defined in the sequence-state section below.
 actor_type|text|NOT NULL|sender, recipient_capability, system_worker, provider.
 actor_user_id|uuid|REFERENCES users.users(id) ON DELETE SET NULL|Known owner actor when relevant.
 participant_id|uuid||Recipient identity when relevant.
@@ -251,7 +251,7 @@ scope_id|uuid|NOT NULL|Verified owner user ID or resolved invitation ID.
 operation|text|NOT NULL|Canonical operation, including target identity.
 idempotency_key|text|NOT NULL|Validated client-generated request identity.
 request_sha256|bytea|NOT NULL|Canonical body hash; changed replay is conflict.
-introduction_id|uuid|REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Committed resource, null before a create completes.
+introduction_id|uuid|REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT|Committed introduction for this mutation; populated for every successful introduction-scoped operation. Nullable only so a create receipt can be inserted before the root row exists within the same transaction.
 response_status|integer|NOT NULL|Original result code.
 response_snapshot|jsonb|NOT NULL|Bounded result/receipt, no token or stale unrestricted source data.
 created_at|timestamptz|NOT NULL DEFAULT now()|Commit time; same transaction as operation.
@@ -278,6 +278,7 @@ for i,t in enumerate(T,1):
         md.append(f'| `{c["name"]}` | `{c["type"]}` · {null} | {c["meaning"]} |')
     keys = [f'PRIMARY KEY ({c["name"]})' for c in t['columns'] if 'PRIMARY KEY' in c['rule']]
     keys += [f'UNIQUE ({c["name"]})' for c in t['columns'] if 'UNIQUE' in c['rule']]
+    keys += [f'FOREIGN KEY ({c["name"]}) {m.group(0)}' for c in t['columns'] for m in [re.search(r'REFERENCES \S+(?: ON DELETE (?:SET NULL|SET DEFAULT|RESTRICT|CASCADE|NO ACTION))?', c['rule'])] if m]
     keys += t['constraints']
     keys += [x.split(' ADD ', 1)[1] for x in extra if x.startswith('ALTER TABLE warm_intros.' + t['name'] + ' ADD ')]
     md+=['','**Keys and indexes:** '+('; '.join('`'+x+'`' for x in keys))]

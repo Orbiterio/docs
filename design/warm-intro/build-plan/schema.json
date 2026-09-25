@@ -61,7 +61,7 @@
         "name": "state",
         "type": "text",
         "rule": "NOT NULL",
-        "meaning": "Go-validated lifecycle vocabulary."
+        "meaning": "Go-validated lifecycle: draft, first_queued, awaiting_first, second_queued, awaiting_second, introduction_queued, introducing, introduced, declined, cancelled, expired, failed."
       },
       {
         "name": "revision",
@@ -85,19 +85,19 @@
         "name": "current_stage",
         "type": "text",
         "rule": "NOT NULL",
-        "meaning": "draft, first_request, second_request, final_introduction, or closed."
+        "meaning": "Furthest stage reached: draft, first_request, second_request, or final_introduction. Frozen at terminal closure so history keeps where the sequence stopped; the Closed filter reads state/closed_at, not this column."
       },
       {
         "name": "dispatch_blocked_at",
         "type": "timestamptz",
         "rule": "",
-        "meaning": "When a safety/delivery hold was applied; stage and past consent remain unchanged."
+        "meaning": "Time the hold set became non-empty; cleared when the last hold clears. Stage and past consent remain unchanged."
       },
       {
-        "name": "dispatch_block_reason",
-        "type": "text",
-        "rule": "",
-        "meaning": "Go-validated reason such as recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, or unresolved_send. All active causes remain in events/delivery records."
+        "name": "dispatch_holds",
+        "type": "jsonb",
+        "rule": "NOT NULL DEFAULT '[]'::jsonb",
+        "meaning": "Set of active dispatch holds, each `{cause, detail, set_at, set_by, optional delivery_id/participant_id evidence}`. Cause vocabulary: recipient_suppressed, permanent_delivery_failure, sender_ineligible, source_access_revoked, template_unavailable, unresolved_send. Multiple causes may be active; clearing one must not clear another. Mutated only under the introduction lock; every set/clear also writes an event. Durable evidence stays in events/delivery records."
       },
       {
         "name": "stream_seq",
@@ -291,7 +291,7 @@
         "name": "sender_snapshot",
         "type": "jsonb",
         "rule": "NOT NULL",
-        "meaning": "Display name, verified reply address and signature policy at this version."
+        "meaning": "Display name, verified reply address, signature policy and the approved signature content at this version; post-launch profile edits cannot change frozen copy."
       },
       {
         "name": "presentation_snapshot",
@@ -333,7 +333,7 @@
         "name": "change_reason",
         "type": "text",
         "rule": "NOT NULL",
-        "meaning": "source_loaded, why_edited, address_changed, order_changed, profile_changed, sender_changed, or presentation_changed."
+        "meaning": "source_loaded, why_edited (covers sender_intent and public_why edits), address_changed, order_changed, profile_changed, sender_changed, or presentation_changed."
       },
       {
         "name": "created_by_user_id",
@@ -643,7 +643,7 @@
         "name": "token_version",
         "type": "integer",
         "rule": "NOT NULL DEFAULT 1",
-        "meaning": "Bind requests to this capability version."
+        "meaning": "Bind requests to this capability version; the public API exposes it as token_version on resolve/decision."
       },
       {
         "name": "state",
@@ -971,7 +971,8 @@
       }
     ],
     "indexes": [
-      "CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = 'queued'"
+      "CREATE INDEX generation_runs_due_idx ON warm_intros.generation_runs(next_attempt_at, id) WHERE status = 'queued'",
+      "CREATE INDEX generation_runs_lease_idx ON warm_intros.generation_runs(lease_until, id) WHERE status = 'streaming'"
     ],
     "constraints": [
       "UNIQUE (introduction_id, id)",
@@ -1115,7 +1116,7 @@
         "name": "payload_ciphertext",
         "type": "bytea",
         "rule": "",
-        "meaning": "Exact provider request, including capability URL; required before dispatch, encrypted at rest."
+        "meaning": "Exact provider request, including capability URL; populated in the same transaction that freezes the payload and required (non-null) before the first attempt reserves dispatch. Encrypted at rest."
       },
       {
         "name": "encryption_key_version",
@@ -1127,7 +1128,7 @@
         "name": "payload_sha256",
         "type": "bytea",
         "rule": "",
-        "meaning": "Hash of complete canonical provider request; stable on retry."
+        "meaning": "Hash of complete canonical provider request; populated at payload freeze, stable on every retry."
       },
       {
         "name": "provider_email_id",
@@ -1197,7 +1198,8 @@
       }
     ],
     "indexes": [
-      "CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN ('queued', 'retryable_failed')"
+      "CREATE INDEX mail_deliveries_due_idx ON warm_intros.mail_deliveries(next_attempt_at, id) WHERE state IN ('queued', 'retryable_failed')",
+      "CREATE INDEX mail_deliveries_lease_idx ON warm_intros.mail_deliveries(lease_until, id) WHERE state = 'sending'"
     ],
     "constraints": [
       "UNIQUE (introduction_id, id)",
@@ -1311,7 +1313,7 @@
         "name": "event_type",
         "type": "text",
         "rule": "NOT NULL",
-        "meaning": "Canonical event name; examples documented below."
+        "meaning": "Canonical event name; the V1 vocabulary is defined in the sequence-state section below."
       },
       {
         "name": "actor_type",
@@ -1506,7 +1508,7 @@
         "name": "introduction_id",
         "type": "uuid",
         "rule": "REFERENCES warm_intros.introductions(id) ON DELETE RESTRICT",
-        "meaning": "Committed resource, null before a create completes."
+        "meaning": "Committed introduction for this mutation; populated for every successful introduction-scoped operation. Nullable only so a create receipt can be inserted before the root row exists within the same transaction."
       },
       {
         "name": "response_status",

@@ -13,9 +13,22 @@ The plan was reviewed against the user-selected Ethan Jacks / Katelyn Gallanty L
 - Specify public timeout/receipt/expiry behavior, delivery attribution limits and operator recovery boundaries.
 - Move template/preview implementation ahead of dependent UI integration.
 
+## Fixed in the third pass (builder's-lens underspecification)
+
+- Replace single-value `dispatch_block_reason` with `dispatch_holds` JSONB cause set, mutated only under the introduction lock; same 16-table/216-column/63-FK footprint.
+- Enumerate the 12-state lifecycle vocabulary; redefine `current_stage` as the derived furthest-stage marker frozen at terminal close so history keeps where a sequence stopped.
+- Emit column-level foreign keys in the generated field dictionary (`delivery_attempts`, `provider_events`, `mutation_receipts`, external `users`/`persons`/`suggestions` references) via `schema-design.py`.
+- Add partial lease-sweep indexes on `lease_until` for `streaming` generation runs and `sending` mail deliveries; document the PostgreSQL 15+ requirement for `UNIQUE NULLS NOT DISTINCT`.
+- Complete the API contract: add `stream`, `archive`, `restore`, `generation/cancel` routes; unify generation verbs under `/generation`; enumerate `status` rollup filters, `validation_issues` codes, and `event_type` V1 vocabulary.
+- Define shared formats: canonical-hash helper contract, `source_key` composition, `#k=` fragment token URL, `logical_key` context-version component, discriminated mutation payloads.
+- Link UI build steps and routes to the design page sections (setup §1, public invitation, tracking §4, breakpoints/accessibility) and add the state→tracking-label bridge table.
+- Specify template variable content (`Preheader`/`Footer`/`ExpiresAtLabel`/`InvitationURL` derivation, `SignatureLines` frozen in `sender_snapshot`, full-display-name From).
+- Define `failed`-sequence closure rule: no automatic closure once final dispatch began; failure-notification template moved to decisions-to-settle.
+- Clarify nullability semantics: `payload_ciphertext`/`payload_sha256` populated at payload freeze inside the dispatch transaction; `mutation_receipts.introduction_id` populated for committed introduction-scoped mutations.
+
 ## Evidence
 
-- Disposable PostgreSQL: 16 tables, 216 columns, 63 foreign keys.
+- Disposable PostgreSQL: 16 tables, 216 columns, 63 foreign keys — re-verified after the third-pass `dispatch_holds`/lease-index changes.
 - The original schema's cross-message revision-ancestry defect was reproduced before the fix. Revised DDL rejects seven invalid/duplicate reference cases.
 - Actual WHY headline and four paragraphs survive versioned edits, archive, contact deletion and source deletion; root deletion remains restricted.
 - Three input fixtures preserve the complete WHY and exclude emails/private intent. Authored expected requests preserve the business rationale and pass static order/length checks.
