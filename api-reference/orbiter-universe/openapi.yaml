@@ -111,7 +111,7 @@ paths:
       description: |
         Returns the entity plus everything one hop away, as nodes and edges copied verbatim from the graph, for a consumer to write into its own graph unchanged.
         This projection is derived from the graph, not from Postgres rows. The row-derived projections carry only what has rows; several edge types have none, FOUNDED among them, so a consumer that rebuilds relationships from those loses them with no error.
-        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
+        Geography and expertise are excluded by default; include_reference_nodes opts into these direct neighbors for answer context. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH and MediaAppearance nodes) is always excluded: a shared podcast, session or article is evidence, not closeness, and include_reference_nodes does not bring it back. Tombstoned nodes are always excluded. A node reached by several edges is returned once.
         Only edges incident to the anchor are returned. An edge between two neighbours belongs to their own neighbourhoods.
         Node and edge properties are returned verbatim and are deliberately untyped: the same key carries different types across labels, so updated_at is a string on Person and an integer on Company.
         Embeddings are returned as arrays of numbers. A consumer must re-wrap them as vectors on write, or its vector index will not see them and search will silently return nothing.
@@ -147,7 +147,7 @@ paths:
             default: true
         - name: include_reference_nodes
           in: query
-          description: Include direct geography and expertise neighbors for answer context. Defaults to false for graph-copy consumers.
+          description: Include direct geography and expertise neighbors for answer context. Never includes media appearance evidence. Defaults to false for graph-copy consumers.
           schema:
             type: boolean
             default: false
@@ -190,7 +190,7 @@ paths:
         Returns the nodes nearest the query, each with its one-hop edges, in the same node/edge shape as the subgraph projection.
         The counterpart to the subgraph read: that one needs an id you already hold, this one is how you find an id you do not. The query is embedded server-side with the same model that wrote the node vectors — vectors from two models are not comparable, so a consumer cannot supply its own vector.
         score is a DISTANCE: lower is closer, and 0 would be identical. Matched nodes carry it and sort first; a node pulled in by expansion has score null and is_match false. Relevance is cut both absolutely and relative to the best hit, so a query with one good answer returns one node no matter what limit says — limit is an upper bound, not a page size, and there is no pagination.
-        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Tombstoned nodes are always excluded.
+        Geography and expertise are excluded by default. Set include_reference_nodes to include these direct neighbors as answer context. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH, MediaAppearance nodes) is always excluded. Tombstoned nodes are always excluded.
         A client with entity-type entitlements is narrowed to those types automatically; asking only for types it may not read is a 403, not an empty result. Neighbours are not filtered by entity type — a match's surroundings describe it, and cutting them would misdescribe it.
         Requires scope `graph:search`.
       security:
@@ -227,7 +227,7 @@ paths:
         Returns the best route from each source entity to the target, one path per source that can reach it.
         Ids are entity ids, not graph node uuids: an entity id is what a consumer stores, and it resolves through the merge chain. Every path echoes both the canonical and the requested source id so a stored reference can be healed.
         Fewest hops wins per source; ties and ordering across sources go by total_weight, where LOWER is stronger — the weight scale is a distance, so paths come back strongest first.
-        Geography and expertise are excluded from every route: both are hubs that connect everyone to everyone, so a path through one is not a connection anybody can act on. This is policy, not an option.
+        Geography and expertise are excluded from every route: both are hubs that connect everyone to everyone, so a path through one is not a connection anybody can act on. Media appearance evidence (APPEARED_IN, SESSION_OF, CO_MENTIONED_WITH, MediaAppearance nodes) is excluded too: two people on the same podcast or at the same conference are not thereby connected. This is policy, not an option.
         A source with no route within max_hops is listed in unreachable_source_entity_ids. One that could not be traversed at all — unknown to Universe, or not yet written to the graph — is listed in skipped_source_entity_ids instead, and never silently dropped. 404 means the TARGET is not in the graph yet.
         Entitlements are checked on the target only. An interior node is part of how two entities connect, not something the response hands over: it carries a name and type, never a property bag.
         Requires scope `graph:paths`.
@@ -1800,108 +1800,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
-  /v1/falkordb:
-    get:
-      operationId: listFalkorDBInstances
-      tags:
-        - Graph
-      summary: List graph connection-config rows
-      description: |
-        Operator-only. Returns every falkordb.falkordb row, newest first. The OLDEST row is the one read at boot to build the graph client. Credentials are included by design. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: All connection-config rows.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceListEnvelope'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/Internal'
-    post:
-      operationId: createFalkorDBInstance
-      tags:
-        - Graph
-      summary: Create a graph connection-config row
-      description: |
-        Operator-only. Inserts a falkordb.falkordb row; the config is read at boot, so it takes effect on the next process start. db_connection or host is required. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                graph_name:
-                  type: string
-                user_name:
-                  type: string
-                password:
-                  type: string
-                host:
-                  type: string
-                port:
-                  type: string
-                db_connection:
-                  type: string
-                  description: |
-                    Full endpoint (redis:// / falkors:// URL or host:port); used verbatim when set.
-      responses:
-        '201':
-          description: The created row.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InstanceEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '500':
-          $ref: '#/components/responses/Internal'
-  /v1/falkordb/{id}:
-    delete:
-      operationId: deleteFalkorDBInstance
-      tags:
-        - Graph
-      summary: Delete a graph connection-config row
-      description: |
-        Operator-only. Removes a falkordb.falkordb row; effective on the next process start. Requires an authenticated admin user (role `admin`); consumer API keys are rejected.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: Deleted (data is null).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EmptyEnvelope'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/Internal'
   /v1/admin/entities/reviews/{id}/merge:
     post:
       operationId: mergeReviewItem
@@ -2399,6 +2297,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SeedMusicEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/deep-bio-backfill:
+    post:
+      operationId: appearancesDeepBioBackfill
+      tags:
+        - Admin
+      summary: Move the Xano event mirror and the old Deep Bio episode rows onto the appearances lane (management plane)
+      description: |
+        Two steps per pass. Identity: every `live_events` row (the Xano mirror, Deep Bio and seeded editions) gets its own `live_event` entity, keyed by its URL, else by name and year (`<slug>::<year>`); every old `media_appearances` row gets its `media_appearance` entity, keyed by its YouTube video id, else its episode URL (a bare `youtube.com/watch` keys nothing and is counted in `no_identity`). The row is stamped with the entity, and a graph node already drawn keeps its uuid and becomes the entity's graph node. Ledger: every old participant row whose parent has an entity is copied into `event_participant` / `media_participant` with the same id and its drawn edge, so nothing is redrawn; a second run copies nothing. One bounded pass per call: pass back the four `next_after_*` cursors until `remaining` is false. The media half goes away with Release C, which drops the old tables once this has run. No provider call. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceDeepBioBackfillRequest'
+      responses:
+        '200':
+          description: The pass result and the cursors for the next pass.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceDeepBioBackfillEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -6341,7 +6270,7 @@ components:
         include_reference_nodes:
           type: boolean
           default: false
-          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards.
+          description: Include direct geography and expertise neighbors as answer context; clients decide which kinds may be persisted as cards. Never includes media appearance evidence.
         entity_types:
           type: array
           items:
@@ -9028,17 +8957,6 @@ components:
           maxLength: 64
           examples:
             - scrapecreators
-        account_ref:
-          type: string
-          maxLength: 192
-          default: default
-          description: The provider account or purchased pack the limit belongs to. Defaults to `default`.
-        scope_key:
-          type: string
-          maxLength: 192
-          default: account
-          description: |
-            The slice of the account this limit covers. Defaults to `account` (the whole account); a value like `lane:socialmedia` splits one account between lanes. Must match what the paying lane reserves with.
         metric:
           type: string
           maxLength: 64
@@ -9988,66 +9906,6 @@ components:
         - data
         - error
         - meta
-    Instance:
-      type: object
-      description: |
-        One graph connection-config row. Credentials included by design — the point is to hand back connection details.
-      properties:
-        id:
-          type: integer
-          format: int64
-        graph_name:
-          type: string
-        user_name:
-          type: string
-        password:
-          type: string
-        host:
-          type: string
-        port:
-          type: string
-        db_connection:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-      required:
-        - id
-        - graph_name
-        - user_name
-        - password
-        - host
-        - port
-        - db_connection
-        - created_at
-    InstanceListEnvelope:
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Instance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-      required:
-        - data
-        - error
-        - meta
-    InstanceEnvelope:
-      type: object
-      properties:
-        data:
-          $ref: '#/components/schemas/Instance'
-        error:
-          type: 'null'
-        meta:
-          $ref: '#/components/schemas/Meta'
-      required:
-        - data
-        - error
-        - meta
     ReviewMergeEnvelope:
       type: object
       properties:
@@ -10513,6 +10371,116 @@ components:
           type: 'null'
         meta:
           $ref: '#/components/schemas/Meta'
+      required:
+        - data
+        - error
+        - meta
+    AppearanceDeepBioBackfillRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Rows per table in this pass; omit for 100.
+        after_event_id:
+          type: string
+          format: uuid
+          description: The previous pass's next_after_event_id; omit to start at the beginning.
+        after_media_id:
+          type: string
+          format: uuid
+          description: The previous pass's next_after_media_id; omit to start at the beginning.
+        after_event_participant_id:
+          type: string
+          format: uuid
+          description: The previous pass's next_after_event_participant_id; omit to start at the beginning.
+        after_media_participant_id:
+          type: string
+          format: uuid
+          description: The previous pass's next_after_media_participant_id; omit to start at the beginning.
+    AppearanceBackfillCounts:
+      type: object
+      required:
+        - visited
+        - stamped
+        - nodes_linked
+        - no_identity
+        - failed
+      properties:
+        visited:
+          type: integer
+        stamped:
+          type: integer
+          description: Rows now pointing at their entity.
+        nodes_linked:
+          type: integer
+          description: Drawn nodes that became the entity's graph node.
+        no_identity:
+          type: integer
+          description: Rows nothing can key.
+        failed:
+          type: integer
+    AppearanceMoveCounts:
+      type: object
+      required:
+        - visited
+        - copied
+      properties:
+        visited:
+          type: integer
+          description: Mirror rows seen in this pass whose event has an entity.
+        copied:
+          type: integer
+          description: Rows new to event_participant; 0 on a re-run.
+    AppearanceDeepBioBackfillResult:
+      type: object
+      required:
+        - events
+        - media
+        - event_participants
+        - media_participants
+        - next_after_event_id
+        - next_after_media_id
+        - next_after_event_participant_id
+        - next_after_media_participant_id
+        - remaining
+      properties:
+        events:
+          $ref: '#/components/schemas/AppearanceBackfillCounts'
+        media:
+          $ref: '#/components/schemas/AppearanceBackfillCounts'
+        event_participants:
+          $ref: '#/components/schemas/AppearanceMoveCounts'
+        media_participants:
+          $ref: '#/components/schemas/AppearanceMoveCounts'
+        next_after_event_id:
+          type: string
+          format: uuid
+        next_after_media_id:
+          type: string
+          format: uuid
+        next_after_event_participant_id:
+          type: string
+          format: uuid
+        next_after_media_participant_id:
+          type: string
+          format: uuid
+        remaining:
+          type: boolean
+          description: True when a list filled its batch; call again with the cursors.
+    AppearanceDeepBioBackfillEnvelope:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceDeepBioBackfillResult'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
       required:
         - data
         - error
