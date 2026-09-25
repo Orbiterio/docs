@@ -8,9 +8,14 @@ The editable, self-contained source is `images/warm-intro/warm-intro-reference.h
 
 The current Outcome and Leverage Loop references in `design/suggestion-delivery/SuggestionStyles.jsx` and `palettes.js` supply the Midnight palette, borders, fields, compact profile language, and action treatment. The user-supplied 13 images from `~/Downloads/Warm_Intro/` were reviewed as older concept references, not implementation instructions or final styling. The new public page follows the current dark product style. Email uses a light inbox canvas.
 
+## Selected setup direction
+
+Direction 1 is the starting point: three mini email composers side by side, aligned beneath horizontal stages. Each draft has an independent preview and review action. The participant strip and expandable WHY span the workspace; the sequence has one final start action. Below 651 px, composers stack while stage navigation stays horizontal.
+
 ## Prototype coverage
 
-- Edit three message subjects and bodies; review each; switch which contact is asked first without losing edits.
+- Edit all three message subjects and bodies together; review each independently; switch which contact is asked first without losing edits.
+- Changing a recipient email invalidates that request and the final review, and updates the final recipient list. Per-message previews and public-page previews preserve edits.
 - Start the local sequence, then open the tracking record. Started drafts cannot be edited.
 - Preview the public first and second invitation; accept or decline, with an optional note visible only in sender detail.
 - The second acceptance shows a pending-send confirmation before a short local timer simulates completion. No emails are sent.
@@ -35,5 +40,7 @@ Append query parameters to the HTML filename:
 ## Verification
 
 The design was exercised with a temporary headless browser: recipient-specific edits after reordering, review invalidation, sequence launch, locking launched drafts, sequential consent, pending versus sent confirmation, private decline note, history filters/search, and cancellation retaining prior acceptance. No horizontal overflow was observed at 320, 390, 740, 1024, and 1440 pixels across all four surfaces. The MDX page was compiled with the repository's installed MDX compiler. These are prototype checks, not production integration tests.
+
+The selected three-composer setup was rechecked for visible parallel drafts, stage focus, independent review, address validation, previews, order switching, launch locking, and overflow at 320, 390, 650, 740, 1024, and 1440 px. See `verification.json` for this revision and the original checks.
 
 Screenshots `01` through `10` in `images/warm-intro/` were captured from this HTML. Regenerate screenshots and the ZIP when changing the reference. The build-plan page stays untouched until the design is reviewed.
