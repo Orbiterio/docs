@@ -2305,14 +2305,88 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/Internal'
-  /v1/admin/appearances/deep-bio-backfill:
+  /v1/admin/appearances/youtube/add/queue:
     post:
-      operationId: appearancesDeepBioBackfill
+      operationId: appearancesYouTubeEnqueue
       tags:
         - Admin
-      summary: Move the Xano event mirror onto the appearances lane (management plane)
+      summary: Admit one YouTube video to the appearances queue (management plane)
       description: |
-        Two steps per pass. Identity: every `live_events` row (the Xano mirror, Deep Bio and seeded editions) gets its own `live_event` entity, keyed by its URL, else by name and year (`<slug>::<year>`). The row is stamped with the entity, and a graph node already drawn keeps its uuid and becomes the entity's graph node. A row nothing can key is counted in `no_identity` and left alone. Ledger: every `live_event_participants` row whose event has an entity is copied into `event_participant` with the same id and its drawn edge, so nothing is redrawn; a second run copies nothing. One bounded pass per call: pass back both `next_after_*` cursors until `remaining` is false. No provider call. **Management plane, staff only** — a WorkOS session with role `admin`.
+        Keys the video by its id (`youtube_video_id`), creates the `media_appearance` entity when it is new (under the entity cap) and queues one `youtube_item` job. Idempotent: the same video answers the existing entity and job. No provider call happens here; the drain tick reads the video through the social lane. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceYouTubeEnqueueRequest'
+      responses:
+        '200':
+          description: The episode entity and its job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceYouTubeEnqueueEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The video id belongs to an entity of another type, or the entity cap is full.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/youtube/add/channel:
+    post:
+      operationId: appearancesYouTubeAddChannel
+      tags:
+        - Admin
+      summary: Admit one entity's stored YouTube channel videos to the queue (management plane)
+      description: |
+        Reads the person's or company's YouTube videos the social lane already stored (newest first, `ENRICHMENT_MEDIA_YOUTUBE_VIDEOS_PER_CHANNEL` of them), skips anything shorter than `ENRICHMENT_MEDIA_YOUTUBE_MIN_DURATION` or without a known length, mints each remaining episode under the entity cap and queues its `youtube_item` job. The `socialmedia.video_posts_ready_for_media_appearance` event does the same after every channel refresh. No provider call here. **Management plane, staff only** — a WorkOS session with role `admin`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppearanceYouTubeChannelRequest'
+      responses:
+        '200':
+          description: The pass's tally.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppearanceYouTubeChannelEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The social lane is not wired in this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/admin/appearances/queue/drain:
+    post:
+      operationId: appearancesQueueDrain
+      tags:
+        - Admin
+      summary: Run one appearances queue drain tick now (management plane)
+      description: |
+        The same work as the `appearances.queue_drain_requested` tick: give episodes keyed by a video id their job (`backlog` of them), free expired leases, claim `batch` jobs and run them. A `youtube_item` job reads the video's details (and transcript when `ENRICHMENT_MEDIA_YOUTUBE_TRANSCRIPTS_ENABLED`) through the social lane, extracts who appeared, files the people it can resolve by a strong key and leaves the rest as `needs_review` mentions. Honours `ENRICHMENT_MEDIA_YOUTUBE_ENABLED`: off, every job waits. **Management plane, staff only** — a WorkOS session with role `admin`.
       security:
         - bearerAuth: []
       requestBody:
@@ -2320,14 +2394,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AppearanceDeepBioBackfillRequest'
+              $ref: '#/components/schemas/AppearanceQueueDrainRequest'
       responses:
         '200':
-          description: The pass result and the cursors for the next pass.
+          description: The tick's tally.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AppearanceDeepBioBackfillEnvelope'
+                $ref: '#/components/schemas/AppearanceQueueDrainEnvelope'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -10375,94 +10449,165 @@ components:
         - data
         - error
         - meta
-    AppearanceDeepBioBackfillRequest:
+    AppearanceYouTubeEnqueueRequest:
       type: object
       additionalProperties: false
+      required:
+        - video_url
       properties:
-        limit:
-          type: integer
-          minimum: 1
-          maximum: 1000
-          description: Rows per table in this pass; omit for 100.
-        after_event_id:
+        video_url:
           type: string
-          format: uuid
-          description: The previous pass's next_after_event_id; omit to start at the beginning.
-        after_event_participant_id:
-          type: string
-          format: uuid
-          description: The previous pass's next_after_event_participant_id; omit to start at the beginning.
-    AppearanceBackfillCounts:
+          format: uri
+          description: A YouTube watch, youtu.be, shorts or live URL; the video id is the key.
+    AppearanceYouTubeEnqueueResponse:
       type: object
       required:
-        - visited
-        - stamped
-        - nodes_linked
-        - no_identity
-        - failed
+        - episode_entity_id
+        - entity_created
+        - job_id
+        - job_created
+        - job_state
       properties:
-        visited:
-          type: integer
-        stamped:
-          type: integer
-          description: Rows now pointing at their entity.
-        nodes_linked:
-          type: integer
-          description: Drawn nodes that became the entity's graph node.
-        no_identity:
-          type: integer
-          description: Rows nothing can key.
-        failed:
-          type: integer
-    AppearanceMoveCounts:
-      type: object
-      required:
-        - visited
-        - copied
-      properties:
-        visited:
-          type: integer
-          description: Mirror rows seen in this pass whose event has an entity.
-        copied:
-          type: integer
-          description: Rows new to event_participant; 0 on a re-run.
-    AppearanceDeepBioBackfillResult:
-      type: object
-      required:
-        - events
-        - event_participants
-        - next_after_event_id
-        - next_after_event_participant_id
-        - remaining
-      properties:
-        events:
-          $ref: '#/components/schemas/AppearanceBackfillCounts'
-        event_participants:
-          $ref: '#/components/schemas/AppearanceMoveCounts'
-        next_after_event_id:
+        episode_entity_id:
           type: string
           format: uuid
-        next_after_event_participant_id:
-          type: string
-          format: uuid
-        remaining:
+        entity_created:
           type: boolean
-          description: True when a list filled its batch; call again with the cursors.
-    AppearanceDeepBioBackfillEnvelope:
+          description: True when this call minted the media_appearance entity.
+        job_id:
+          type: string
+          format: uuid
+        job_created:
+          type: boolean
+          description: False when the video already had its job.
+        job_state:
+          type: string
+          enum:
+            - queued
+            - running
+            - retry_wait
+            - complete
+            - failed
+            - cancelled
+    AppearanceYouTubeEnqueueEnvelope:
       type: object
+      required:
+        - data
+        - error
+        - meta
       properties:
         data:
-          $ref: '#/components/schemas/AppearanceDeepBioBackfillResult'
+          $ref: '#/components/schemas/AppearanceYouTubeEnqueueResponse'
         error:
           type: 'null'
         meta:
           type:
             - object
             - 'null'
+    AppearanceYouTubeChannelRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - entity_id
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+          description: The person or company whose stored channel videos to admit.
+    AppearanceYouTubeChannelResponse:
+      type: object
+      required:
+        - entity_id
+        - videos
+        - admitted
+        - queued
+        - skipped
+        - cap_blocked
+      properties:
+        entity_id:
+          type: string
+          format: uuid
+        videos:
+          type: integer
+          description: Stored long-form videos considered.
+        admitted:
+          type: integer
+          description: Videos with an episode entity after this pass.
+        queued:
+          type: integer
+          description: Jobs new to the queue.
+        skipped:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Counts by reason (too_short, no_duration, no_video_id, entity_cap).
+        cap_blocked:
+          type: boolean
+          description: True when the entity cap stopped the pass.
+    AppearanceYouTubeChannelEnvelope:
+      type: object
       required:
         - data
         - error
         - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceYouTubeChannelResponse'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
+    AppearanceQueueDrainRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        backlog:
+          type: integer
+          minimum: 0
+          maximum: 200
+          description: Episodes keyed by a video id to give a job in this tick; omit for 0.
+        batch:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: Jobs to claim and run; omit for 10.
+    AppearanceQueueDrainResponse:
+      type: object
+      required:
+        - enqueued
+        - claimed
+        - complete
+        - failed
+        - waiting
+      properties:
+        enqueued:
+          type: integer
+        claimed:
+          type: integer
+        complete:
+          type: integer
+        failed:
+          type: integer
+        waiting:
+          type: integer
+          description: 'Jobs put back to retry_wait: switch off, budget blocked, or a retryable error.'
+    AppearanceQueueDrainEnvelope:
+      type: object
+      required:
+        - data
+        - error
+        - meta
+      properties:
+        data:
+          $ref: '#/components/schemas/AppearanceQueueDrainResponse'
+        error:
+          type: 'null'
+        meta:
+          type:
+            - object
+            - 'null'
     PersonAvatarBackfill:
       type: object
       properties:
