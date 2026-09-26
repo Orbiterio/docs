@@ -1,0 +1,314 @@
+---
+title: "Deal Flow Tables"
+description: "Table and API review for Deal Flow v1: what the built Projects backend covers, and the table changes, new tables and API changes the decided requirements need. Planning only."
+icon: "table"
+mode: "wide"
+---
+
+<Check>
+**Table and API review · September 26, 2026. Planning only: nothing on this page is built.** Every open question, T1 to T11, was answered the same day and is recorded in the [Decided](#decided) table. It checks the decided requirements on [Deal Flow UI Design](/guides/open-work/deal-flow-v1/deal-flow-ui-design) against the code on GitHub: `orbiter-backend` `main` at commit `0d2f3d44` and `orbiter-frontend` `dev` at `4d9b9da5`, both from September 25. Work that exists only on a local computer is not included; a second sweep will cover it.
+</Check>
+
+[Deal Flow v1](/guides/open-work/deal-flow-v1) · [Deal Flow UI Design](/guides/open-work/deal-flow-v1/deal-flow-ui-design) · [Deal Flow Build Plan](/guides/open-work/deal-flow-v1/deal-flow-build-plan)
+
+## Summary
+
+The Projects backend already covers most of Deal Flow v1. Decision numbers on this page refer to the [Decided](/guides/open-work/deal-flow-v1/deal-flow-ui-design#decided) table on Deal Flow UI Design; T numbers refer to this page. What the backend lacks falls into four groups:
+
+- **Flows, stages and templates:** stage descriptions, requirements stored on the stage a deal leaves, saved templates and a stage library. The Projects spec ruled out template storage; decision 38 brings it back.
+- **Deal fields:** source, tier, a dated next step, soft interest, pass details and contact dates.
+- **Access:** confidential deals, which reverse the spec's rule that nothing inside a project is independently private.
+- **AI:** private suggestions built from each person's own email, calendar and relationships, and proposed stage moves.
+
+Coverage of the 101 requirements proposed or decided for v1:
+
+| Area | Built | Partial | Not yet | UI only |
+| --- | --- | --- | --- | --- |
+| Flows and stages | 8 | 5 | 2 | 0 |
+| Templates | 2 | 3 | 4 | 0 |
+| Deals | 7 | 2 | 3 | 0 |
+| Board and table views | 2 | 2 | 4 | 1 |
+| Deal panel | 2 | 2 | 1 | 0 |
+| Activity and timeline | 2 | 0 | 4 | 0 |
+| Next steps, tasks and reminders | 3 | 2 | 0 | 0 |
+| Relationships and sourcing | 0 | 5 | 1 | 0 |
+| Sharing and collaboration | 3 | 1 | 1 | 0 |
+| Reporting | 0 | 1 | 2 | 0 |
+| Import and capture | 0 | 1 | 1 | 0 |
+| AI-assisted deal progression | 4 | 10 | 4 | 0 |
+| Quality bar | 4 | 0 | 0 | 2 |
+| **Total** | **37** | **34** | **27** | **3** |
+
+| Proposed change | Count |
+| --- | --- |
+| Existing tables that gain columns | 6 |
+| New tables | 6 |
+| Changed endpoints | 9 |
+| New endpoints or endpoint groups | 16 |
+| Contracts with other features | 5 |
+| Questions answered | 11 |
+
+## Where things stand
+
+The Projects feature is on `orbiter-backend` `main`, built September 21 to 23. The [Projects & Tasks Table Design](/guides/open-work/roadmap/projects-tasks/table-design) documents its 17 tables in the `projects` schema, created by four Goose migrations, `projects_001_work` to `projects_004_actions_followups`; no later migration touches them. The 77 endpoints are in the API Reference tab under Orbiter Backend, Projects group, and the [Projects & Tasks API Design](/guides/open-work/roadmap/projects-tasks/api-design) describes their rules.
+
+Every change on this page follows the conventions the Projects spec already sets:
+
+- **Migrations are additive.** New Goose migrations only; the four built migrations are never edited.
+- **Identifiers and values:** application-minted UUIDv7 IDs; enum-like values stored as text and validated in Go, with no database or OpenAPI enums; money and amounts as `NUMERIC`, sent as decimal strings.
+- **JSON columns** hold typed, versioned, size-bounded documents.
+- **Commands** take an expected version and an idempotency key, and write their activity row and command receipt in the same transaction as the change.
+- **Access** is applied before any filter, count, page, export or agent input.
+- **Other features are reached through their `*pub` contracts**, read from AlloyDB. No Xano, FalkorDB or Universe graph traversal.
+
+## Stage requirements
+
+### Where they are stored
+
+Today a stage's `criteria` document is an entry checklist. A move reads the destination stage's checklist; the code describes the check as answering whether a deal may enter a stage.
+
+The decisions point the other way. A stage owns the requirements to move to the next stage (decision 2). They appear on the current stage (decision 12). They accumulate when a deal jumps ahead (decision 13). And a stage from the stage library carries its own requirements into any flow (decision 37). A stage's requirements must also stay with it when stages are reordered.
+
+**Decided (T1): store the requirements on the stage a deal leaves.**
+
+- Add `pipeline_stages.advance_requirements`, a version 2 requirements document, described below.
+- A forward move checks the current stage's requirements and those of every stage it skips, in order. A move back checks nothing but needs a reason (FL-20). A move to a lost stage checks nothing but needs its reasons (FL-08).
+- A won stage has no next stage, so what it takes to enter it lives on the stage before it. For example, Wired's "bank confirms the full amount" is stored with Signed's requirements.
+- Existing flows are converted once: each stage takes the next stage's `criteria` as its own requirements. `criteria` is retired in a later migration once nothing reads it.
+
+### Requirements document version 2
+
+Version 1 is a single `all` list of up to 20 items and six checks: `has_target`, `has_stakeholder`, `field_present`, `task_done`, `action_succeeded` and `user_confirmed`. It has no either-or. The two shipped templates need more:
+
+| Need | Example from a template | Proposal |
+| --- | --- | --- |
+| Either-or groups | Committed: a signed term sheet, a confirmed SAFE, or a confirmed follow-on allocation | `any` groups inside the `all` list |
+| Not applicable | "For a priced round, the charter is filed"; "A purchase order, if one is required" | A person can mark an item not applicable with a reason, recorded like a confirmation |
+| A minimum number of people | "Several people at the buyer are engaged" | `has_stakeholder` gains `min_count` |
+| Email and calendar evidence | "The investor has replied"; "A meeting is on the calendar"; "The meeting happened with a partner" | New checks `reply_received`, `meeting_scheduled` and `meeting_held`, read from the interaction log. Until capture feeds them, a person can confirm instead, recorded as a confirmation (T2) |
+| New deal fields | A dated next step; a tier | The `field_present` allowlist adds `next_action_on`, `tier` and `source` |
+
+Unknown still blocks, as today: a check whose evidence cannot be read never passes.
+
+### Template requirements mapped to checks
+
+Most requirements are confirmations by a person. The AI's job is to gather the evidence and propose the confirmation; the person confirms (decision 21).
+
+<AccordionGroup>
+<Accordion title="Funding Round Raise">
+
+| Stage | Requirement to advance | Check |
+| --- | --- | --- |
+| Targeted | Stage, check size and sector fit | `user_confirmed` |
+| Targeted | No competing portfolio company | `user_confirmed` |
+| Targeted | The fund is still investing | `user_confirmed` |
+| Targeted | A decision maker is named | `has_stakeholder`, role `decision_maker`, labeled Partner |
+| Targeted | A path in is chosen | `user_confirmed` |
+| Intro requested | The investor has replied | `reply_received`, new |
+| Intro requested | A meeting is on the calendar | `meeting_scheduled`, new |
+| First meeting | The meeting happened with a partner or the angel | `meeting_held`, new, with the decision maker |
+| First meeting | A dated next step, or an explicit ask to invest | `any`: `field_present` `next_action_on`, or `user_confirmed` |
+| First meeting | The decision process is recorded | `user_confirmed` |
+| Diligence | Everything requested is delivered | `user_confirmed` |
+| Diligence | References are supplied and briefed | `task_done`, work key `references` |
+| Diligence | A champion books the partner meeting, or the angel asks for terms | `any`: `meeting_scheduled`, or `user_confirmed` |
+| Partner meeting | An explicit yes | `user_confirmed` |
+| Committed | Term sheet signed, SAFE confirmed in writing, or allocation confirmed | `any` of three `user_confirmed` items |
+| Documents | Documents final and out for signature | `user_confirmed` |
+| Documents | Closing conditions scheduled | `user_confirmed` |
+| Signed | Countersigned documents in hand | `user_confirmed` |
+| Signed | Wire details verified | `user_confirmed` |
+| Signed | The bank confirms the full amount (Wired's entry) | `user_confirmed` |
+| Signed | Charter filed and escrow released (Wired's entry) | `user_confirmed`, not applicable for a SAFE |
+| Signed | Cap table updated (Wired's entry) | `user_confirmed` |
+
+</Accordion>
+<Accordion title="Enterprise Sale">
+
+| Stage | Requirement to advance | Check |
+| --- | --- | --- |
+| Target account | Fits the ideal customer profile | `user_confirmed` |
+| Target account | A first contact or warm path in is identified | `any`: `has_stakeholder`, or `user_confirmed` |
+| Target account | A first meeting is booked | `meeting_scheduled`, new |
+| Discovery | The buyer confirmed a written recap | `user_confirmed` |
+| Discovery | A critical event is identified | `user_confirmed` |
+| Discovery | The economic buyer is named, or a path to them is identified | `any`: `has_stakeholder` role `decision_maker`, or `user_confirmed` |
+| Discovery | A scoping meeting is booked | `meeting_scheduled`, new |
+| Qualification | The economic buyer is named | `has_stakeholder`, role `decision_maker` |
+| Qualification | The champion agrees to arrange the meeting | `has_stakeholder`, role `champion`, and `user_confirmed` |
+| Qualification | Metrics, decision criteria and process, competition, budget source and critical-event date | One `user_confirmed` item each |
+| Solution fit | The economic buyer is engaged | `meeting_held`, new, with the decision maker |
+| Solution fit | Several people at the buyer are engaged | `has_stakeholder` with `min_count`, new |
+| Solution fit | Capabilities confirmed, champion tested, MEDDPICC complete | One `user_confirmed` item each |
+| Solution fit | Proof-of-concept criteria, owner and end date agreed, or the proof of concept waived | `any`: `task_done` work key `poc_plan`, or `user_confirmed` |
+| Technical validation | Sign-off, ROI validated, agreement to a proposal, contracting mapped, security questionnaire underway | One `user_confirmed` item each |
+| Business case and proposal | The economic buyer agrees the business case; the seller is the selected vendor | One `user_confirmed` item each |
+| Business case and proposal | The close plan is reviewed | `task_done`, work key `close_plan` |
+| Business case and proposal | Procurement and implementation plan confirmed | `user_confirmed` |
+| Security, legal and procurement | Security review approved; terms agreed | One `user_confirmed` item each |
+| Security, legal and procurement | Data processing agreement signed | `user_confirmed`, not applicable when no personal data is processed |
+| Security, legal and procurement | Signatory and signature date confirmed | `field_present` `expected_close_date`, and `user_confirmed` |
+| Verbal commit | Documents fully signed; supplier registration complete | One `user_confirmed` item each |
+| Verbal commit | A purchase order, if one is required | `user_confirmed`, not applicable when none is required |
+| Verbal commit | Go-live plan handed to onboarding | `task_done`, work key `handoff` |
+
+</Accordion>
+</AccordionGroup>
+
+Each `task_done` item needs a matching suggested action in the template that creates the task with that work key, as the built Investors starter does for `diligence_review`.
+
+## Changes to existing tables
+
+<AccordionGroup>
+<Accordion title="projects.pipelines (flows)">
+
+| Column | Type | For | Notes |
+| --- | --- | --- | --- |
+| `outcome` | `TEXT`, nullable | TP-02 | The result the flow leads to, copied from its template. |
+| `target_amount`, `target_currency` | `NUMERIC(20,4)`, `TEXT`, nullable, set together | RP-02, T10 | The round size for a Funding Round Raise flow. Same rules as deal value. |
+| `role_labels` | `JSONB`, default `{}` | DL-13 | A display label for each built role, such as Partner for `decision_maker`. |
+| `reason_options` | `JSONB`, default `[]` | FL-08 | The flow's lost and passed reasons, copied from its template and editable. |
+| `source_template_id` | `UUID`, nullable, set null on delete | TP-05, TP-08 | The saved template a flow started from. Shipped templates keep using `source_template_key` and `source_template_version`. |
+
+</Accordion>
+<Accordion title="projects.pipeline_stages (stages)">
+
+| Column | Type | For | Notes |
+| --- | --- | --- | --- |
+| `description` | `TEXT`, nullable | FL-15 | One or two sentences. |
+| `advance_requirements` | `JSONB`, default `{}` | FL-16, FL-19 | Version 2 requirements document; replaces `criteria`. |
+| `stage_key` | `TEXT`, nullable | RP-02, TP-09 | A stable template key, such as `committed`, `signed` or `wired`. The round tracker and template versions rely on it, so renaming a stage breaks neither. |
+| `library_stage_id` | `UUID`, nullable, set null on delete | TP-10 | The library stage this stage was copied from. |
+
+</Accordion>
+<Accordion title="projects.deals">
+
+| Column | Type | For | Notes |
+| --- | --- | --- | --- |
+| `source`, `source_ref` | `TEXT`, nullable; `JSONB`, default `{}` | DL-06, RS-06, RS-09 | Inbound, referral, Leverage Loop, Outcome, event, outbound or import, plus the referring person or source suggestion. |
+| `tier` | `TEXT`, nullable | DL-07 | A manual A, B or C tier. |
+| `next_action_on` | `DATE`, nullable | TK-01 | The date of the next step in `next_action`. |
+| `round_role` | `TEXT`, nullable | RP-02 | Lead or follow. Funding Round Raise only. |
+| `soft_interest_amount`, `soft_interest_currency`, `soft_interest_conditions` | `NUMERIC(20,4)`, `TEXT`, `TEXT`, nullable | DL-12, RP-02 | Funding Round Raise only. Never counted in round totals (decision 26). |
+| `pass_kind`, `lost_reason_keys` | `TEXT`, nullable; `JSONB`, default `[]` | FL-08 | Not now or no, and the keys chosen from the flow's reasons. `lost_reason` stays the required text: the move writes the chosen labels there when no free text is given, so its existing constraint still holds. |
+| `reopen_condition`, `revisit_on` | `TEXT`, `DATE`, nullable | TK-05 | For "not now": what would reopen it, and when to look again. |
+| `visibility` | `TEXT`, default `project` | CO-06 | `project` or `restricted`. |
+| `last_inbound_at`, `last_outbound_at`, `last_meeting_at`, `next_meeting_at` | `TIMESTAMPTZ`, nullable | AC-03, AC-06, AI-01, T5 | Contact dates rolled up from project members' interaction logs for the target and the deal's people. A company target rolls up over its people on the deal. Dates only, never content (decision 28). |
+
+Targets stay one per deal, a person or a company, and a flow can mix both (decision 43); `entity_type` already allows either. Other people and companies attach as deal people. A new index on `owner_user_id` with `archived_at` and the stage category serves the all-my-deals list (VW-09). Today deals are indexed only by board position, target, project and root.
+
+</Accordion>
+<Accordion title="projects.agent_suggestions, agent_runs and project_user_preferences">
+
+| Table | Column | Type | For | Notes |
+| --- | --- | --- | --- | --- |
+| `agent_suggestions` | `private_to_user_id` | `UUID`, nullable | AI-16 | Only this person sees the suggestion, because it came from their own email, calendar or relationships (decision 9). Enforced in lists, counts and adoption; removed by the account clean-up. |
+| `agent_runs` | `context_scope` | `TEXT`, default `shared` | AI-16 | A `private` run reads the requesting person's own context and may write only private suggestions. |
+| `project_user_preferences` | `suggestion_daily_cap` | `INT`, nullable | AI-23 | The per-person daily cap (decision 29). |
+| `project_user_preferences` | `muted_suggestion_types` | `JSONB`, default `{}` | AI-23 | Suggestion type to mute-until time, set after repeated dismissals. |
+
+</Accordion>
+</AccordionGroup>
+
+`projects.followups` and `projects.work_activity` need no new columns. A revisit reminder is a `check_in` occurrence with a revisit basis. Backward moves, stage summaries and confidential-access changes are new event types in activity. Event types and follow-up kinds are validated in Go, so both are code changes, not migrations.
+
+## New tables
+
+| Table | For | What it holds |
+| --- | --- | --- |
+| `projects.deal_stage_visits` | FL-17, FL-18, FL-20, DP-02, RP-01 | One row each time a deal enters a stage: entered and exited times, how it left (forward, back, won, lost or archived), the reason for a move back, and the stage summary with its status (none, drafted or edited), the agent run that drafted it, and who edited it. One open visit per deal. The move command writes it in the same transaction. Summaries are drafted from the stage's shared activity only, so every project reader can see them. |
+| `projects.flow_templates` | TP-05 to TP-08, T8 | Saved templates: owner, optional organization, visibility (private or organization), name, outcome, kind, the source flow, a version, and a typed definition with every stage's name, meaning, description, requirements, suggested actions, stale threshold and key, plus role labels, reasons and default currency. Shipped templates stay as files in `assets/pipelines` and are listed alongside. |
+| `projects.library_stages` | TP-10, T8 | Saved custom stages: owner, optional organization, visibility, and one stage's name, meaning, description, requirements, suggested actions and stale threshold. Adding one to a flow copies it into `pipeline_stages` with `library_stage_id` set; later library edits do not reach existing flows (decision 42). |
+| `projects.deal_members` | CO-06 | The named people who can see a restricted deal. Unique per deal and person. |
+| `projects.deal_notes` | DP-05, T4 | Notes on a deal, readable by the project's audience, or by the deal's members when it is restricted: author, body, archive time and version. |
+| `projects.capture_exclusions` | AC-07 | Per person: the domains, people and threads never linked to deals. |
+
+**Confidential deals reach every read.** A restricted deal is readable only by its members and its owner. Project admins see the masked card and can manage membership, and every membership change is recorded (T3). Everything that reads deals must apply that rule: the board, lists, search, counts, value totals, linked tasks, activity, notes, stage visits, suggestions, agent evidence, action runs, follow-ups and exports. Other readers see a masked card that keeps the stage count right. Column value totals leave the masked deal out and say how many are hidden, because including its value would reveal it.
+
+## Behaviour changes
+
+These change code in the Projects feature, not tables.
+
+| Change | For | Detail |
+| --- | --- | --- |
+| Cumulative move check | FL-16, FL-19, FL-20 | Forward moves check the current and skipped stages' requirements. Moves back need a reason and record it in the stage visit. |
+| New checks | FL-16 | `reply_received`, `meeting_scheduled` and `meeting_held` read the interaction log. `any` groups, not-applicable items and `min_count` evaluate as described above. |
+| Review sees stage context | FL-17 | The review input adds each deal's stage description, next stage and missing requirements, and the summaries of earlier stages. |
+| Review proposes stage moves | AI-06 | When the gate reports the next stage's requirements as met, the review may write a change request that moves the deal. A person confirms it through the existing adopt route (decision 10). Today's prompt forbids this. |
+| Private reviews | AI-16 | A person can run a review over their own context: interaction log, stored relationship paths and enrichment facts. It writes suggestions only that person sees (decision 9). |
+| Stage summaries | FL-18 | When a deal leaves a stage, a bounded review drafts the summary from that stage's shared activity; the person can edit it (decision 14). |
+| Contact date rollup | AC-03, AC-06 | A job copies contact dates from project members' interaction logs onto deals. The interaction log's own refresh interval sets how current stale flags are. |
+| Stale and at-risk flags on read | AC-06, AI-20 | Stale compares `last_inbound_at` or `last_meeting_at` with the stage's threshold, falling back to `last_progress_at`. At-risk reasons in v1: single-threaded, close date pushed back, no next step and past the close date. Falling activity uses the interaction log's momentum. A changed job waits for signals (AI-25, Later). |
+| Nudge limits | AI-23 | Reviews apply the daily cap and muted types before writing suggestions. |
+| Shipped templates | TP-01 | `assets/pipelines/investors.v1.json` and `sales.v1.json` are replaced by `funding-round-raise.v1.json` and `enterprise-sale.v1.json` (decision 39). The `starter` field on flow creation takes the new keys. |
+
+## API changes
+
+### Changed endpoints
+
+| Endpoint | Change | For |
+| --- | --- | --- |
+| `POST /projects/{root_id}/pipelines`, `PATCH /pipelines/{id}` | Accept outcome, target amount, role labels and reasons. `starter` accepts the new template keys or a saved template ID. | TP-02, TP-03, RP-02, DL-13, FL-08 |
+| `POST /pipelines/{id}/stages`, `PATCH /pipelines/{id}/stages/{stage_id}` | Accept description, version 2 requirements and a stage key. | FL-15, FL-16 |
+| `POST /projects/{id}/deals`, `PATCH /deals/{id}` | Accept source, tier, next step date, round role, soft interest and visibility. | DL-06, DL-07, TK-01, DL-12, CO-06 |
+| `POST /deals/{id}/move` | Cumulative check. Adds `reason` for moves back; `pass_kind`, `lost_reason_keys`, `revisit_on` and `reopen_condition` for passes. The optional `note` stays. | FL-19, FL-20, FL-08, TK-05 |
+| `GET /pipelines/{id}/board` | Filters: owner, tier, stale, overdue next step, close date window and search. Value totals per column by currency. Cards add stale state, at-risk reasons, contact dates and up to two ready next steps. | VW-02, VW-04, VW-06, AI-20, AC-03 |
+| `GET /projects/{id}/deals` | Search, sort and the board's filters. | VW-05, VW-07 |
+| `GET /projects` | An `organization_id` filter for the active mode: projects the organization owns or has been granted. | CO-08 |
+| `POST /projects/{id}/agent-runs` | A `private` scope for the caller's own review. | AI-16 |
+| `GET /projects/{id}/suggestions` | Returns the caller's private suggestions with the shared ones. | AI-16 |
+
+### New endpoints
+
+| Endpoint | Purpose | For |
+| --- | --- | --- |
+| `GET /me/deals` | Every deal the caller owns across readable projects and flows. | VW-09 |
+| `GET /me/focus` | Plan my day: deals ranked by overdue next step, stale, meeting soon and closing soon. | AI-10 |
+| `POST /projects/{id}/deals/bulk` | Create many deals at once, each with its own duplicate warning. | IN-01, RS-06 |
+| `POST /deals/bulk` | Move, assign or archive many deals, with one command and receipt per deal and a result for each (T9). | VW-05 |
+| `POST /pipelines/{id}/deals/from-suggestions` | Add Leverage Loop or Outcome suggestions to the first stage, recording the source. | RS-06, RS-09, AI-12 |
+| `GET /deals/{id}/stage-visits`, `PATCH /deals/{id}/stage-visits/{visit_id}` | Stage history and summaries; edit a summary. | DP-02, FL-18 |
+| `GET /deals/{id}/touchpoints` | The caller's own emails and meetings with the deal's people, plus teammates' contact dates without content. | AC-02 |
+| `GET /deals/{id}/intro-paths` | The caller's warm paths to the target, ranked with interaction signals, for starting a Warm Intro. Signals are shown, not a strength score (T11). | RS-01, RS-03 |
+| `GET` and `POST /deals/{id}/notes`, `PATCH` and `DELETE /deals/{id}/notes/{note_id}` | Deal notes. Delete archives. | DP-05 |
+| `GET /deals/{id}/members`, `PUT` and `DELETE /deals/{id}/members/{user_id}` | Members of a restricted deal. | CO-06 |
+| `GET` and `POST /flow-templates`, `GET` and `PATCH /flow-templates/{id}`, `POST /pipelines/{id}/save-as-template` | Template library and saving any flow as a template. | TP-05, TP-06, TP-07 |
+| `GET` and `POST /library-stages`, `GET` and `PATCH /library-stages/{id}`, `POST /pipelines/{id}/stages/from-library` | Stage library. | TP-10 |
+| `GET /pipelines/{id}/summary` | Count and value per stage, conversion, days in stage and win rate. | RP-01 |
+| `GET /pipelines/{id}/round` | Round tracker. Committed counts deals at or past the `committed` stage key, signed at or past `signed`, and wired at `wired`; soft interest is shown apart. | RP-02 |
+| `GET /projects/{id}/weekly-review` | What changed, close dates that slipped, deals missing a next step, and new deals. | RP-06 |
+| `GET` and `PUT /me/capture-exclusions` | The caller's capture exclusions. | AC-07 |
+
+## Contracts with other features
+
+| Feature | What Deal Flow needs | Today |
+| --- | --- | --- |
+| persons (`personspub`) | A reader for `persons.contacts_interaction_log` by user and person: last email received, last email sent, last and next meeting, two-way threads and momentum. | Only `InteractionLogWriter` is public. The reader is new. |
+| suggestions (`suggestionspub`) | Read Outcome suggestions for import, alongside Leverage Loop suggestions. | `SuggestionReader.GetLoopSuggestion` only. |
+| Warm Intro (planned `warmintros`) | Start an introduction from a deal and report its state back to the deal (decision 11). | The [Warm Intro Build Plan](/guides/open-work/warm-intro-feature/warm-intro-build-plan) sources `warm_intros.introductions` only from a Leverage Loop action, and `source_action_ref` is required. Decided: that plan gains an optional deal reference, and its Leverage Loop source fields become optional, before it is built (T7). |
+| imports | A spreadsheet of deals (IN-02), reusing the contact import's parsing and person matching in `imports.contact_imports`, with a target flow and a created-deal result per row (T6). | Contact imports only. |
+| persons and companies | Add a target that is not in Orbiter yet (DL-14). | Built: `POST /persons`, `POST /companies` and the URL lookups. The client creates the target, then the deal; no backend change. |
+
+## Not needed for v1
+
+These requirements are proposed or decided for Later, so no table or API work is planned for them now: win probability (FL-09), custom fields (DL-08), recurring value (DL-15), saved views (VW-08), files and deck views (DP-06, DP-07), comments (CO-04), live board updates (CO-05), shared close plans (CO-07), forecasting (RP-03), loss and source reporting (RP-04), the raise view (RP-05), email capture of new deals (IN-03), export (IN-04), CRM import (IN-05), outside AI assistants (IN-06), team coverage (RS-04), signals and job changes (RS-05, AI-25), and template versions (TP-09).
+
+## Open questions
+
+None open. Every question raised on this page is answered in the Decided table below. New questions are added here, each with a recommendation, as the review continues.
+
+## Decided
+
+| # | Area | Decision | Decided |
+| --- | --- | --- | --- |
+| T1 | Requirements | **Requirements are stored on the stage a deal leaves** (`advance_requirements`). | Mark, 2026-09-26 |
+| T2 | Requirements | **Until capture feeds them, a person can confirm "replied", "meeting booked" and "meeting held",** recorded as a confirmation rather than evidence. | Mark, 2026-09-26 |
+| T3 | Access | **A restricted deal is visible to its members and its owner.** Project admins see the masked card and can manage membership; every membership change is recorded. | Mark, 2026-09-26 |
+| T4 | Notes | **Deal notes live in a new `projects.deal_notes` table** for v1. | Mark, 2026-09-26 |
+| T5 | Contact dates | **Contact dates are rolled up onto the deal** for every reader, dates only. | Mark, 2026-09-26 |
+| T6 | Import | **Deal spreadsheets reuse contact imports,** with a target flow and a created-deal result per row. | Mark, 2026-09-26 |
+| T7 | Warm Intro | **The planned `warm_intros.introductions` gains an optional deal source,** and its Leverage Loop source fields become optional, before that plan is built. | Mark, 2026-09-26 |
+| T8 | Templates | **Saved templates and library stages use two tables** with the same stage format. | Mark, 2026-09-26 |
+| T9 | Bulk actions | **Bulk actions use a bulk endpoint,** with one command and receipt per deal inside it. | Mark, 2026-09-26 |
+| T10 | Round target | **The round target lives on the flow,** next to its outcome. | Mark, 2026-09-26 |
+| T11 | Relationship strength | **Cards show relationship signals, not a strength score:** last contact, meetings, two-way threads and momentum. | Mark, 2026-09-26 |
