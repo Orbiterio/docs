@@ -1,0 +1,268 @@
+---
+title: "Hot Keys"
+description: "The source of truth for every keyboard shortcut in Orbiter.io, plus the macOS and browser shortcuts already taken."
+---
+
+This page lists every hot key the Orbiter.io frontend assigns, grouped the way the Command Palette groups them, followed by the operating-system and browser shortcuts a new hot key must not collide with.
+
+<Info>
+Inventoried from `orbiter-frontend` on `thursday_dev` at `27c13374` (2026-09-25). When you add, change or remove a hot key, update this page in the same change.
+</Info>
+
+**How to read the keys.** <kbd>⌘</kbd> is written `mod` in code: Command on a Mac, Ctrl on Windows and Linux. <kbd>⌥</kbd> is Option (Alt), <kbd>⇧</kbd> is Shift, <kbd>⌃</kbd> is Control.
+
+## How hot keys work in the app
+
+<Note>
+There is **no central hot key system**. Orbiter does not use a TanStack hotkeys package; four mechanisms each own a slice, and the Command Palette registry is the closest thing to a single list.
+
+1. **The Command Palette registry (`react-hotkeys-hook`).** Each command in `src/features/command-palette/constants/commands.tsx` may carry `hotkey` (the binding, e.g. `mod+alt+o`) and `shortcut` (the badge text, e.g. `⌘⌥O`). `useCommandHotkeys`, mounted once in `src/routes/_authed.tsx`, registers every command's `hotkey` with `useHotkeys`. Two fields means the badge and the binding can drift; keep them in step. `react-hotkeys-hook` skips text fields and contenteditable by default, so these never fire while typing, including in the notes editor. A few feature screens call `useHotkeys` directly too (Collections canvas, Email thread list).
+2. **Hand-written `keydown` listeners.** <kbd>⌘</kbd> <kbd>K</kbd> is a window listener in the capture phase, so it wins over everything and works inside inputs. The Calendar <kbd>0</kbd> / <kbd>0</kbd> <kbd>0</kbd> controller, the Calendar view keys, the Activity arrows and the various <kbd>Esc</kbd>-to-close panels are plain `document`/`window` listeners that do their own "am I in a text field or dialog?" checks.
+3. **Tiptap (ProseMirror keymaps) in the notes editor.** Tiptap manages the formatting keys itself: StarterKit and each extension (bold, italic, headings, lists, blockquote, code block, text align, highlight, sub/superscript) binds its own keys, and only while the editor has focus. The toolbar's `*_SHORTCUT_KEY(S)` constants are just the tooltip text for those. The editor's non-formatting actions (emoji, mention, slash menu, Ask AI, image, duplicate, copy, delete) are bound with `useHotkeys` in each button's hook, enabled on contenteditable.
+4. **Component-local handlers.** `onKeyDown` on a single input (<kbd>Enter</kbd> to send, <kbd>⇧</kbd> <kbd>Enter</kbd> for a new line, <kbd>⌘</kbd> <kbd>Enter</kbd> in the suggestion composer), the palette's own list keys (built into `cmdk`), and `is-hotkey` in the editor's AI menu input.
+
+**Adding a global hot key:** add `hotkey` and `shortcut` to its command in `commands.tsx`, check it against every table on this page (including [System OS Hotkeys](#system-os-hotkeys)), then list it here.
+</Note>
+
+**Typing is safe.** Single-key and <kbd>⇧</kbd>-letter hot keys never fire while the cursor is in a text field, the notes editor, or an open dialog or palette.
+
+## Command Palette
+
+The palette opens from anywhere signed in. Its tabs are **All**, **Quick Actions**, **Navigation**, **People**, **Collections** and **Companies**, and each command shows its hot key as a badge.
+
+| Action | Mac | Windows | Notes |
+|---|---|---|---|
+| Open or close the Command Palette | <kbd>⌘</kbd> <kbd>K</kbd> | <kbd>Ctrl</kbd> <kbd>K</kbd> | Captured before any other handler, so it works from inside inputs too. |
+| Move through results | <kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>↑</kbd> / <kbd>↓</kbd> | Built into the palette (cmdk). |
+| Run the highlighted command | <kbd>Enter</kbd> | <kbd>Enter</kbd> | |
+| Close | <kbd>Esc</kbd> | <kbd>Esc</kbd> | |
+
+Defined in `src/features/command-palette/hooks/use-command-palette.ts` (the <kbd>⌘</kbd> <kbd>K</kbd> listener) and `src/features/command-palette/constants/commands.tsx` (every command below).
+
+## Navigation
+
+The palette's **Navigation** commands open the workspace views: Discover, Outcomes, Leverage Loops, Collections, Serendipity, Activity, Contacts, Calendar, Email, Teams, Meeting Prep and Deal Flow. **None of them has a hot key**; open them from the palette. The only navigation hot keys are the Calendar ones below.
+
+### Calendar
+
+| Action | Keys | Where it works |
+|---|---|---|
+| Open Agenda side panel, on today | <kbd>0</kbd> | Anywhere signed in. On the Calendar route it opens the docked panel; elsewhere it opens as an overlay. |
+| Open the Calendar view | <kbd>0</kbd> <kbd>0</kbd> | Anywhere signed in. Press 0 twice within 400 ms. |
+
+The single <kbd>0</kbd> waits 400 ms before opening the agenda so a second <kbd>0</kbd> can cancel it; the agenda never flashes open on the way to the Calendar view. Defined in `src/features/calendar/shortcuts.ts`, installed by `CalendarSync`.
+
+### Activity (Orbits)
+
+| Action | Keys |
+|---|---|
+| Next day | <kbd>↑</kbd> |
+| Previous day | <kbd>↓</kbd> |
+
+Ignored while a card is open, while typing, and inside menus or dialogs; <kbd>↑</kbd> stops at today. The time-range dropdown shows the same two keys. Defined in `src/features/activities/components/orbits.tsx`.
+
+### Email
+
+| Action | Keys |
+|---|---|
+| Select the next thread | <kbd>↓</kbd> |
+| Select the previous thread | <kbd>↑</kbd> |
+
+Defined in `src/features/email-inbox/components/thread-list/thread-list.tsx`.
+
+## Quick Actions
+
+The palette's **Actions** commands. These work anywhere signed in, except inside text fields.
+
+| Action | Mac | Windows | Code |
+|---|---|---|---|
+| New Contact | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>C</kbd> | `alt+shift+c` |
+| New Company | <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Shift</kbd> <kbd>C</kbd> | `shift+c` |
+| Note | <kbd>⇧</kbd> <kbd>N</kbd> | <kbd>Shift</kbd> <kbd>N</kbd> | `shift+n` |
+| Merge Contacts | <kbd>⇧</kbd> <kbd>M</kbd> | <kbd>Shift</kbd> <kbd>M</kbd> | `shift+m` |
+| Profile (your own person sheet) | <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Alt</kbd> <kbd>P</kbd> | `alt+p` |
+| Me (your own person sheet) | <kbd>⌥</kbd> <kbd>M</kbd> | <kbd>Alt</kbd> <kbd>M</kbd> | `alt+m` |
+| Email Composer | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>E</kbd> | `mod+alt+e` |
+| Email Outreach Composer | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> | `mod+shift+e` |
+| Refresh Activities | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>R</kbd> | `mod+alt+r` |
+| Collections Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> | `mod+alt+c` |
+| New Collection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>.</kbd> | `mod+shift+.` |
+| Teams Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>T</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> | `mod+alt+t` |
+
+- **Email Outreach Composer** starts from the selected nodes when any are selected.
+- **New Collection** opens the selection preview when nodes are selected, otherwise the Collections Manager.
+- **Profile** and **Me** do the same thing today: both open your own person sheet.
+
+These palette actions have **no hot key**: X Followers & DMs, Projects & Tasks, Create Project, Create Task.
+
+## Tools
+
+| Action | Mac | Windows | Code |
+|---|---|---|---|
+| Akira (Copilot) | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>O</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd> | `mod+alt+o` |
+
+Only registered when the user has Copilot enabled (`copilot_enabled`).
+
+## Calendar View
+
+On the Calendar route only. Single keys, ignored while typing, in a dialog, or with a modifier held.
+
+| Action | Keys |
+|---|---|
+| Go to today | <kbd>T</kbd> |
+| Day view | <kbd>D</kbd> |
+| Week view | <kbd>W</kbd> |
+| Month view | <kbd>M</kbd> |
+| Agenda view | <kbd>A</kbd> |
+| New event (open the scheduler) | <kbd>N</kbd> |
+| Previous period | <kbd>←</kbd> |
+| Next period | <kbd>→</kbd> |
+
+While an event is being dragged, these keys and <kbd>0</kbd> are swallowed so the drop targets don't page away. Defined in `src/features/calendar/components/calendar-shell.tsx` and `event-drag-provider.tsx`.
+
+## Collections
+
+| Action | Mac | Windows |
+|---|---|---|
+| Select every node on the canvas | <kbd>⌘</kbd> <kbd>A</kbd> | <kbd>Ctrl</kbd> <kbd>A</kbd> |
+| Clear the selection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> |
+
+Defined in `src/features/collections/components/collections-canvas.tsx`.
+
+## Composers and inputs
+
+| Where | Action | Keys |
+|---|---|---|
+| Discover query input, context panel refinement, Modify Outcome panel, "Help with…" (Fork in the Road) | Send | <kbd>Enter</kbd> |
+| Same inputs | New line | <kbd>⇧</kbd> <kbd>Enter</kbd> |
+| Suggestion composer | Preview, or copy when the footer is Copy | <kbd>⌘</kbd> <kbd>Enter</kbd> |
+| Suggestion composer | Close | <kbd>Esc</kbd> |
+| Natural-language date picker | Apply / cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |
+| Modify Outcome panel, account settings dialog, theme color picker, voice bar mic menu | Close | <kbd>Esc</kbd> |
+
+## Notes editor
+
+The rich-text editor (Tiptap) used for notes. These only fire with the cursor in the editor. The formatting keys are Tiptap's own bindings; the rest are bound by the toolbar buttons (see [How hot keys work](#how-hot-keys-work-in-the-app)).
+
+| Action | Mac | Windows |
+|---|---|---|
+| Bold / italic / underline | <kbd>⌘</kbd> <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> | <kbd>Ctrl</kbd> <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> |
+| Strikethrough | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>S</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>S</kbd> |
+| Inline code | <kbd>⌘</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>E</kbd> |
+| Superscript / subscript | <kbd>⌘</kbd> <kbd>.</kbd> / <kbd>⌘</kbd> <kbd>,</kbd> | <kbd>Ctrl</kbd> <kbd>.</kbd> / <kbd>Ctrl</kbd> <kbd>,</kbd> |
+| Heading 1–6 | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>1</kbd>–<kbd>6</kbd> |
+| Plain text (clear heading) | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>0</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>0</kbd> |
+| Bullet / numbered / task list | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>8</kbd> / <kbd>7</kbd> / <kbd>9</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>8</kbd> / <kbd>7</kbd> / <kbd>9</kbd> |
+| Blockquote | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>B</kbd> |
+| Code block | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> |
+| Align left / center / right / justify | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> |
+| Image align left / center / right | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> |
+| Text color / highlight | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd> / <kbd>H</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>T</kbd> / <kbd>H</kbd> |
+| Clear all formatting | <kbd>⌘</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>R</kbd> |
+| Slash commands | <kbd>⌘</kbd> <kbd>/</kbd> | <kbd>Ctrl</kbd> <kbd>/</kbd> |
+| Mention someone | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>2</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>2</kbd> |
+| Emoji picker | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> |
+| Ask AI | <kbd>⌘</kbd> <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>J</kbd> |
+| Upload image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>I</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>I</kbd> |
+| Download image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>D</kbd> |
+| Duplicate block | <kbd>⌘</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>D</kbd> |
+| Copy block | <kbd>⌘</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>C</kbd> |
+| Copy link to block | <kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>L</kbd> |
+| Delete block | <kbd>Backspace</kbd> | <kbd>Backspace</kbd> |
+
+Defined as `*_SHORTCUT_KEY(S)` constants under `src/features/tiptap-editor/components/tiptap-ui/`.
+
+## Known conflicts
+
+<Warning>
+These clash today. Fix them before adding anything near them.
+</Warning>
+
+| Keys | Claimed by | Problem |
+|---|---|---|
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | Email Outreach Composer (global), editor emoji picker, editor align center | Three actions on one combo. In the notes editor the emoji picker and align center both fire; everywhere else it opens Outreach. |
+| <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | Collections Manager (global), editor code block | Means code block in the notes editor and Collections Manager everywhere else. It is also Chrome's "Inspect element" shortcut, which Chrome may take first. |
+| <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | Editor headings | The toolbar tooltip says <kbd>⌃</kbd> <kbd>⌥</kbd>, but Tiptap binds <kbd>⌘</kbd> <kbd>⌥</kbd> on a Mac. `HEADING_SHORTCUT_KEYS` should say `mod+alt`. |
+| <kbd>Ctrl</kbd> <kbd>L</kbd> (Windows) | Editor "copy link to block" | `mod+ctrl+l` collapses to <kbd>Ctrl</kbd> <kbd>L</kbd> off a Mac, which is the browser's address bar. |
+| <kbd>⌘</kbd> <kbd>R</kbd> | Editor "clear all formatting" | Replaces browser reload while the cursor is in the editor. |
+| <kbd>⌘</kbd> <kbd>D</kbd> | Editor "duplicate block" | Replaces the browser's bookmark shortcut while the cursor is in the editor. |
+| <kbd>⌘</kbd> <kbd>A</kbd> | Collections "select every node" | Replaces select-all on the Collections canvas (intended). |
+| <kbd>⌥</kbd> <kbd>P</kbd>, <kbd>⌥</kbd> <kbd>M</kbd> | Profile, Me | Two hot keys for the same action. |
+| <kbd>⌥</kbd>-letter combos | New Contact, Profile, Me | On a Mac, <kbd>⌥</kbd> plus a letter types a special character (<kbd>⌥</kbd> <kbd>P</kbd> is π). They are safe only because hot keys are skipped inside text fields. |
+
+## System OS Hotkeys
+
+Shortcuts macOS and the browser already own. A web page cannot override most of them, so an Orbiter hot key on one of these combos will never fire. Avoid them.
+
+### macOS system
+
+| Action | Keys |
+|---|---|
+| Spotlight search | <kbd>⌘</kbd> <kbd>Space</kbd> |
+| Switch input source | <kbd>⌃</kbd> <kbd>Space</kbd> |
+| Switch apps | <kbd>⌘</kbd> <kbd>Tab</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> |
+| Switch windows of the same app | <kbd>⌘</kbd> <kbd>`</kbd> |
+| Quit app | <kbd>⌘</kbd> <kbd>Q</kbd> |
+| Hide app / hide others | <kbd>⌘</kbd> <kbd>H</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>H</kbd> |
+| Minimize window / minimize all | <kbd>⌘</kbd> <kbd>M</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>M</kbd> |
+| Close window / close all | <kbd>⌘</kbd> <kbd>W</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>W</kbd> |
+| Force Quit | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>Esc</kbd> |
+| Lock screen | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>Q</kbd> |
+| Log out | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Q</kbd> |
+| Full screen | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> / <kbd>🌐</kbd> <kbd>F</kbd> |
+| Emoji & Symbols viewer | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>Space</kbd> / <kbd>🌐</kbd> <kbd>E</kbd> |
+| Screenshot: whole screen / area / toolbar | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>3</kbd> / <kbd>4</kbd> / <kbd>5</kbd> |
+| Screenshot to clipboard (area) | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>4</kbd> |
+| Mission Control | <kbd>⌃</kbd> <kbd>↑</kbd> |
+| App windows (App Exposé) | <kbd>⌃</kbd> <kbd>↓</kbd> |
+| Move between Spaces | <kbd>⌃</kbd> <kbd>←</kbd> / <kbd>⌃</kbd> <kbd>→</kbd> |
+| Switch to Space 1–9 (if enabled) | <kbd>⌃</kbd> <kbd>1</kbd>–<kbd>9</kbd> |
+| Show Desktop | <kbd>F11</kbd> / <kbd>⌘</kbd> <kbd>F3</kbd> |
+| Show or hide the Dock | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>D</kbd> |
+| Notification Center | <kbd>🌐</kbd> <kbd>N</kbd> |
+| Control Center | <kbd>🌐</kbd> <kbd>C</kbd> |
+| Quick Note | <kbd>🌐</kbd> <kbd>Q</kbd> |
+| Show the Help menu search | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>/</kbd> |
+| App settings | <kbd>⌘</kbd> <kbd>,</kbd> |
+| Dictation | <kbd>🌐</kbd> twice, or <kbd>🎤</kbd> |
+| VoiceOver on/off | <kbd>⌘</kbd> <kbd>F5</kbd> |
+| Accessibility shortcuts panel | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>F5</kbd> |
+
+### macOS text editing
+
+These work in every text field, including Orbiter's, so don't bind them inside inputs.
+
+| Action | Keys |
+|---|---|
+| Cut / copy / paste | <kbd>⌘</kbd> <kbd>X</kbd> / <kbd>C</kbd> / <kbd>V</kbd> |
+| Paste and match style | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>V</kbd> |
+| Undo / redo | <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd> |
+| Select all | <kbd>⌘</kbd> <kbd>A</kbd> |
+| Find / find next / find previous | <kbd>⌘</kbd> <kbd>F</kbd> / <kbd>⌘</kbd> <kbd>G</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>G</kbd> |
+| Save / print / open | <kbd>⌘</kbd> <kbd>S</kbd> / <kbd>⌘</kbd> <kbd>P</kbd> / <kbd>⌘</kbd> <kbd>O</kbd> |
+| Start or end of line | <kbd>⌘</kbd> <kbd>←</kbd> / <kbd>⌘</kbd> <kbd>→</kbd> |
+| Start or end of document | <kbd>⌘</kbd> <kbd>↑</kbd> / <kbd>⌘</kbd> <kbd>↓</kbd> |
+| Previous or next word | <kbd>⌥</kbd> <kbd>←</kbd> / <kbd>⌥</kbd> <kbd>→</kbd> |
+| Delete previous word | <kbd>⌥</kbd> <kbd>Delete</kbd> |
+| Delete to start of line | <kbd>⌘</kbd> <kbd>Delete</kbd> |
+| Emacs-style moves | <kbd>⌃</kbd> <kbd>A</kbd> / <kbd>E</kbd> / <kbd>K</kbd> / <kbd>F</kbd> / <kbd>B</kbd> / <kbd>N</kbd> / <kbd>P</kbd> |
+
+### Browser (Chrome)
+
+Orbiter runs in the browser, which claims these before the page sees them.
+
+| Action | Keys |
+|---|---|
+| New tab / new window / new incognito window | <kbd>⌘</kbd> <kbd>T</kbd> / <kbd>⌘</kbd> <kbd>N</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>N</kbd> |
+| Reopen closed tab | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd> |
+| Close tab | <kbd>⌘</kbd> <kbd>W</kbd> |
+| Jump to tab 1–8 / last tab | <kbd>⌘</kbd> <kbd>1</kbd>–<kbd>8</kbd> / <kbd>⌘</kbd> <kbd>9</kbd> |
+| Next / previous tab | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>→</kbd> / <kbd>←</kbd> |
+| Address bar | <kbd>⌘</kbd> <kbd>L</kbd> |
+| Reload / hard reload | <kbd>⌘</kbd> <kbd>R</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>R</kbd> |
+| Back / forward | <kbd>⌘</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>]</kbd> |
+| Bookmark page / bookmarks bar | <kbd>⌘</kbd> <kbd>D</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
+| History / downloads | <kbd>⌘</kbd> <kbd>Y</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>J</kbd> |
+| Developer tools / console / inspect element | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>I</kbd> / <kbd>J</kbd> / <kbd>C</kbd> |
+| Zoom in / out / reset | <kbd>⌘</kbd> <kbd>+</kbd> / <kbd>⌘</kbd> <kbd>-</kbd> / <kbd>⌘</kbd> <kbd>0</kbd> |
+| Find in page | <kbd>⌘</kbd> <kbd>F</kbd> |
