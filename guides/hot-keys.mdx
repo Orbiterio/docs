@@ -1,0 +1,507 @@
+---
+title: "Hot Keys"
+description: "The source of truth for every keyboard shortcut in Orbiter.io, plus the macOS and browser shortcuts already taken."
+---
+
+This page lists every hot key the Orbiter.io frontend assigns, grouped the way the Command Palette groups them, followed by the operating-system and browser shortcuts a new hot key must not collide with.
+
+<Info>
+Originally inventoried from `orbiter-frontend` on `thursday_dev` at `9b0ac5c3`. Updated 2026-09-26 to match the local frontend changes: Discover is **G then D**, Outcomes is **G then O**, and Leverage Loops is **G then L**. When you add, change or remove a hot key, update this page in the same change.
+</Info>
+
+Every Command Palette command has a hot key, and the palette shows each one as a badge beside the command.
+
+**How to read the keys.** <kbd>⌘</kbd> is written `mod` in code: Command on a Mac, Ctrl on Windows and Linux. <kbd>⌥</kbd> is Option (Alt), <kbd>⇧</kbd> is Shift, <kbd>⌃</kbd> is Control.
+
+## How hot keys work in the app
+
+<Note>
+There is **no central hot key system**. Orbiter does not use a TanStack hotkeys package; four mechanisms each own a slice, and the Command Palette registry is the closest thing to a single list.
+
+1. **The Command Palette registry (`react-hotkeys-hook`).** Each command in `src/features/command-palette/constants/commands.tsx` carries `hotkey` (the binding, e.g. `mod+alt+o`, or `g>i` for a sequence) and `shortcut` (the badge text, e.g. `⌘⌥O`, or `G I`, which the badge draws as "G then I"). `useCommandHotkeys`, mounted once in `src/routes/_authed.tsx`, registers every command's `hotkey` with `useHotkeys`. Two fields means the badge and the binding can drift; keep them in step. `react-hotkeys-hook` skips text fields and contenteditable by default, so these never fire while typing, including in the notes editor. A few feature screens call `useHotkeys` directly too (Collections canvas, Email thread list).
+2. **Hand-written `keydown` listeners.** <kbd>⌘</kbd> <kbd>K</kbd> is a window listener in the capture phase, so it wins over everything and works inside inputs. The Calendar <kbd>0</kbd> / <kbd>0</kbd> <kbd>0</kbd> controller, the Calendar view keys, the Activity arrows and the various <kbd>Esc</kbd>-to-close panels are plain `document`/`window` listeners that do their own "am I in a text field or dialog?" checks.
+3. **Tiptap (ProseMirror keymaps) in the notes editor.** Tiptap manages the formatting keys itself: StarterKit and each extension (bold, italic, headings, lists, blockquote, code block, text align, highlight, sub/superscript) binds its own keys, and only while the editor has focus. The toolbar's `*_SHORTCUT_KEY(S)` constants are just the tooltip text for those. The editor's non-formatting actions (emoji, mention, slash menu, Ask AI, image, duplicate, copy, delete) are bound with `useHotkeys` in each button's hook, enabled on contenteditable.
+4. **Component-local handlers.** `onKeyDown` on a single input (<kbd>Enter</kbd> to send, <kbd>⇧</kbd> <kbd>Enter</kbd> for a new line, <kbd>⌘</kbd> <kbd>Enter</kbd> in the suggestion composer), the palette's own list keys (built into `cmdk`), and `is-hotkey` in the editor's AI menu input.
+
+**Spell punctuation by key name.** `react-hotkeys-hook` matches the physical key code, so bind `mod+slash`, `mod+shift+period`, `mod+backslash`, `mod+shift+semicolon`, never `mod+/` or `mod+shift+.`, which silently never fire. Tests in `commands.test.tsx` and `tiptap-editor/lib/hotkey-bindings.test.ts` enforce this, and `commands.test.tsx` also fails if any palette command is left without a hot key.
+
+**Adding a global hot key:** add `hotkey` and `shortcut` to its command in `commands.tsx`, check it against every table on this page (including [System OS Hotkeys](#system-os-hotkeys)), then list it here.
+</Note>
+
+**Typing is safe.** Single-key and <kbd>⇧</kbd>-letter hot keys never fire while the cursor is in a text field, the notes editor, or an open dialog or palette.
+
+## Command Palette
+
+The palette opens from anywhere signed in. Its tabs are **All**, **Quick Actions**, **Navigation**, **People**, **Collections** and **Companies**. The **All** tab starts with recent commands (or a few Quick Actions before you have any history) and a **Go to** group. Search or choose a category to see the full command list.
+
+The highlighted command expands inline with a short description, larger key badges, and a plain-language explanation: **press together** for modifier combinations, or **one key at a time** for sequences. Search also recognizes intent words, such as “draft” for Email Composer. Recent commands are stored locally per account.
+
+| Action | Mac | Windows | Notes |
+|---|---|---|---|
+| Open or close the Command Palette | <kbd>⌘</kbd> <kbd>K</kbd> | <kbd>Ctrl</kbd> <kbd>K</kbd> | Captured before any other handler, so it works from inside inputs too. |
+| Move through results | <kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>↑</kbd> / <kbd>↓</kbd> | Built into the palette (cmdk). |
+| Run the highlighted command | <kbd>Enter</kbd> | <kbd>Enter</kbd> | |
+| Close | <kbd>Esc</kbd> | <kbd>Esc</kbd> | |
+
+Defined in `src/features/command-palette/hooks/use-command-palette.ts` (the <kbd>⌘</kbd> <kbd>K</kbd> listener) and `src/features/command-palette/constants/commands.tsx` (every command below).
+
+## Navigation
+
+The palette's **Navigation** commands, in palette order. Each opens a workspace view with <kbd>G</kbd> then a letter, Superhuman's "Go to" gesture; press the second key within a second. See [View sequences](#view-sequences) for how the letters were chosen.
+
+| Command | Mac | Windows | Code | Notes |
+|---|---|---|---|---|
+| Discover | <kbd>G</kbd> then <kbd>D</kbd> | <kbd>G</kbd> then <kbd>D</kbd> | `g>d` | D for Discover. |
+| Outcomes | <kbd>G</kbd> then <kbd>O</kbd> | <kbd>G</kbd> then <kbd>O</kbd> | `g>o` | O for Outcomes. |
+| Leverage Loops | <kbd>G</kbd> then <kbd>L</kbd> | <kbd>G</kbd> then <kbd>L</kbd> | `g>l` | L for Leverage Loops. |
+| Collections | <kbd>G</kbd> then <kbd>C</kbd> | <kbd>G</kbd> then <kbd>C</kbd> | `g>c` |  |
+| Serendipity | <kbd>G</kbd> then <kbd>Y</kbd> | <kbd>G</kbd> then <kbd>Y</kbd> | `g>y` |  |
+| Activity | <kbd>G</kbd> then <kbd>G</kbd> | <kbd>G</kbd> then <kbd>G</kbd> | `g>g` | Home. |
+| Contacts | <kbd>G</kbd> then <kbd>P</kbd> | <kbd>G</kbd> then <kbd>P</kbd> | `g>p` |  |
+| Calendar | <kbd>0</kbd> <kbd>0</kbd> | <kbd>0</kbd> <kbd>0</kbd> | `calendar/shortcuts.ts` | Opens the Calendar view from anywhere; see [Calendar](#calendar). |
+| Email | <kbd>G</kbd> then <kbd>I</kbd> | <kbd>G</kbd> then <kbd>I</kbd> | `g>i` | Superhuman's own Go to Inbox. |
+| Teams | <kbd>G</kbd> then <kbd>K</kbd> | <kbd>G</kbd> then <kbd>K</kbd> | `g>k` |  |
+| Meeting Prep | <kbd>G</kbd> then <kbd>B</kbd> | <kbd>G</kbd> then <kbd>B</kbd> | `g>b` |  |
+| Deal Flow | <kbd>G</kbd> then <kbd>J</kbd> | <kbd>G</kbd> then <kbd>J</kbd> | `g>j` | Shows "Deal Flow is in development." |
+
+The palette's **People**, **Companies** and **Collections** tabs are search results, not commands, so they take no hot keys.
+
+### Calendar
+
+| Action | Keys | Where it works |
+|---|---|---|
+| Open Agenda side panel, on today | <kbd>0</kbd> | Anywhere signed in. On the Calendar route it opens the docked panel; elsewhere it opens as an overlay. |
+| Open the Calendar view | <kbd>0</kbd> <kbd>0</kbd> | Anywhere signed in. Press 0 twice within 400 ms. |
+
+The single <kbd>0</kbd> waits 400 ms before opening the agenda so a second <kbd>0</kbd> can cancel it; the agenda never flashes open on the way to the Calendar view. Defined in `src/features/calendar/shortcuts.ts`, installed by `CalendarSync`.
+
+### Activity (Orbits)
+
+| Action | Keys |
+|---|---|
+| Next day | <kbd>↑</kbd> |
+| Previous day | <kbd>↓</kbd> |
+
+Ignored while a card is open, while typing, and inside menus or dialogs; <kbd>↑</kbd> stops at today. The time-range dropdown shows the same two keys. Defined in `src/features/activities/components/orbits.tsx`.
+
+### Email
+
+| Action | Keys |
+|---|---|
+| Select the next thread | <kbd>↓</kbd> |
+| Select the previous thread | <kbd>↑</kbd> |
+
+Defined in `src/features/email-inbox/components/thread-list/thread-list.tsx`.
+
+## Quick Actions
+
+The palette's **Quick Actions**, in palette order. These work anywhere signed in, except inside text fields. Akira also appears in this group; it is listed under [Tools](#tools).
+
+| Action | Mac | Windows | Code |
+|---|---|---|---|
+| New Contact | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>C</kbd> | `alt+shift+c` |
+| New Company | <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Shift</kbd> <kbd>C</kbd> | `shift+c` |
+| Email Outreach Composer | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> | `mod+shift+e` |
+| Email Composer | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>E</kbd> | `mod+alt+e` |
+| Profile (your own person sheet) | <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Alt</kbd> <kbd>P</kbd> | `alt+p` |
+| Me (your own person sheet) | <kbd>⌥</kbd> <kbd>M</kbd> | <kbd>Alt</kbd> <kbd>M</kbd> | `alt+m` |
+| Note | <kbd>⇧</kbd> <kbd>N</kbd> | <kbd>Shift</kbd> <kbd>N</kbd> | `shift+n` |
+| Refresh Activities | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>R</kbd> | `mod+alt+r` |
+| X Followers & DMs | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>X</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>X</kbd> | `alt+shift+x` |
+| Merge Contacts | <kbd>⇧</kbd> <kbd>M</kbd> | <kbd>Shift</kbd> <kbd>M</kbd> | `shift+m` |
+| Collections Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> | `mod+alt+c` |
+| Projects & Tasks | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>P</kbd> | `mod+alt+p` |
+| Create Project | <kbd>⇧</kbd> <kbd>P</kbd> | <kbd>Shift</kbd> <kbd>P</kbd> | `shift+p` |
+| Create Task | <kbd>⇧</kbd> <kbd>T</kbd> | <kbd>Shift</kbd> <kbd>T</kbd> | `shift+t` |
+| Teams Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>T</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> | `mod+alt+t` |
+| New Collection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>.</kbd> | `mod+shift+period` |
+
+- **Email Outreach Composer** starts from the selected nodes when any are selected.
+- **New Collection** opens the selection preview when nodes are selected, otherwise the Collections Manager.
+- **Profile** and **Me** do the same thing today: both open your own person sheet.
+
+## Tools
+
+| Action | Mac | Windows | Code |
+|---|---|---|---|
+| Akira (Copilot) | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>O</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>O</kbd> | `mod+alt+o` |
+
+Only registered when the user has Copilot enabled (`copilot_enabled`).
+
+## View sequences
+
+The navigation keys follow Superhuman's "Go to" pattern (also used by Linear), so a Superhuman user already knows the gesture.
+
+- **Email is <kbd>G</kbd> then <kbd>I</kbd>**, Superhuman's own "Go to Inbox".
+- **Prefer memorable Orbiter initials:** <kbd>G</kbd> then <kbd>D</kbd> for Discover, <kbd>G</kbd> then <kbd>O</kbd> for Outcomes, and <kbd>G</kbd> then <kbd>L</kbd> for Leverage Loops. These replace G then F, G then U, and G then V. Press the two keys sequentially, not together.
+- **These three sequences belong to global navigation.** Superhuman uses them for Drafts, Other, and Label; those email actions are not currently bound in Orbiter. If added later, resolve their scope or choose different keys rather than registering competing handlers.
+- **A completed navigation sequence takes precedence over a Calendar view key.** Sequence listeners run in the capture phase and prevent the completed second key before view-level handlers run. <kbd>G</kbd> then <kbd>D</kbd> opens Discover without also switching Calendar to Day; a standalone <kbd>D</kbd> still selects Day view. An integration test covers both listener registration orders.
+- Other mnemonics: <kbd>P</kbd> people (Contacts), <kbd>C</kbd> Collections, <kbd>B</kbd> briefing (Meeting Prep), <kbd>G</kbd> home (Activity).
+
+The four actions that had none follow the palette's existing patterns: <kbd>⇧</kbd> plus a letter creates (Create Project <kbd>⇧</kbd> <kbd>P</kbd>, Create Task <kbd>⇧</kbd> <kbd>T</kbd>), <kbd>⌘</kbd> <kbd>⌥</kbd> plus a letter opens a manager (Projects & Tasks <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>P</kbd>), and X Followers & DMs takes <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>X</kbd> like New Contact.
+
+**How it works:** sequences are `react-hotkeys-hook` bindings written `g>i`, registered by the same `useCommandHotkeys` as every other palette key. A sequence resets after a second or on a wrong key, and never fires while typing in a text field. The view letters live in `VIEW_SEQUENCE_KEYS` in `commands.tsx`.
+
+## Calendar View
+
+On the Calendar route only. Single keys, ignored while typing, in a dialog, or with a modifier held.
+
+| Action | Keys |
+|---|---|
+| Go to today | <kbd>T</kbd> |
+| Day view | <kbd>D</kbd> |
+| Week view | <kbd>W</kbd> |
+| Month view | <kbd>M</kbd> |
+| Agenda view | <kbd>A</kbd> |
+| New event (open the scheduler) | <kbd>N</kbd> |
+| Previous period | <kbd>←</kbd> |
+| Next period | <kbd>→</kbd> |
+
+While an event is being dragged, these keys and <kbd>0</kbd> are swallowed so the drop targets don't page away. Defined in `src/features/calendar/components/calendar-shell.tsx` and `event-drag-provider.tsx`.
+
+## Collections
+
+| Action | Mac | Windows |
+|---|---|---|
+| Select every node on the canvas | <kbd>⌘</kbd> <kbd>A</kbd> | <kbd>Ctrl</kbd> <kbd>A</kbd> |
+| Clear the selection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>A</kbd> |
+
+Defined in `src/features/collections/components/collections-canvas.tsx`.
+
+## Composers and inputs
+
+| Where | Action | Keys |
+|---|---|---|
+| Discover query input, context panel refinement, Modify Outcome panel, "Help with…" (Fork in the Road) | Send | <kbd>Enter</kbd> |
+| Same inputs | New line | <kbd>⇧</kbd> <kbd>Enter</kbd> |
+| Suggestion composer | Preview, or copy when the footer is Copy | <kbd>⌘</kbd> <kbd>Enter</kbd> |
+| Suggestion composer | Close | <kbd>Esc</kbd> |
+| Natural-language date picker | Apply / cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |
+| Modify Outcome panel, account settings dialog, theme color picker, voice bar mic menu | Close | <kbd>Esc</kbd> |
+
+## Notes editor
+
+The rich-text editor (Tiptap) used for notes. These only fire with the cursor in the editor. The formatting keys are Tiptap's own bindings; the rest are bound by the toolbar buttons (see [How hot keys work](#how-hot-keys-work-in-the-app)).
+
+| Action | Mac | Windows |
+|---|---|---|
+| Bold / italic / underline | <kbd>⌘</kbd> <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> | <kbd>Ctrl</kbd> <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> |
+| Strikethrough | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>S</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>S</kbd> |
+| Inline code | <kbd>⌘</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>E</kbd> |
+| Superscript / subscript | <kbd>⌘</kbd> <kbd>.</kbd> / <kbd>⌘</kbd> <kbd>,</kbd> | <kbd>Ctrl</kbd> <kbd>.</kbd> / <kbd>Ctrl</kbd> <kbd>,</kbd> |
+| Heading 1–6 | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>1</kbd>–<kbd>6</kbd> |
+| Plain text (clear heading) | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>0</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>0</kbd> |
+| Bullet / numbered / task list | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>8</kbd> / <kbd>7</kbd> / <kbd>9</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>8</kbd> / <kbd>7</kbd> / <kbd>9</kbd> |
+| Blockquote | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>B</kbd> |
+| Code block | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> |
+| Align left / center / right / justify | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> |
+| Image align left / center / right | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> |
+| Text color / highlight | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd> / <kbd>H</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>T</kbd> / <kbd>H</kbd> |
+| Clear all formatting | <kbd>⌘</kbd> <kbd>\\</kbd> | <kbd>Ctrl</kbd> <kbd>\\</kbd> |
+| Slash commands | <kbd>⌘</kbd> <kbd>/</kbd> | <kbd>Ctrl</kbd> <kbd>/</kbd> |
+| Mention someone | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>2</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>2</kbd> |
+| Emoji picker (same as typing <kbd>:</kbd>) | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>;</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>;</kbd> |
+| Ask AI | <kbd>⌘</kbd> <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>J</kbd> |
+| Upload image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>I</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>I</kbd> |
+| Download image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>D</kbd> |
+| Duplicate block | <kbd>⌘</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>D</kbd> |
+| Copy block | <kbd>⌘</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>C</kbd> |
+| Copy link to block | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>L</kbd> |
+| Delete block | <kbd>Backspace</kbd> | <kbd>Backspace</kbd> |
+
+Defined as `*_SHORTCUT_KEY(S)` constants under `src/features/tiptap-editor/components/tiptap-ui/`.
+
+## Conflict history
+
+Fixed in `79928213` (2026-09-26):
+
+| Was | Problem | Now |
+|---|---|---|
+| New Collection `mod+shift+.` | Never fired: punctuation must be spelled by key name. | `mod+shift+period` (<kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd>) |
+| Editor slash menu `mod+/` | Never fired, same reason. | `mod+slash` (<kbd>⌘</kbd> <kbd>/</kbd>) |
+| Editor emoji picker <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | Fired together with Tiptap's align center. | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>;</kbd> (the <kbd>:</kbd> key) |
+| Editor clear formatting <kbd>⌘</kbd> <kbd>R</kbd> | Replaced browser reload in the editor. | <kbd>⌘</kbd> <kbd>\\</kbd>, as in Google Docs |
+| Editor copy link to block `mod+ctrl+l` | Off a Mac it became <kbd>Ctrl</kbd> <kbd>L</kbd>, the address bar. | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>L</kbd> |
+| Heading tooltips <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | Tiptap binds <kbd>⌘</kbd> <kbd>⌥</kbd>. | Tooltips show <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> |
+| Editor tooltips off a Mac | Showed "Mod" for the modifier. | Show "Ctrl" |
+
+Kept on purpose:
+
+| Keys | Why it stays |
+|---|---|
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd>, <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | Contextual: in the notes editor they are align center and code block; everywhere else Email Outreach and the Collections Manager. Palette hot keys never fire inside the editor, so the two never both run. |
+| <kbd>⌘</kbd> <kbd>D</kbd> in the editor | Duplicate block, the Notion convention; bookmarking still works outside the editor. |
+| <kbd>⌘</kbd> <kbd>A</kbd> on the Collections canvas | Selecting every node is the canvas's select-all. |
+| <kbd>⌥</kbd> <kbd>P</kbd> and <kbd>⌥</kbd> <kbd>M</kbd> | Two palette commands (Profile, Me) that both open your own person sheet; a product call, not a clash. |
+
+## SuperHuman Hotkeys
+
+export const Same = ({ children }) => (
+  <span style={{ color: "#16a34a", fontWeight: 600 }}>{children}</span>
+);
+
+export const Clash = ({ children }) => (
+  <span style={{ color: "#d97706", fontWeight: 600 }}>{children}</span>
+);
+
+Most Orbiter users already know Superhuman's keys, so the email and calendar features should reuse as many as possible. This is Superhuman Mail's own list ([v8, Mac edition](https://download.superhuman.com/Superhuman%20Keyboard%20Shortcuts.pdf)), mapped against Orbiter.
+
+- <Same>✓ Green</Same>: same keys, same job in Orbiter today.
+- <Clash>⚠ Amber</Clash>: Orbiter already uses these keys for something else. Resolve that before reusing them.
+- Uncolored: free to reuse.
+
+<Note>
+Superhuman is a desktop app; Orbiter runs in the browser. Keys the browser owns (<kbd>⌘</kbd> <kbd>N</kbd>, <kbd>⌘</kbd> <kbd>T</kbd>, <kbd>⌘</kbd> <kbd>W</kbd>, <kbd>⌘</kbd> <kbd>1</kbd>–<kbd>9</kbd>, <kbd>⌘</kbd> <kbd>=</kbd> / <kbd>-</kbd> / <kbd>0</kbd>, <kbd>⌘</kbd> <kbd>[</kbd> / <kbd>]</kbd>) cannot be reused, and <kbd>⌃</kbd> <kbd>1</kbd>–<kbd>9</kbd> switches macOS Spaces. Single-letter keys are safe to reuse because Orbiter never fires them while you are typing; the <kbd>G</kbd> then <kbd>X</kbd> sequences need a sequence handler like the Calendar's <kbd>0</kbd> <kbd>0</kbd>.
+</Note>
+
+### Actions
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| <Same>✓ Superhuman Command</Same> | <kbd>⌘</kbd> <kbd>K</kbd> | <Same>Command Palette, <kbd>⌘</kbd> <kbd>K</kbd></Same> |
+| Search | <kbd>/</kbd> | — |
+| Undo | <kbd>Z</kbd> | — |
+| Ask AI | <kbd>?</kbd> | — (notes editor: Ask AI is <kbd>⌘</kbd> <kbd>J</kbd>) |
+| Select Conversation | <kbd>X</kbd> | — |
+| Add to Selection | <kbd>⇧</kbd> <kbd>J</kbd> or <kbd>⇧</kbd> <kbd>K</kbd> | — |
+| Clear Selection | <kbd>Esc</kbd> | — |
+| <Same>✓ Select All From Here</Same> | <kbd>⌘</kbd> <kbd>A</kbd> | <Same>Collections: select every node</Same> |
+| <Clash>⚠ Select All</Clash> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> | <Clash>Collections: clear the selection</Clash> |
+
+### Conversations
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Mark Done (Archive) | <kbd>E</kbd> | — |
+| Mark Not Done | <kbd>⇧</kbd> <kbd>E</kbd> | — |
+| Remind Me (Snooze) | <kbd>H</kbd> | — |
+| Star | <kbd>S</kbd> | — |
+| Mark Read or Unread | <kbd>U</kbd> | — |
+| Trash | <kbd>#</kbd> | — |
+| Mark Spam | <kbd>!</kbd> | — |
+| <Clash>⚠ Mute</Clash> | <kbd>⇧</kbd> <kbd>M</kbd> | <Clash>Merge Contacts (global)</Clash> |
+| Unsubscribe | <kbd>⌘</kbd> <kbd>U</kbd> | — (notes editor: underline) |
+
+### Messages
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Compose | <kbd>C</kbd> | — |
+| Reply All | <kbd>Enter</kbd> | — |
+| Reply | <kbd>R</kbd> | — |
+| Forward | <kbd>F</kbd> | — |
+| Open Links & Attachments | <kbd>⌘</kbd> <kbd>O</kbd> | — |
+| Cycle through Links & Dates | <kbd>Tab</kbd> | — |
+| Expand Message | <kbd>O</kbd> | — |
+| Expand All Messages | <kbd>⇧</kbd> <kbd>O</kbd> | — |
+
+### Labels
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Add or Remove Label | <kbd>L</kbd> | — |
+| Remove Label | <kbd>Y</kbd> | — |
+| Remove Label, Next | <kbd>[</kbd> | — |
+| Remove Label, Previous | <kbd>]</kbd> | — |
+| Remove All Labels | <kbd>⇧</kbd> <kbd>Y</kbd> | — |
+| Move | <kbd>V</kbd> | — |
+
+### Filters
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Unread | <kbd>⇧</kbd> <kbd>U</kbd> | — |
+| Starred | <kbd>⇧</kbd> <kbd>S</kbd> | — |
+| Important | <kbd>⇧</kbd> <kbd>I</kbd> | — |
+| No Reply | <kbd>⇧</kbd> <kbd>R</kbd> | — |
+
+### Folders
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| <Same>✓ Go to Inbox / Important</Same> | <kbd>G</kbd> then <kbd>I</kbd> | <Same>Opens Email</Same> |
+| <Clash>⚠ Go to Other</Clash> | <kbd>G</kbd> then <kbd>O</kbd> | <Clash>Opens Outcomes (global)</Clash> |
+| Go to Starred | <kbd>G</kbd> then <kbd>S</kbd> | — |
+| <Clash>⚠ Go to Drafts</Clash> | <kbd>G</kbd> then <kbd>D</kbd> | <Clash>Opens Discover (global)</Clash> |
+| Go to Sent Mail | <kbd>G</kbd> then <kbd>T</kbd> | — |
+| Go to Done | <kbd>G</kbd> then <kbd>E</kbd> | — |
+| Go to Reminders | <kbd>G</kbd> then <kbd>H</kbd> | — |
+| Go to Muted | <kbd>G</kbd> then <kbd>M</kbd> | — |
+| Go to Snippets | <kbd>G</kbd> then <kbd>;</kbd> | — |
+| Go to Spam | <kbd>G</kbd> then <kbd>!</kbd> | — |
+| Go to Trash | <kbd>G</kbd> then <kbd>#</kbd> | — |
+| Go to All Mail | <kbd>G</kbd> then <kbd>A</kbd> | — |
+| <Clash>⚠ Go to Label</Clash> | <kbd>G</kbd> then <kbd>L</kbd> | <Clash>Opens Leverage Loops (global)</Clash> |
+
+### Calendar
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| <Same>✓ Open Day</Same> | <kbd>0</kbd> | <Same>Opens the Agenda side panel on today</Same> |
+| <Same>✓ Open Week</Same> | <kbd>0</kbd> then <kbd>0</kbd> | <Same>Opens the Calendar view</Same> |
+| <Same>✓ Today</Same> | <kbd>T</kbd> | <Same>Calendar view: go to today</Same> |
+| Previous Day / Week | <kbd>P</kbd> or <kbd>-</kbd> | — (Orbiter uses <kbd>←</kbd>) |
+| <Clash>⚠ Next Day / Week</Clash> | <kbd>N</kbd> or <kbd>=</kbd> | <Clash>Calendar view: new event</Clash> |
+| Create Event | <kbd>B</kbd> | — (Orbiter uses <kbd>N</kbd>) |
+
+### Format
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| <Same>✓ Bold</Same> | <kbd>⌘</kbd> <kbd>B</kbd> | <Same>Notes editor: bold</Same> |
+| <Same>✓ Italics</Same> | <kbd>⌘</kbd> <kbd>I</kbd> | <Same>Notes editor: italic</Same> |
+| <Same>✓ Underline</Same> | <kbd>⌘</kbd> <kbd>U</kbd> | <Same>Notes editor: underline</Same> |
+| <Clash>⚠ Hyperlink</Clash> | <kbd>⌘</kbd> <kbd>K</kbd> | <Clash>Command Palette, even inside the editor</Clash> |
+| Color | <kbd>⌘</kbd> <kbd>O</kbd> | — (notes editor uses <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd>) |
+| Strikethrough | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>X</kbd> | — (notes editor uses <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>S</kbd>) |
+| <Same>✓ Numbers</Same> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>7</kbd> | <Same>Notes editor: numbered list</Same> |
+| <Same>✓ Bullets</Same> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>8</kbd> | <Same>Notes editor: bullet list</Same> |
+| <Clash>⚠ Quote</Clash> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>9</kbd> | <Clash>Notes editor: task list (quote is <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd>)</Clash> |
+| <Same>✓ Indent List</Same> | <kbd>Tab</kbd> | <Same>Notes editor: indent list item</Same> |
+| <Same>✓ Outdent List</Same> | <kbd>⇧</kbd> <kbd>Tab</kbd> | <Same>Notes editor: outdent list item</Same> |
+| Increase Indent | <kbd>⌘</kbd> <kbd>]</kbd> | — (browser forward) |
+| Decrease Indent | <kbd>⌘</kbd> <kbd>[</kbd> | — (browser back) |
+
+### Compose
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| To | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>O</kbd> | — |
+| Cc | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | — |
+| Bcc | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> | — (notes editor: blockquote) |
+| From | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>F</kbd> | — |
+| Edit Subject | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>S</kbd> | — (notes editor: strikethrough) |
+| Edit Message | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>M</kbd> | — |
+| <Clash>⚠ Attach</Clash> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> | <Clash>Collections: clear the selection</Clash> |
+| Discard Draft | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>,</kbd> | — |
+| Move Contacts to Bcc | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>I</kbd> | — (notes editor: upload image) |
+| Remind Me | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>H</kbd> | — (notes editor: highlight) |
+| Send Later | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>L</kbd> | — (notes editor: align left) |
+| Use Snippet inline | <kbd>;</kbd> | — |
+| Use Snippet | <kbd>⌘</kbd> <kbd>;</kbd> | — |
+| <Same>✓ Insert Emoji</Same> | <kbd>:smile</kbd> | <Same>Notes editor: typing <kbd>:</kbd> opens emoji</Same> |
+| <Same>✓ Send</Same> | <kbd>⌘</kbd> <kbd>Enter</kbd> | <Same>Suggestion composer: preview / copy</Same> |
+| Send & Mark Done | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Enter</kbd> | — |
+| Instant Send | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd> | — (text fields: redo) |
+
+### Navigation
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Superhuman Focus | <kbd>→</kbd> <kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> | — (Activity uses <kbd>↑</kbd> / <kbd>↓</kbd> for days; Calendar <kbd>←</kbd> / <kbd>→</kbd> for periods) |
+| Next Split | <kbd>Tab</kbd> | — |
+| Previous Split | <kbd>⇧</kbd> <kbd>Tab</kbd> | — |
+| Open Conversation | <kbd>Enter</kbd> | — |
+| Next / Previous Conversation | <kbd>J</kbd> or <kbd>K</kbd> | — (Email uses <kbd>↓</kbd> / <kbd>↑</kbd>) |
+| Next / Previous Message | <kbd>N</kbd> or <kbd>P</kbd> | — |
+| Scroll Down | <kbd>Space</kbd> | — |
+| Scroll Up | <kbd>⇧</kbd> <kbd>Space</kbd> | — |
+| Jump to Top / Bottom | <kbd>⌘</kbd> <kbd>↑</kbd> or <kbd>⌘</kbd> <kbd>↓</kbd> | — |
+| New Window | <kbd>⌘</kbd> <kbd>N</kbd> | Browser-owned |
+| New Tab | <kbd>⌘</kbd> <kbd>T</kbd> | Browser-owned |
+| Next Tab | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>]</kbd> | Browser-owned |
+| Previous Tab | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>[</kbd> | Browser-owned |
+| Switch Tabs | <kbd>⌘</kbd> <kbd>1–9</kbd> | Browser-owned |
+| Close Tab | <kbd>⌘</kbd> <kbd>W</kbd> | Browser-owned |
+| Switch Accounts | <kbd>⌃</kbd> <kbd>1–9</kbd> | macOS Spaces |
+| Increase Font Size | <kbd>⌘</kbd> <kbd>=</kbd> | Browser zoom |
+| Decrease Font Size | <kbd>⌘</kbd> <kbd>-</kbd> | Browser zoom |
+| Reset Font Size | <kbd>⌘</kbd> <kbd>0</kbd> | Browser zoom |
+| Copy Page Link | <kbd>⌃</kbd> <kbd>/</kbd> | — |
+| <Same>✓ Back</Same> | <kbd>Esc</kbd> | <Same>Closes the open panel or dialog</Same> |
+
+### Pop Out Compose
+
+| Superhuman action | Keys | Orbiter today |
+|---|---|---|
+| Pop Draft In or Out | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>P</kbd> | — |
+| Pop Out Reply | <kbd>⇧</kbd> <kbd>R</kbd> | — |
+| Pop Out Reply-all | <kbd>⇧</kbd> <kbd>Enter</kbd> | — (Orbiter inputs: new line) |
+| <Clash>⚠ Pop Out New Message</Clash> | <kbd>⇧</kbd> <kbd>C</kbd> | <Clash>New Company (global)</Clash> |
+| Pop Out Forward | <kbd>⇧</kbd> <kbd>F</kbd> | — |
+| Pop Out a Draft & Search | <kbd>⌘</kbd> <kbd>/</kbd> | — (notes editor: slash menu) |
+| Switch to or from a Draft | <kbd>⌘</kbd> <kbd>D</kbd> | — (notes editor: duplicate block) |
+
+### Reuse notes
+
+- **Calendar is nearly there.** <kbd>0</kbd>, <kbd>0</kbd> <kbd>0</kbd> and <kbd>T</kbd> already match. To finish: make <kbd>B</kbd> create an event and <kbd>P</kbd> / <kbd>N</kbd> (or <kbd>-</kbd> / <kbd>=</kbd>) move back and forward, which means moving "new event" off <kbd>N</kbd>.
+- **Email has only <kbd>G</kbd> then <kbd>I</kbd> so far.** Superhuman's single-letter set (<kbd>E</kbd>, <kbd>H</kbd>, <kbd>R</kbd>, <kbd>F</kbd>, <kbd>C</kbd>, <kbd>J</kbd> / <kbd>K</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>#</kbd>, <kbd>L</kbd>, <kbd>/</kbd>) is free inside Orbiter and can be scoped to the Email view.
+- **Three folder sequences are already global navigation:** <kbd>G</kbd> then <kbd>D</kbd> (Discover), <kbd>G</kbd> then <kbd>O</kbd> (Outcomes), and <kbd>G</kbd> then <kbd>L</kbd> (Leverage Loops). They cannot also open email Drafts, Other, or Label without an explicit scope change.
+- **Four additional global keys block a straight copy:** <kbd>⇧</kbd> <kbd>C</kbd> (New Company), <kbd>⇧</kbd> <kbd>M</kbd> (Merge Contacts), <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> (Collections clear selection) and <kbd>⌘</kbd> <kbd>K</kbd> (palette, so no hyperlink key in editors). Either scope Superhuman keys to the Email view so they win there, or move the palette keys.
+
+## System OS Hotkeys
+
+Shortcuts macOS and the browser already own. A web page cannot override most of them, so an Orbiter hot key on one of these combos will never fire. Avoid them.
+
+### macOS system
+
+| Action | Keys |
+|---|---|
+| Spotlight search | <kbd>⌘</kbd> <kbd>Space</kbd> |
+| Switch input source | <kbd>⌃</kbd> <kbd>Space</kbd> |
+| Switch apps | <kbd>⌘</kbd> <kbd>Tab</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> |
+| Switch windows of the same app | <kbd>⌘</kbd> <kbd>`</kbd> |
+| Quit app | <kbd>⌘</kbd> <kbd>Q</kbd> |
+| Hide app / hide others | <kbd>⌘</kbd> <kbd>H</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>H</kbd> |
+| Minimize window / minimize all | <kbd>⌘</kbd> <kbd>M</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>M</kbd> |
+| Close window / close all | <kbd>⌘</kbd> <kbd>W</kbd> / <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>W</kbd> |
+| Force Quit | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>Esc</kbd> |
+| Lock screen | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>Q</kbd> |
+| Log out | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Q</kbd> |
+| Full screen | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>F</kbd> / <kbd>🌐</kbd> <kbd>F</kbd> |
+| Emoji & Symbols viewer | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>Space</kbd> / <kbd>🌐</kbd> <kbd>E</kbd> |
+| Screenshot: whole screen / area / toolbar | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>3</kbd> / <kbd>4</kbd> / <kbd>5</kbd> |
+| Screenshot to clipboard (area) | <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>4</kbd> |
+| Mission Control | <kbd>⌃</kbd> <kbd>↑</kbd> |
+| App windows (App Exposé) | <kbd>⌃</kbd> <kbd>↓</kbd> |
+| Move between Spaces | <kbd>⌃</kbd> <kbd>←</kbd> / <kbd>⌃</kbd> <kbd>→</kbd> |
+| Switch to Space 1–9 (if enabled) | <kbd>⌃</kbd> <kbd>1</kbd>–<kbd>9</kbd> |
+| Show Desktop | <kbd>F11</kbd> / <kbd>⌘</kbd> <kbd>F3</kbd> |
+| Show or hide the Dock | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>D</kbd> |
+| Notification Center | <kbd>🌐</kbd> <kbd>N</kbd> |
+| Control Center | <kbd>🌐</kbd> <kbd>C</kbd> |
+| Quick Note | <kbd>🌐</kbd> <kbd>Q</kbd> |
+| Show the Help menu search | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>/</kbd> |
+| App settings | <kbd>⌘</kbd> <kbd>,</kbd> |
+| Dictation | <kbd>🌐</kbd> twice, or <kbd>🎤</kbd> |
+| VoiceOver on/off | <kbd>⌘</kbd> <kbd>F5</kbd> |
+| Accessibility shortcuts panel | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>F5</kbd> |
+
+### macOS text editing
+
+These work in every text field, including Orbiter's, so don't bind them inside inputs.
+
+| Action | Keys |
+|---|---|
+| Cut / copy / paste | <kbd>⌘</kbd> <kbd>X</kbd> / <kbd>C</kbd> / <kbd>V</kbd> |
+| Paste and match style | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>V</kbd> |
+| Undo / redo | <kbd>⌘</kbd> <kbd>Z</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd> |
+| Select all | <kbd>⌘</kbd> <kbd>A</kbd> |
+| Find / find next / find previous | <kbd>⌘</kbd> <kbd>F</kbd> / <kbd>⌘</kbd> <kbd>G</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>G</kbd> |
+| Save / print / open | <kbd>⌘</kbd> <kbd>S</kbd> / <kbd>⌘</kbd> <kbd>P</kbd> / <kbd>⌘</kbd> <kbd>O</kbd> |
+| Start or end of line | <kbd>⌘</kbd> <kbd>←</kbd> / <kbd>⌘</kbd> <kbd>→</kbd> |
+| Start or end of document | <kbd>⌘</kbd> <kbd>↑</kbd> / <kbd>⌘</kbd> <kbd>↓</kbd> |
+| Previous or next word | <kbd>⌥</kbd> <kbd>←</kbd> / <kbd>⌥</kbd> <kbd>→</kbd> |
+| Delete previous word | <kbd>⌥</kbd> <kbd>Delete</kbd> |
+| Delete to start of line | <kbd>⌘</kbd> <kbd>Delete</kbd> |
+| Emacs-style moves | <kbd>⌃</kbd> <kbd>A</kbd> / <kbd>E</kbd> / <kbd>K</kbd> / <kbd>F</kbd> / <kbd>B</kbd> / <kbd>N</kbd> / <kbd>P</kbd> |
+
+### Browser (Chrome)
+
+Orbiter runs in the browser, which claims these before the page sees them.
+
+| Action | Keys |
+|---|---|
+| New tab / new window / new incognito window | <kbd>⌘</kbd> <kbd>T</kbd> / <kbd>⌘</kbd> <kbd>N</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>N</kbd> |
+| Reopen closed tab | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd> |
+| Close tab | <kbd>⌘</kbd> <kbd>W</kbd> |
+| Jump to tab 1–8 / last tab | <kbd>⌘</kbd> <kbd>1</kbd>–<kbd>8</kbd> / <kbd>⌘</kbd> <kbd>9</kbd> |
+| Next / previous tab | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>→</kbd> / <kbd>←</kbd> |
+| Address bar | <kbd>⌘</kbd> <kbd>L</kbd> |
+| Reload / hard reload | <kbd>⌘</kbd> <kbd>R</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>R</kbd> |
+| Back / forward | <kbd>⌘</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>]</kbd> |
+| Bookmark page / bookmarks bar | <kbd>⌘</kbd> <kbd>D</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
+| History / downloads | <kbd>⌘</kbd> <kbd>Y</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>J</kbd> |
+| Developer tools / console / inspect element | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>I</kbd> / <kbd>J</kbd> / <kbd>C</kbd> |
+| Zoom in / out / reset | <kbd>⌘</kbd> <kbd>+</kbd> / <kbd>⌘</kbd> <kbd>-</kbd> / <kbd>⌘</kbd> <kbd>0</kbd> |
+| Find in page | <kbd>⌘</kbd> <kbd>F</kbd> |
