@@ -1,0 +1,935 @@
+---
+title: "Deal Flow UI Design"
+description: "Feature requirements for Deal Flow v1, workshopped before the tables, APIs and screens are designed."
+icon: "pen-ruler"
+mode: "wide"
+---
+
+<Check>
+**Requirements workshop · September 26, 2026.** Every open question is answered and recorded in the [Decided](#decided) table. The table and API review is done on [Deal Flow Tables](/guides/open-work/deal-flow-v1/deal-flow-tables), and the list of views, modals and components to design is under [UI design](#ui-design). Screens come next. Planning only: no application code.
+</Check>
+
+[Deal Flow v1](/guides/open-work/deal-flow-v1) · [Deal Flow Tables](/guides/open-work/deal-flow-v1/deal-flow-tables) · [Deal Flow Build Plan](/guides/open-work/deal-flow-v1/deal-flow-build-plan)
+
+## Feature Requirements
+
+Deal Flow v1 gives a person a board of opportunities for one goal, such as raising a seed round or selling to design partners. Each opportunity is a deal about a person or company already in Orbiter. Orbiter's AI keeps deals moving: it notices what has gone quiet, prepares the next step, and asks before it acts.
+
+### Starting point
+
+The backend for this feature is built. The UI is not.
+
+| Layer | State on September 26, 2026 |
+| --- | --- |
+| Backend | The Projects feature on `orbiter-backend` main, built September 21 to 23, covers projects, personal ToDos, tasks, pipelines, stages with entry checklists, deals, the people on a deal, a paged Kanban board, activity history, AI next-step proposals, authorized actions and reminders. The actions include email drafts and sends, double opt-in introductions and meeting briefs. The status callouts on [Revised Projects, Tasks & Deals](/guides/open-work/roadmap/projects-tasks) still describe September 21, before the routes and workers landed. |
+| API | 77 Projects endpoints, in the API Reference tab under Orbiter Backend, Projects group. The backend OpenAPI was last synced on September 25. |
+| Starter pipelines | **Investors:** Sourced, Contacted, Meeting, Diligence, Term sheet, then Invested or Passed. **Sales:** Lead, Qualified, Proposal, Negotiation, then Closed won or Closed lost. |
+| AI review | Reads a project's title, description and next action, its open tasks, and its open deals with their stages. Returns at most five next-step proposals, each with a rationale drawn from that data. It does not see email, calendar, notes or relationships, and it cannot propose a stage move. |
+| Frontend | The workspace view switcher already has a **Deal Flow** tab. It opens an "in development" dialog; no board exists. |
+
+### Terminology
+
+The words Deal Flow uses. The backend column maps each term to its name in the built Projects backend, for the table and API review.
+
+| Term | Definition | Backend name |
+| --- | --- | --- |
+| Deal Flow | The product area: the Deal Flow tab, its flows and their deals. | Projects feature |
+| Flow | A set of stages that deals move through toward an outcome. A flow belongs to a project and starts from a template or from scratch. Sales tools call this a pipeline. | `projects.pipelines` |
+| Stage | One step in a flow and one column on its board. Every stage has a name, a description, requirements to move to the next stage, suggested actions, a stale threshold, and a fixed meaning: backlog, not started, in progress, won or lost. | `projects.pipeline_stages` |
+| Stage description | One or two sentences on what the stage means and what happens in it. | None yet |
+| Requirements to advance | The minimum that must be true before a deal can move to the next stage, such as a decision maker named or terms agreed. Each is checked from evidence or confirmed by a person. | The next stage's `criteria`, checked on entry |
+| Stage context | What a deal carries from its earlier stages: evidence, confirmations, notes and meeting outcomes. It also shows which stage comes next and which of its requirements are still missing. People and the AI read the same context. | Activity history and attestations; no summary yet |
+| Outcome | The result a flow leads to, such as a round closed or a contract signed. Different from an Orbiter Outcome request, though a template can pair with one. | The won stage category |
+| Deal Flow Template | A defined set of stages to an outcome, including each stage's description, requirements and suggested actions. Starting a flow copies it. Orbiter ships two, and users save their own. | Starter files in `assets/pipelines`; no saved templates yet |
+| Shipped template | A template included with Orbiter: Funding Round Raise or Enterprise Sale. | Replaces the built Investors and Sales starters (decision 39) |
+| Custom stage, custom flow | A stage or flow a user creates or edits. A flow started from a template can add, edit, remove or redefine any stage. Custom stages can be reused in other flows, and any flow can be saved as a template. | Pipeline and stage create and edit |
+| Stage library | Custom stages saved for reuse. Any flow can add a stage from it. | None yet |
+| Project | The goal a set of flows serves, such as "Seed round". Sharing is set here, and every deal belongs to one. | `projects.projects` |
+| Deal | One opportunity with one person or company, moving through one flow. | `projects.deals` |
+| Target | The person or company a deal is about. One flow can mix deals about people and deals about companies. | Deal `entity_type` and `node_uuid` |
+| Deal people | The other people and companies involved in a deal, each with a role. | `projects.deal_stakeholders` |
+| Next step | The one dated action that moves a deal forward now. | Deal `next_action` and linked tasks |
+| Stale | No response from the other side for longer than the stage allows. | Stage `stale_after_days` |
+| Pass | Closing a deal as lost, marked "not now" or "no". | A move to a `canceled` stage with `lost_reason` |
+| Soft interest | Funding Round Raise only: interest that is not yet a definite offer, recorded with its conditions, such as "needs a lead". Committed, Signed and Wired are stages. | None yet |
+| Tier | A manual priority label, such as A, B or C. | None yet |
+| Source | Where a deal came from. | None yet |
+| Suggestion | An AI idea with its reason: a next step or a proposed change. Nothing happens until a person acts. | `projects.agent_suggestions` |
+| Action | Work Orbiter carries out after a person approves it, such as sending an email or requesting an introduction. | `projects.action_runs` |
+| Review | One AI pass over a project's deals that produces suggestions. | `projects.agent_runs` |
+
+### Shipped templates
+
+Two templates ship with Orbiter, and both are dogfood: Orbiter's own raise and its own enterprise deals run on them first. Each stage lists its meaning, a description, the requirements to move to the next stage, what it adds to the deal's context, and its suggested actions. Both stage lists were approved as written on September 26, 2026 (decision 39).
+
+#### Funding Round Raise
+
+**Outcome:** the round closes and each investor's money arrives. **Each deal:** one investor, an angel or a fund. **Stages:** Targeted, Intro requested, First meeting, Diligence, Partner meeting, Committed, Documents, Signed, then Wired, or Passed from any stage.
+
+Committed, Signed and Wired are separate stages because that is where founders over-count progress. Soft interest, such as a yes that depends on finding a lead, stays in its stage and is recorded apart (DL-12). A lead investor goes through every stage. An angel or follow-on investor usually skips Partner meeting and commits on the lead's terms. In a SAFE round each investor closes separately; a priced round signs and closes together through the lead.
+
+<Steps>
+<Step title="Targeted">
+**Meaning:** backlog, the entry stage. **Stale after:** no threshold.
+
+The investor has been researched and fits this round.
+
+**To move to Intro requested:**
+
+- Stage, check size and sector fit this round.
+- No competing portfolio company.
+- The fund is still investing.
+- A decision maker is named: a partner, or the angel.
+- A path in is chosen: a named connector, or cold outreach.
+
+**Adds to the deal's context:** check-size range, whether they lead, thesis, conflicts, fund timing, paths in and tier.
+
+**Suggested actions:** rank investors by the likelihood of a yes times the value of that yes; find the strongest connector.
+</Step>
+<Step title="Intro requested">
+**Meaning:** not started. **Stale after:** 7 days without a reply.
+
+A warm introduction has been asked for or made, or cold outreach has gone out.
+
+**To move to First meeting:**
+
+- The investor has replied.
+- A meeting is on the calendar.
+
+**Adds to the deal's context:** who made the introduction and when, warm or cold, and the reply date.
+
+**Suggested actions:** brief and nudge the connector; follow up after 3 to 4 days, then again 3 to 4 days later. Silence is the most common way investors say no.
+</Step>
+<Step title="First meeting">
+**Meaning:** in progress. **Stale after:** 14 days without a dated next step.
+
+The first pitch to a decision maker.
+
+**To move to Diligence:**
+
+- The meeting happened with a partner or the angel.
+- There is a dated next step, or an explicit ask to invest.
+- The investor's decision process is recorded.
+
+**Adds to the deal's context:** attendees and titles, process and timeline, objections, what they asked for, lead or follow, and check range.
+
+**Suggested actions:** send the recap and materials the same day; ask what happens next.
+</Step>
+<Step title="Diligence">
+**Meaning:** in progress. **Stale after:** 14 days without a new request.
+
+Follow-up meetings, the data room, and customer and reference calls.
+
+**To move to Partner meeting:**
+
+- Everything requested has been delivered.
+- References are supplied and briefed.
+- An internal champion books the partner meeting. An angel asks for terms instead.
+
+**Adds to the deal's context:** requests and their status, references called, open questions and the champion. Deck views are not progress.
+
+**Suggested actions:** share the data room; brief references before investors call them.
+</Step>
+<Step title="Partner meeting">
+**Meaning:** in progress. **Stale after:** 2 days without a decision.
+
+The full partnership hears the pitch and decides. Angels skip this stage.
+
+**To move to Committed:**
+
+- An explicit yes from the partnership, or from the angel.
+
+An explicit no moves the deal to Passed. A request for more diligence keeps it here, with a date.
+
+**Adds to the deal's context:** date, attendees, decision and stated reason.
+
+**Suggested actions:** ask when the decision will come. Most funds decide within a day.
+</Step>
+<Step title="Committed">
+**Meaning:** in progress. **Stale after:** 7 days without documents sent.
+
+The founder has accepted a definite offer.
+
+**To move to Documents, one of:**
+
+- Lead investor: the term sheet is signed by both sides.
+- SAFE: the exact amount and valuation cap, or uncapped, plus any discount, confirmed in writing with no ranges or conditions.
+- Follow-on investor: their allocation on the lead's terms, confirmed in writing.
+
+**Adds to the deal's context:** amount, instrument, valuation or cap and discount, option pool, liquidation preference, board seat, pro rata, the exclusivity end date and the confirming message.
+
+**Suggested actions:** send the documents the same day.
+</Step>
+<Step title="Documents">
+**Meaning:** in progress. **Stale after:** 30 days, or the exclusivity end date.
+
+Lawyers draft the final documents while the investor's confirmatory diligence runs.
+
+**To move to Signed:**
+
+- The documents are final and out for signature.
+- Closing conditions are scheduled, such as filings and consents.
+
+**Adds to the deal's context:** lawyers on each side, the documents, the diligence checklist and the target closing date.
+
+**Suggested actions:** keep the data room ready; a ready data room saves about a week.
+</Step>
+<Step title="Signed">
+**Meaning:** in progress. **Stale after:** 10 days without the wire.
+
+Both sides have signed, and wire instructions have gone out.
+
+**To move to Wired:**
+
+- Countersigned documents are in hand.
+- Wire details are verified.
+
+**Adds to the deal's context:** signing date, signing entity and when wire instructions were sent.
+
+**Suggested actions:** chase the wire. A SAFE is not binding until it is funded.
+</Step>
+<Step title="Wired">
+**Meaning:** won, the outcome.
+
+The money has arrived.
+
+**To enter Wired:**
+
+- The bank confirms the full amount.
+- For a priced round, the charter is filed and escrow is released.
+- The cap table is updated.
+
+**Adds to the deal's context:** amount received against amount committed, date received and side letters.
+
+**Suggested actions:** add the investor to investor updates.
+</Step>
+</Steps>
+
+**Passed** is the lost exit, reachable from any stage. It records the stage the deal left from, who ended it, whether the no was explicit or silent, and the reasons. A "not now" also records the metric or date that would reopen it, and a revisit date.
+
+Proposed pass reasons: wrong stage or check size; outside the thesis; competing portfolio company; fund not investing; market too small; traction too early; team gaps; no internal champion; terms not agreed; no reply.
+
+The stale thresholds for First meeting and Diligence are Orbiter starting points; the others follow the sources. Sources: [YC on seed rounds](https://www.ycombinator.com/blog/how-to-raise-a-seed-round/), [YC Handshake](https://ycombinator.com/handshake), [YC SAFE](https://www.ycombinator.com/safe), [YC diligence checklist](https://www.ycombinator.com/library/3h-series-a-diligence-checklist), [NFX](https://www.nfx.com/post/the-non-obvious-guide-to-fundraising), [CRV on passes](https://www.crv.com/content/why-investors-pass), [CRV on term sheets](https://www.crv.com/content/term-sheet), [First Round](https://review.firstround.com/heres-what-you-can-really-expect-when-pitching-your-seed-stage-startup-at-a-vc-partner-meeting/), [Paul Graham](https://paulgraham.com/fr.html), [Hustle Fund](https://www.hustlefund.vc/post/angel-squad-how-to-handle-investor-rejection-turning-no-into-future-yes), [Hustle Commons](https://www.hustlecommons.com/blog/how-to-follow-up-after-your-first-pitch), [Visible](https://visible.vc/product/pipelines/), [on soft commitments](https://www.admnt.com/blog/soft-commitments-they-suck-why-when-and-how).
+
+#### Enterprise Sale
+
+**Outcome:** a signed contract. **Each deal:** one opportunity with one enterprise customer: a sale with several stakeholders, a security review and procurement. The target is usually the company, though a person can be the target; the people involved join as deal people. **Stages:** Target account, Discovery, Qualification, Solution fit, Technical validation, Business case and proposal, Security, legal and procurement, Verbal commit, then Closed won, or Closed lost from any stage.
+
+Requirements are things the buyer did, not seller activity, and they accumulate from stage to stage. A deal moves back only with a named reason, such as champion lost, budget frozen or evaluation paused (FL-20). Target account is an Orbiter addition, so sourced accounts have somewhere to land; the research starts at Discovery. Typical win probabilities are kept for weighted values later (FL-09).
+
+<Steps>
+<Step title="Target account">
+**Meaning:** backlog, the entry stage. **Stale after:** no threshold.
+
+An account that fits the ideal customer profile and has not engaged yet.
+
+**To move to Discovery:**
+
+- The account fits the ideal customer profile.
+- A first contact or a warm path in is identified.
+- A first meeting is booked.
+
+**Adds to the deal's context:** fit notes, the path in and the source.
+
+**Suggested actions:** find the strongest warm path; request an introduction.
+</Step>
+<Step title="Discovery">
+**Meaning:** in progress. **Typical win probability:** 10%. **Stale after:** 7 days with nothing scheduled.
+
+First meetings to learn the situation, the pain, its impact and why now.
+
+**To move to Qualification:**
+
+- The buyer confirmed a written recap of pain, stakeholders, next steps and timeline.
+- A critical event, the buyer's own deadline, is identified.
+- The economic buyer is named, or a path to them is identified.
+- A scoping meeting is booked.
+
+**Adds to the deal's context:** situation, pain, impact, critical event and decision; attendees and roles; the status quo and alternatives. Pain and competition start the MEDDPICC record.
+
+**Suggested actions:** send the recap; raise budget early; map the stakeholders.
+</Step>
+<Step title="Qualification">
+**Meaning:** in progress. **Typical win probability:** 25%. **Stale after:** 7 days with nothing scheduled.
+
+The buyer confirms this is a funded priority and that doing nothing has a cost.
+
+**To move to Solution fit:**
+
+- The economic buyer is named, and the champion agrees to arrange a meeting with them.
+- The buyer has quantified baseline and target metrics.
+- Decision criteria and the decision process, including steps, people, dates and any veto, are documented and played back to the champion.
+- Competition is listed, including doing nothing.
+- The budget source and the critical-event date are confirmed.
+
+**Adds to the deal's context:** the MEDDPICC fields with their evidence; why now, why do anything and why us; the buying group, often 5 to 16 people.
+
+**Suggested actions:** ask for the economic buyer meeting; draft the mutual action plan; walk away if the gaps persist.
+</Step>
+<Step title="Solution fit">
+**Meaning:** in progress. **Typical win probability:** 40%. **Stale after:** 7 days with nothing scheduled.
+
+A demo tailored to the decision criteria, for the wider buying group.
+
+**To move to Technical validation:**
+
+- The economic buyer is engaged.
+- Several people at the buyer are engaged, not just one contact.
+- The buyer confirms the required capabilities are met.
+- The champion is tested: they did something costly for the deal, such as arranging access or sharing internal information.
+- Written proof-of-concept success criteria, an owner and an end date are agreed, or the buyer waives the proof of concept.
+- The MEDDPICC record is complete.
+
+**Adds to the deal's context:** a decision-criteria scorecard, attendees by role, the champion-test evidence and the proof-of-concept plan.
+
+**Suggested actions:** send the security pack before it is asked for; scope the proof of concept; share the draft action plan.
+</Step>
+<Step title="Technical validation">
+**Meaning:** in progress. **Typical win probability:** 60%. **Stale after:** the agreed end date.
+
+A time-boxed proof of concept or pilot against the agreed criteria.
+
+**To move to Business case and proposal:**
+
+- The buyer's technical owner signs off that the criteria were met.
+- The ROI measures are validated.
+- Both sides agree to move to a proposal.
+- The contracting steps are mapped: legal, security, procurement and signature.
+- The security questionnaire is done or underway.
+
+**Adds to the deal's context:** criteria against results, and the security documents requested.
+
+**Suggested actions:** hold a results readout with the economic buyer; share the SOC 2 report under NDA; draft the business case. A technical win alone does not guarantee a deal.
+</Step>
+<Step title="Business case and proposal">
+**Meaning:** in progress. **Typical win probability:** 75%. **Stale after:** 7 days with nothing scheduled, or any push of the close date.
+
+A quantified business case and a commercial proposal go to the economic buyer.
+
+**To move to Security, legal and procurement:**
+
+- The economic buyer agrees the business case.
+- The buyer names the seller as the selected vendor.
+- A close plan with dates through signature and go-live is reviewed with the champion, the economic buyer, finance and purchasing.
+- The procurement process and implementation plan are confirmed.
+
+**Adds to the deal's context:** proposal versions, the close plan and any RFP status.
+
+**Suggested actions:** send the master agreement and data processing agreement as editable documents; start the buyer's procurement intake.
+</Step>
+<Step title="Security, legal and procurement">
+**Meaning:** in progress. **Typical win probability:** 90%. **Stale after:** 30 days.
+
+The buyer runs security, privacy, legal and procurement reviews and supplier onboarding, often in parallel.
+
+**To move to Verbal commit:**
+
+- The security review is approved, with any exceptions written down.
+- A data processing agreement is signed where personal data is processed.
+- Business and legal terms are agreed, and the paperwork is ready to route.
+- The authorized signatory and the signature date are confirmed.
+
+**Adds to the deal's context:** the owner, status and date of each review; a redline log; discount approvals; whether a purchase order is required.
+
+**Suggested actions:** turn redlines around fast; register as a supplier early. Legal often takes one to three weeks, each security or privacy review 4 to 14 days, and procurement 2 to 4 weeks.
+</Step>
+<Step title="Verbal commit">
+**Meaning:** in progress. **Typical win probability:** 95%. **Stale after:** 10 business days.
+
+Terms are agreed verbally and the documents are final.
+
+**To move to Closed won:**
+
+- The documents are fully signed.
+- A purchase order is issued, if one is required.
+- Supplier registration is complete.
+- The go-live plan and success metrics are handed to onboarding.
+
+**Adds to the deal's context:** signed documents, annual and total contract value, term, signatories, purchase order and go-live date.
+
+**Suggested actions:** chase signatures and the purchase order; book the kickoff.
+</Step>
+<Step title="Closed won">
+**Meaning:** won, the outcome.
+
+The contract is signed and approved.
+</Step>
+</Steps>
+
+**Closed lost** is the lost exit, reachable from any stage. It records the reasons, the stage at loss, notes and a re-engagement plan, and a competitive loss names the competitor. No decision is the most common loss: sources put it at 40 to 60% of deals.
+
+Proposed loss reasons: no decision, preferring the status quo; no decision, unable to choose; competitor; budget or priority; no economic buyer; champion left; failed validation; security, legal or procurement blocker; price or terms; critical event passed.
+
+MEDDPICC by stage:
+
+| Element | First captured | Confirmed by the end of |
+| --- | --- | --- |
+| Pain | Discovery | Discovery |
+| Competition | Discovery | Qualification, revisited in Business case and proposal |
+| Metrics | Discovery | Qualification for the baseline, Technical validation for proof, Business case and proposal for agreement |
+| Economic buyer | Discovery | Qualification when named, Solution fit when met |
+| Decision criteria | Qualification | Solution fit, with technical criteria in Technical validation |
+| Decision process | Qualification | Qualification when mapped, Business case and proposal as the close plan |
+| Champion | Qualification | Solution fit, when tested |
+| Paper process | Solution fit | Technical validation when mapped, Security, legal and procurement when complete |
+
+The 75% and 95% probabilities and the 30-day and 10-business-day thresholds are unverified starting points. Sources: [GitLab sales stages](https://handbook.gitlab.com/handbook/sales/commercial/comm-sales-opp-stages/), [GitLab go-to-market resources](https://handbook.gitlab.com/handbook/sales/field-operations/gtm-resources/), [GitLab procurement](https://handbook.gitlab.com/handbook/finance/procurement/), [Ebsta and Pavilion benchmarks](https://www.ebsta.com/ebsta-pavilion-b2b-sales-benchmarks-2024/), [Winning by Design SPICED](https://winningbydesign.com/spiced-framework/), [Winning by Design Bowtie](https://winningbydesign.com/wp-content/uploads/2026/02/The-Bowtie-A-Proposed-Standard.pdf), [MEDDICC decision process](https://meddicc.com/what-is-meddpicc/decision-process), [MEDDICC paper process](https://meddicc.com/what-is-meddpicc/paper-process), [MEDDICC economic buyer](https://meddicc.com/what-is-meddpicc/economic-buyer), [MEDDICC on champions](https://meddicc.com/resources/no-champion-no-deal), [Force Management on champions](https://www.forcemanagement.com/seller-blog/coaches-vs-champions-know-the-difference), [JOLT Effect](https://www.jolteffect.com/blog/what-is-the-jolt-effect), [Gong on budget timing](https://www.gong.io/blog/data-reveals-the-best-time-to-talk-price-and-budget), [Gong on close dates](https://www.gong.io/resources/labs/your-crm-close-date-isnt-giving-you-the-full-picture-heres-what-youre-missing/), [Presales Collective on proofs of concept](https://www.presalescollective.com/content/part-3-dont-derail-the-proof-of-concept), [GDPR Article 28](https://gdpr-info.eu/art-28-gdpr/), [HubSpot default stages](https://knowledge.hubspot.com/object-settings/set-up-and-customize-pipelines), [SaaStr on cycle length](https://www.saastr.com/how-long-it-roughly-take-to-close-a-deal-in-saas-and-why/).
+
+### Who uses Deal Flow
+
+| Flow | Who runs it | Each deal is about | Value means | Shipped template | Related Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Fundraising | A founder raising a round | An investor: an angel or a fund | Check size | Funding Round Raise | [Find investors](/guides/open-work/suggestion-core-concepts/find-investors) |
+| Investing | An investor or fund team sourcing companies | A startup or its founder | Investment amount | Custom flow | [Find investment opportunities](/guides/open-work/suggestion-core-concepts/find-investment-opportunities) |
+| Sales | A founder or sales team | A customer company or a buyer | Contract value | Enterprise Sale | [Prospect customers and clients](/guides/open-work/suggestion-core-concepts/prospect-customers-clients) |
+| Partnerships | A founder or business development lead | A partner company or person | Optional | Custom flow | [Strategic partnerships](/guides/open-work/suggestion-core-concepts/strategic-partnerships) |
+| Hiring | A founder or hiring manager | A candidate | Optional | Custom flow | [Hire key talent](/guides/open-work/suggestion-core-concepts/hire-key-talent) |
+
+### How teams use deal flow today
+
+A September 2026 review of practitioner and research sources on how founders, investors and sales teams run pipelines. Each row ends with what it asks of Deal Flow. Sources marked vendor come from a company that sells the tool.
+
+#### Founders raising a round
+
+| Practice | What it asks of Deal Flow | Sources |
+| --- | --- | --- |
+| Talk to many investors in parallel, tiered by likelihood and check size, and practise on lower tiers first. A round can take dozens of pitches. | A tier on each deal (DL-07) and a board that holds a long list. | [Paul Graham](https://www.paulgraham.com/fr.html), [NFX](https://www.nfx.com/post/nfx-fundraising-manual), [CRV](https://www.crv.com/content/seed-funding) |
+| Keep the tracker simple: status, who owns each intro, objections and notes, updated daily. | A light deal record with an intro owner, and no setup before the first deal (NF-06). | [NFX](https://www.nfx.com/post/nfx-fundraising-manual), [folk, vendor](https://www.folk.app/articles/how-using-our-own-product-helped-us-streamline-our-fundraising-process) |
+| Batch meetings against deadlines so interest and offers arrive together. | A raise view with phase deadlines and meetings per week (RP-05). | [NFX](https://www.nfx.com/post/nfx-fundraising-manual), [YC Series A guide, summarized by Visible](https://visible.vc/blog/y-combinator-series-a/) |
+| Ask for warm, double opt-in introductions with a forwardable email. About 10% of VC deals start as cold inbound. | An introduction record on the deal: best path, who asks, the forwardable draft, consent status and a reminder to chase (RS-07). | [Gompers et al.](https://corpgov.law.harvard.edu/2019/08/20/how-do-venture-capitalists-make-decisions/), [Fred Wilson](https://avc.com/2009/11/the-double-optin-introduction/), [Alex Iskold](https://www.alexiskold.net/2015/06/24/how-to-write-a-forwardable-introduction-email/) |
+| End every meeting on process: the next step, what they need, who else must meet, and when. | Capture the next step and the asks right after a meeting (AI-04, TK-01). | [NFX](https://www.nfx.com/post/nfx-fundraising-manual) |
+| Treat soft interest, signed commitments and wired money as different things. A yes that depends on finding a lead is close to a no. | Committed, Signed and Wired as separate stages, soft interest recorded apart, and round totals (DL-12, RP-02). | [Paul Graham](https://www.paulgraham.com/fr.html), [Elizabeth Yin](https://elizabethyin.com/2018/12/19/how-i-raised-my-11-5m-vc-fund/) |
+| Send the deck first and open the data room late, with a separate link per investor. | Record which link each investor received and when (DP-07). | [CRV](https://www.crv.com/content/data-room-setup), [DocSend](https://www.dropbox.com/resources/docsend-pitch-deck-research) |
+| Leads now take a larger share of seed rounds, leaving room for fewer followers. | The round tracker shows the lead's share and the allocation left (RP-02). | [SaaStr on Carta data](https://www.saastr.com/its-not-just-you-lead-vcs-are-taking-more-and-more-of-the-round) |
+
+#### Investors sourcing and deciding
+
+| Practice | What it asks of Deal Flow | Sources |
+| --- | --- | --- |
+| Most deals come through networks, outbound work and other investors. A firm screens about 200 companies a year for a handful of investments. | A source on every deal (DL-06) and fast triage of a long list. | [Gompers et al.](https://corpgov.law.harvard.edu/2019/08/20/how-do-venture-capitalists-make-decisions/) |
+| Triage with a simple score and decide quickly. | A screening checklist in an Investing starter (FL-10). | [Hustle Fund data](https://elizabethyin.com/2024/08/19/data-on-how-we-invest-at-hustle-fund/) |
+| Move from a champion's first meeting to a partner meeting, then an investment committee vote backed by a memo. | Investing stages that match this sequence, with the memo on the deal (DP-06). | [NFX](https://www.nfx.com/post/nfx-fundraising-manual), [Inside a Monday partners meeting](https://sutton.substack.com/p/take-a-step-inside-a-monday-partners), [Bessemer memos](https://www.bvp.com/memos) |
+| Diligence takes about 120 hours and 10 reference calls per closed deal. | A diligence checklist that includes reference calls (TK-03). | [Ilya Strebulaev](https://ilyastrebulaev.substack.com/p/due-diligence-what-investors-actually) |
+| A pass is either "not now" or "never". | A pass type and a revisit date (FL-08, TK-05). | [CRV](https://www.crv.com/content/why-investors-pass) |
+| Team coverage comes from captured email and meetings, and relationship strength decides who makes the ask. | Automatic capture (AC-02), team coverage (RS-04) and strength (RS-03). | [Affinity case study, vendor](https://www.affinity.co/case-studies/bain-capital-ventures), [Value Add VC](https://valueaddvc.com/blog/affinity-crm-for-venture-capital-a-founder-and-vcs-honest-review) |
+
+#### Sales teams
+
+| Practice | What it asks of Deal Flow | Sources |
+| --- | --- | --- |
+| Share a qualification language such as MEDDPICC or SPICED, including the buyer's critical event. | Qualification checklist presets (AI-22). | [MEDDICC](https://meddicc.com/meddpicc-sales-methodology-and-process), [Winning by Design](https://winningbydesign.com/spiced-framework/) |
+| Move a deal to the next stage on what the buyer did, not on the seller's activity. | Stage checklist items that name buyer evidence (FL-05). | [Force Management](https://www.forcemanagement.com/blog/five-must-haves-for-every-sales-process) |
+| Agree a dated next step. Across 8,382 deals, the close rate was 20% when next steps were discussed and 5% when they were not. | A next step with a date on every deal (TK-01). | [Gong Labs](https://www.gong.io/blog/driving-next-steps-isnt-enough-this-is-what-really-moves-deals-forward) |
+| Multi-thread. Won deals had about twice as many buyer contacts. | People on the deal (DL-03), a single-threaded flag (AI-20) and Reach more people (AI-07). | [Gong](https://www.gong.io/blog/data-shows-top-reps-dont-just-sell-they-orchestrate-with-ai) |
+| Keep a mutual action plan with the buyer: steps, owners and dates. | A close plan shared with the buyer (CO-07). | [Outreach, vendor](https://www.outreach.ai/resources/blog/how-to-use-mutual-action-plans) |
+| Hold separate forecast calls, pipeline scrubs and deal reviews. | A weekly review view: what changed, slipped dates, missing next steps (RP-06). | [Dave Kellogg](https://kellblog.com/2021/05/10/a-ten-point-sales-management-framework-for-enterprise-saas-startups/) |
+| Loss reasons in the CRM matched the buyer's own account only 15% of the time. | Several reasons plus free text (FL-08). | [Clozd](https://www.clozd.com/blog/5-lies-your-crm-is-telling-you-about-your-buyers) |
+| Most reps now use AI for research, meeting prep and follow-ups. | Meeting briefs and drafted follow-ups (AI-01, AI-03). | [HubSpot report, vendor](https://blog.hubspot.com/sales/hubspot-sales-strategy-report), [Gong, vendor](https://www.gong.io/blog/we-measured-the-roi-of-ai-in-sales-heres-how-it-really-impacts-your-deals) |
+
+#### Pain points across all three
+
+- **Nobody trusts hand-entered data.** In a 2025 Validity survey, 76% of respondents said less than half of their CRM data was accurate and complete ([Validity](https://finance.yahoo.com/news/validity-releases-state-crm-data-130000354.html)). Investor teams report hours of CRM upkeep every week ([Affinity, vendor](https://www.affinity.co/blog/pipeline-management)). Capture has to be automatic.
+- **Interest is misread, and passes are silent.** Founders hear yes when it was maybe, and slow or patchy replies usually mean a pass ([NFX](https://www.nfx.com/post/nfx-fundraising-manual), [CRV](https://www.crv.com/content/why-investors-pass)). Stale should mean silence from the other side.
+- **The list runs dry.** Keeping the top of the funnel full for months was Elizabeth Yin's main lesson after 345 meetings ([Elizabeth Yin](https://elizabethyin.com/2018/12/19/how-i-raised-my-11-5m-vc-fund/)). Sourcing suggestions (AI-12) feed the first stage.
+- **Too many tools and nudges.** Independent evidence on which nudges people ignore is thin, and claims about alert fatigue come only from vendors. Keep nudges few, explained and capped (AI-23).
+- **Cost shuts out solo users.** Investor CRMs start at about $20K a year, too much for angels and solo founders ([Value Add VC](https://valueaddvc.com/blog/affinity-crm-for-venture-capital-a-founder-and-vcs-honest-review)). A light entry point matters (NF-06).
+
+### What current tools ship
+
+A September 2026 scan of help centers, changelogs and product pages for sales CRMs (HubSpot, Pipedrive, Close, Salesforce) and investor CRMs (Affinity, Attio, DealCloud, 4Degrees, Harmonic, folk, Visible). It checks the requirements below against what users already expect.
+
+| Area | What is now standard | Examples |
+| --- | --- | --- |
+| Pipelines and stages | Several pipelines, editable stages, a default win probability per stage, required fields when a deal enters a stage, and guidance text per stage. Some tools can also block skipped stages and backward moves. | [HubSpot pipelines](https://knowledge.hubspot.com/object-settings/set-up-and-customize-pipelines), [HubSpot pipeline rules](https://knowledge.hubspot.com/object-settings/set-up-pipeline-rules), [Pipedrive probability](https://support.pipedrive.com/en/article/probability-in-pipedrive), [Pipedrive required fields](https://support.pipedrive.com/en/article/required-fields), [Salesforce Path](https://trailhead.salesforce.com/content/learn/modules/leads_opportunities_lightning_experience/visualize-success-with-path-and-kanban) |
+| Views | Kanban with count and value totals per column, collapsible stages, table views and shared saved views. | [Attio Kanban](https://attio.com/help/reference/managing-your-data/views/create-and-manage-kanban-views), [Affinity, August 2026](https://www.affinity.co/blog/affinity-product-releases-august-2026) |
+| Activity capture | Email and calendar synced onto the deal, with first, last and next interaction dates. | [Attio](https://attio.com/help/reference/attio-101/productivity/communications-intelligence) |
+| Stale deals | Two designs. Fixed days per stage, reset by any activity ([Pipedrive rotting](https://support.pipedrive.com/en/article/the-rotting-feature)). Or relative to history: "stalled" at 20% longer than the stage's average, plus "no activity scheduled" and "stale close date" views ([HubSpot](https://knowledge.hubspot.com/prospecting/create-and-manage-deals-in-the-sales-workspace)). | Pipedrive, HubSpot |
+| Won and lost | Reasons chosen from a list, with optional free text, feeding reports. | [Pipedrive lost reasons](https://support.pipedrive.com/en/article/lost-reasons) |
+| Inbound capture | A forwarding or BCC address that creates a deal from an email and its attachments. | [Attio forwarding](https://attio.com/help/reference/email-calendar/email-forwarding) |
+| Relationship strength | Standard in investor CRMs: a score from contact recency and frequency, and the strongest connection on the team. | [Affinity](https://support.affinity.co/s/article/Leveraging-your-Connections-and-Relationship-Strengths) |
+| Confidential deals | Restricted deals appear as masked rows to everyone else, so pipeline counts stay right. | [Affinity](https://support.affinity.co/s/article/Restricted-Opportunities) |
+| Founder tools | Deck links with per-slide read time, access gating and data rooms. | [Visible](https://visible.vc/product/pitch-decks/) |
+| Duplicates | Duplicate people and companies are detected, but none of the tools checked can merge two deals. | [HubSpot](https://knowledge.hubspot.com/records/manage-duplicate-records) |
+
+| AI pattern | What leading tools do | Examples |
+| --- | --- | --- |
+| Next best action | Ranked next steps per deal with one-click drafts, calls or status changes. Nothing runs without a click. | [HubSpot deal progression](https://knowledge.hubspot.com/records/move-deals-forward-with-deal-progression), [Close Pipeline Guidance](https://www.close.com/changelog/pipeline-guidance) |
+| Risk with reasons | A deal score with its top positive and negative factors, or alerts for single-threaded deals, pushed close dates and falling activity. | [HubSpot deal scores](https://knowledge.hubspot.com/records/use-deal-scores), [Salesforce Pipeline Inspection](https://trailhead.salesforce.com/content/learn/modules/sell-smarter-with-pipeline-inspection/understand-deal-health-with-insights-and-scores) |
+| Follow-ups | Find inactive threads with an open action item and draft the follow-up. The person always sends. | [folk Follow-up Assistant](https://help.folk.app/en/articles/10304768-follow-up-assistant) |
+| Meeting prep | Briefs overnight or on demand: relationship history, deal context and news. | [Affinity](https://www.affinity.co/blog/introducing-affinity-ascend) |
+| Post-meeting updates | Current value, proposed value, confidence and a link to the source note, applied only on approval. Salesforce also offers an autonomous mode. | [Affinity agents](https://support.affinity.co/s/article/Working-with-Affinity-agents), [Salesforce](https://www.salesforce.com/sales/ai-sales-agent/) |
+| Warm intros | Ranked introduction paths and drafted outreach, never sent automatically. Connections are also inferred from shared work and investment history. | [Affinity in 2026](https://support.affinity.co/s/article/Affinity-in-2026) |
+| Timing signals | Alerts on funding rounds, leadership changes and saved searches. | [Harmonic Scout](https://harmonic.ai/scout), [HubSpot Prospecting Agent](https://www.hubspot.com/products/sales/ai-prospecting-agent) |
+| Chat over the pipeline | Answers across records, email and calls. Every write needs a confirming click. | [Ask Attio](https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio) |
+| Document extraction | Fields proposed from a pitch deck or deal document, never overwriting values that already exist. | [4Degrees](https://www.4degrees.ai/blog/introducing-ai-document-intelligence-for-private-market-deal-teams) |
+| Outside assistants | MCP servers let Claude, ChatGPT and other assistants read and update CRM data with the user's permissions. | [Pipedrive MCP](https://www.pipedrive.com/en/newsroom/pipedrive-launches-native-mcp-server-bringing-crm-workflows-directly-into-ai-assistants) |
+
+What this means for Deal Flow v1:
+
+- **Much of the "AI" nudging is rules.** Pipedrive states its [Pulse feed](https://support.pipedrive.com/en/article/pulse-feed) uses fixed rules and time triggers. Rules pick the deals; a model drafts and explains.
+- **Approval screens have converged.** Current value, proposed value, the source and approval one field at a time. No silent overwrites.
+- **Stage checks usually stop at the UI.** Pipedrive's required fields are not enforced on imports, bulk edits, API calls or automations. Orbiter's backend already runs the same checks for an agent's move as for a drag.
+- **Relationships separate investor CRMs from sales CRMs.** Orbiter's graph, warm paths and How I Know records are the ground to build on.
+
+### How to read the requirements
+
+- **ID** gives each requirement a stable name for workshop notes and decisions.
+- **Proposed** is `v1` or `Later`. It is a proposal for the workshop, not a decision.
+- **API today** compares the requirement with the built Projects API: **Built**, **Partial**, **Not yet** or **UI only**. Table and API changes are decided after the requirements are agreed.
+
+### 1. Flows and stages
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| FL-01 | Keep several flows in a project and switch between them, for example a round raise and design partners for one company. | v1 | Built: list and create pipelines per project. |
+| FL-02 | Start a flow from a template or from blank. | v1 | Built: Investors and Sales starters ship. |
+| FL-03 | Add, edit, remove, reorder or redefine any stage, including in a flow started from a template. Removing a stage that still holds deals asks where those deals go. | v1 | Built: stage create, edit, reorder and archive with a replacement stage. A stage's won, lost or open meaning cannot change once deals have used it. |
+| FL-04 | Each stage keeps a fixed meaning (backlog, not started, in progress, won or lost), so renaming a stage never breaks reporting. Every flow has one entry stage and at least one won and one lost stage. | v1 | Built: stage categories derive open, won or lost. |
+| FL-05 | Stage entry checklist: what must be true before a deal enters a stage, such as the target identified, a decision maker named, a field filled, a task done, an action succeeded or a person's confirmation. A move with gaps shows the gaps and the prepared fixes. | v1 | Built: six check types, plus a confirm route for human checks. |
+| FL-06 | A stale threshold per stage, such as 14 days in Contacted, drives aging on cards and the AI review. | v1 | Partial: each stage returns its threshold and each deal its stage entry time; no stale flag is computed. |
+| FL-07 | Each stage suggests its typical next action, such as "Draft the follow-up" in Contacted. | v1 | Built: stage action guidance. |
+| FL-08 | Lost and passed reasons: one or more from a short list per template, editable per flow, plus free text. A pass is marked "not now" or "no". | v1 | Partial: a free-text reason is required on a lost move. |
+| FL-09 | Win probability per stage, for a weighted value of the flow. | Later | Not yet: forecasting is outside the backend's first release. |
+| FL-10 | More shipped templates: Investing, Partnerships and Hiring. | Later | Not yet: only the Investors and Sales starters ship, and there is no investing pipeline kind. |
+| FL-11 | Copy a flow into another project. | Later | Built: copy route. |
+| FL-12 | Flag a deal that has sat in a stage much longer than that stage's own average. | Later | Not yet. |
+| FL-13 | Optional stage rules: block skipped stages or backward moves. | Later | Not yet. |
+| FL-14 | Edit each stage's requirements, suggested actions and stale threshold, per flow. | v1 | Built: stage edit covers all three. |
+| FL-15 | Every stage has a description: one or two sentences on what it means and what happens in it. | v1 | Not yet: stages have no description field. |
+| FL-16 | Every stage lists its requirements to advance: the minimum that must be true to move to the next stage, shown on the stage as, for example, "To move to Committed". | v1 | Built: six check types, stored as the next stage's entry checklist. |
+| FL-17 | Stage context: at every stage, a deal shows what happened in its earlier stages and which requirements for the next stage are still missing. People and the AI read the same context. | v1 | Partial: activity history and confirmations exist, and a move evaluates the next stage; the review reads neither. |
+| FL-18 | When a deal leaves a stage, the AI drafts a short summary of what was learned and agreed there from the stage's activity. The person can edit it, and later stages carry it forward. | v1 | Not yet. |
+| FL-19 | A deal that jumps ahead must meet the requirements of every stage it passes. | v1 | Partial: a move checks only the destination stage. |
+| FL-20 | Moving a deal back to an earlier stage records a reason, such as champion lost, budget frozen or evaluation paused. | v1 | Partial: moves are recorded in activity; a reason is required only when closing as lost or reopening. |
+
+### 2. Templates
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| TP-01 | Two templates ship included, Funding Round Raise and Enterprise Sale, defined under [Shipped templates](#shipped-templates). They are the dogfood templates for testing and building. | v1 | Partial: two starters ship, Investors and Sales, with different stages. |
+| TP-02 | A template names its outcome and its won and lost end stages. | v1 | Partial: every flow needs a won and a lost stage; there is no outcome field. |
+| TP-03 | Starting a flow from a template copies every stage, with its description, requirements to advance, suggested actions and stale threshold. | v1 | Partial: starters seed an editable copy; stage descriptions do not exist yet. |
+| TP-04 | Create custom stages and custom flows, from scratch or by editing a copy of a template. | v1 | Built: flow and stage create and edit. |
+| TP-05 | Save any flow, including one started from a template, as a template with a name and an outcome. | v1 | Not yet: the Projects spec has no template storage, only flow copy. |
+| TP-06 | A template library: the shipped templates plus saved ones, each previewing its stages and requirements before use. | v1 | Not yet. |
+| TP-07 | A saved template is private to its creator, or shared with their organization. | v1 | Not yet. |
+| TP-08 | Editing a template never changes flows already created from it. | v1 | Built for copies: a copy does not receive later edits. |
+| TP-09 | Shipped templates carry a version. A newer version is offered to existing flows, never forced. | Later | Partial: starters carry a key and a version. |
+| TP-10 | A stage library: save a custom stage with its description, requirements, suggested actions and stale threshold, and add it to any other flow. | v1 | Not yet: every stage belongs to one flow. |
+
+### 3. Deals
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| DL-01 | A deal is about one person or company already in Orbiter: an angel, a fund, a customer, a startup or a candidate. One flow can mix deals about people and deals about companies. | v1 | Built: the target is a person or a company, and flows do not restrict it. |
+| DL-02 | Core fields: title, owner, value and currency, expected close date, next action, blocked reason and description. | v1 | Built. |
+| DL-03 | Several people or companies on a deal, each with a role: decision maker, champion, influencer, blocker or other. | v1 | Built: deal people can be people or companies. |
+| DL-04 | Warn, without blocking, when the same person or company is already in the flow. | v1 | Built: duplicate warning on write. |
+| DL-05 | Close as won or lost with a reason, and reopen with the history kept. | v1 | Built. |
+| DL-06 | Record where the deal came from: inbound, a referral from a named person, a Leverage Loop, an Outcome match, an event or outbound. | v1 | Not yet. |
+| DL-07 | A manual tier, such as A, B or C. The AI may propose a tier, with its reasons. | v1 | Not yet: deals have no priority field. |
+| DL-08 | Custom fields per flow, such as check size range, lead or follow, round, product or seats. | Later | Not yet. |
+| DL-09 | Several deals for one target over time, such as a seed and a Series A with the same fund. | v1 | Built: targets are not globally unique. |
+| DL-10 | Archive a deal to hide it without closing it. | v1 | Built. |
+| DL-11 | Merge two deals that turn out to be the same opportunity. | Later | Not yet. |
+| DL-12 | Soft interest on Funding Round Raise deals: interest that is not yet a definite offer, recorded with its conditions, such as "needs a lead". Committed, Signed and Wired are stages, not fields. | v1 | Not yet. |
+| DL-13 | Role labels per template over the five built roles, such as Partner and Associate for investors or Hiring manager for hiring. | v1 | Partial: five fixed roles exist; labels are not configurable. |
+| DL-14 | Add a target that is not in Orbiter yet by name, website or LinkedIn URL, and let enrichment fill it in. | v1 | Partial: person and company create and URL lookup routes exist; a deal needs a resolved target first. |
+| DL-15 | A value type per flow: one-time, or recurring per year. | Later | Not yet. |
+
+### 4. Board and table views
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| VW-01 | Kanban board: stages as columns with a deal count, won and lost columns collapsed by default, and columns that load in pages. | v1 | Built: board read with per-column counts and paging. |
+| VW-02 | Card: target photo and name, owner, value, expected close date, days in stage, next action, blocker, and one or two ready next steps. | v1 | Partial: the card has the deal and its target; next steps need a separate suggestions read. |
+| VW-03 | Drag a card to another stage. The move runs the same checklist as any other move, and a conflict refreshes the card instead of overwriting a teammate's change. | v1 | Built: move and reorder with version conflicts. |
+| VW-04 | Total value per column. | v1 | Not yet: counts only. |
+| VW-05 | Table view with sorting, inline edits and bulk actions: move, assign and archive. | v1 | Partial: the deal list filters by pipeline, stage and archived state; no sort, search or bulk commands. |
+| VW-06 | Filters: my deals, stale, next step overdue, close date window and tier. | v1 | Not yet: the board takes no filters. |
+| VW-07 | Search deals by name, in the tab and from the command palette. | v1 | Not yet. |
+| VW-08 | Saved views, such as "Stale in Diligence" or "Closing this quarter". | Later | Not yet. |
+| VW-09 | One list of all my deals across projects and flows. | v1 | Not yet. |
+| VW-10 | Keyboard: open, create and move cards, with a keyboard alternative for every drag. Shortcuts are registered on [Hot Keys](/guides/hot-keys). | v1 | UI only. |
+| VW-11 | Phone layout: one stage at a time, with quick stage and next-step updates. | Later | UI only. |
+
+### 5. Deal panel
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| DP-01 | A side panel per deal: target header, stage progress, value and dates, owner, the next stage's checklist, next steps, tasks, people, timeline, notes and files. | v1 | Partial: deal, people, tasks, suggestions and activity are readable; notes and files cannot attach to a deal. |
+| DP-02 | Stage history with the time spent in each stage. | v1 | Partial: stage moves are recorded in activity; durations are not summarized. |
+| DP-03 | The target's enriched profile, reusing the person and company side panels: funding, team and investors for a company; role and history for a person. | v1 | Built: person and company reads. |
+| DP-04 | "How I know them" for the target and each person on the deal, visible only to the viewer. | v1 | Built: the board card carries the viewer's contact record and stored relationship paths. |
+| DP-05 | Notes on a deal, visible to the project's audience. | v1 | Not yet: notes link to people and companies, not deals. |
+| DP-06 | Files on a deal: deck, data room link, term sheet. | Later | Not yet. |
+| DP-07 | Share a deck or data room from a deal and see who viewed it. | Later | Not yet. |
+
+### 6. Activity and timeline
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| AC-01 | Deal timeline: stage moves, edits, tasks, adopted suggestions, actions with their delivery state, and recorded progress. | v1 | Built: project activity filtered by deal. |
+| AC-02 | Emails and meetings with the target and the deal's people appear on the deal automatically. Teammates see that contact happened, with who and when; the content stays with the mailbox owner unless shared. | v1 | Not yet: activity exists per contact and never enters the shared deal timeline. |
+| AC-03 | Last contact and next meeting on every card, computed for the viewer. | v1 | Not yet. |
+| AC-04 | Record progress in one line, such as "Sent the data room", which moves the deal's last-progress date. | v1 | Built: deal progress route. |
+| AC-05 | Log a meeting's outcome from the calendar event. | Later | Not yet. |
+| AC-06 | Stale means silence from the other side: days since their last reply or meeting, not since our last edit. | v1 | Not yet: depends on AC-02. |
+| AC-07 | Capture controls: exclude personal threads, domains or people from deal capture. | v1 | Not yet. |
+
+### 7. Next steps, tasks and reminders
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| TK-01 | Every open deal has a next step with a date. A deal without one is flagged. | v1 | Partial: the next action is text without a date; dated work lives in linked tasks. |
+| TK-02 | Create and link tasks from a deal. They also show in the project and in My Tasks. | v1 | Built. |
+| TK-03 | A stage checklist can require a task, such as a diligence review with reference calls before Term sheet. | v1 | Built: task checks keyed by a stable work key. |
+| TK-04 | Reminders to the deal owner: due soon, overdue, check in and blocked too long. Quiet hours and digests are set per person. | v1 | Built: reminders and preferences. |
+| TK-05 | "Not now" closes the deal as Passed, with the metric or date that would reopen it and a revisit date that creates a check-in reminder. | v1 | Partial: check-in reminders exist; a pass records only a free-text reason. |
+
+### 8. Relationships and sourcing
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| RS-01 | Warm path to the target: who can introduce the viewer, and how each connector knows the target. | v1 | Partial: stored paths ride on the card for the viewer; they are not ranked or explained. |
+| RS-02 | Request a double opt-in introduction from a deal through the Warm Intro workspace, and record the outcome on the deal. | v1 | Partial: the Projects backend has its own introduction actions; the Warm Intro workspace is planned separately. |
+| RS-03 | Relationship signals with the target and each person on the deal: last contact, meetings, two-way threads and momentum. No single strength score (Deal Flow Tables, T11). | v1 | Partial: the viewer's How I Know record is readable, and the interaction log holds the signals; no reader exposes them to deals yet. |
+| RS-04 | Team coverage: which teammates know the target, and how well. | Later | Not yet. |
+| RS-05 | Signals on targets, such as new funding, job changes, news, posts and shared events. | Later | Not yet for deals. |
+| RS-06 | Add targets from Orbiter's own suggestions: Leverage Loop suggestions, investor thesis matches and Discover results. | v1 | Partial: Leverage Loop import is an internal command with no route; thesis match routes exist. |
+| RS-07 | An introduction record on the deal: the best path, who is asking, the forwardable draft, consent status and a reminder to chase. | v1 | Partial: introduction actions record consent and sends. |
+| RS-08 | Add a passed investor to an update list for periodic investor updates. | Later | Not yet. |
+| RS-09 | Start a flow from an Outcome request: its suggested people or companies become first-stage deals. | v1 | Not yet: the import reads Leverage Loop suggestions only. |
+
+### 9. Sharing and collaboration
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| CO-01 | A flow belongs to a project. The project is private by default and can be shared with a team or another organization as viewer or editor. | v1 | Built. |
+| CO-02 | The UI respects each role; for example, a viewer cannot move cards. | v1 | Built: project, pipeline, stage, deal, deal people and suggestion responses carry the caller's rights. |
+| CO-03 | Reassign a deal's owner. | v1 | Built. |
+| CO-04 | Comments and @mentions on a deal. | Later | Not yet. |
+| CO-05 | The board updates live when a teammate moves a card. | Later | Partial: conflicts are detected; changes are not pushed. |
+| CO-06 | A confidential deal inside a shared project: visible only to named people, and a masked row for everyone else so counts stay right. | v1 | Not yet. |
+| CO-07 | A close plan shared with the buyer: steps, owners and dates. | Later | Not yet. |
+| CO-08 | The tab follows the active mode: company mode lists projects owned by or shared with that organization, and personal mode lists the user's own projects. | v1 | Partial: the project list filters by status and search; there is no organization or mode filter. |
+
+### 10. Reporting
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| RP-01 | Flow summary: count and value per stage, conversion between stages, average days in stage and win rate. | v1 | Not yet. |
+| RP-02 | Round tracker for Funding Round Raise flows: the target amount; committed, signed and wired totals from the stages; soft interest shown apart; the lead's share; the allocation left; and investors by stage. | v1 | Not yet: a project has no target amount. |
+| RP-03 | Forecast by close date and stage probability. | Later | Not yet. |
+| RP-04 | Lost and passed reasons, and which sources produce won deals. | Later | Not yet. |
+| RP-05 | A raise view for fundraising: phase deadlines, meetings per week and interest by tier. | Later | Not yet. |
+| RP-06 | A weekly review view: what changed, close dates that slipped, deals missing a next step, and new deals. | v1 | Partial: activity history exists; no summary read. |
+
+### 11. Import and capture
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| IN-01 | Add a person or company to a flow from their side panel, Discover, the contacts table (several at once) or a suggestion card. | v1 | Partial: single deal create exists; no bulk create. |
+| IN-02 | Import an existing investor list or deal list from a spreadsheet, matching rows to people and companies. | v1 | Not yet. Contact imports exist. |
+| IN-03 | Create a deal from an email, such as a forwarded pitch deck or an introduction thread. | Later | Not yet. |
+| IN-04 | Export deals. | Later | Not yet. |
+| IN-05 | Import from another CRM, such as HubSpot, Affinity or Attio. | Later | Not yet. |
+| IN-06 | Outside AI assistants, through an MCP server, can read and update flows with the user's own permissions. | Later | Not yet. |
+
+### 12. AI-assisted deal progression
+
+The AI's job is to keep every open deal moving: notice what has stalled, prepare the next step, and make acting on it one click.
+
+#### Rules for every AI suggestion
+
+| Rule | What it means | API today |
+| --- | --- | --- |
+| AI proposes; a person decides | No stage move, send or close happens without a person's explicit action. | Built: reviews write proposals only; each action needs exact authorization. |
+| Every suggestion says why | The rationale quotes the evidence: a stage, a date, a count, an email. | Built: a rationale is required. |
+| One idea is one suggestion | Dismissing an idea stops it returning in new words. | Built: suggestions are keyed by intent. |
+| Few suggestions | At most five open per deal, and none when nothing is warranted. | Built. |
+| Private context stays private | An idea drawn from my email or my relationships is shown only to me. | Not yet: the review reads only project, task and deal rows. |
+| Field changes are approved one at a time | A proposed change shows the current value, the proposed value and its source. Nothing is overwritten silently. | Partial: change-request suggestions exist; the review does not produce them. |
+| AI moves obey the same checks | An agent's stage move runs the same checklist as a person's drag. | Built: agent moves call the same service as the board. |
+| Honest action states | Every action shows prepared, queued, running, sent, failed or unknown. | Built. |
+| Opt-in and budgeted | Background review is switched on per project by its owner, runs within a daily budget, and can also run on demand. | Built. |
+
+#### Suggestions that move a deal forward
+
+| ID | Suggestion | Proposed | Triggered by | What the user can do | API today |
+| --- | --- | --- | --- | --- | --- |
+| AI-01 | Follow up on a quiet deal | v1 | No progress past the stage's stale threshold, no reply to the last email, an unanswered inbound message, or a close date that has passed. | Review a drafted follow-up and send it from their own mailbox. | Partial: drafts and sends exist; the review cannot see email. |
+| AI-02 | Ask for a warm introduction | v1 | No direct relationship with the target, and a connector exists. | Start a double opt-in introduction. | Partial: introduction actions exist; the review cannot see paths. |
+| AI-03 | Prepare for a meeting | v1 | A meeting with the target or a deal person in the next 48 hours. | Read a brief: people, history, open checklist items and suggested asks. | Partial: the meeting brief action exists; no calendar trigger. |
+| AI-04 | Capture what happened | v1 | A meeting with the target has just ended. | Record progress, create the next task, and update a field in one step. | Not yet. |
+| AI-05 | Clear the next stage's checklist | v1 | The next stage has unmet checks. | Create the missing task, add the missing person or confirm an item. | Built: stage guidance and work actions. |
+| AI-06 | Move the deal forward | v1 | The next stage's checks are now met. | Confirm a proposed stage move in one click. | Not yet: the review may not propose moves. |
+| AI-07 | Reach more people | v1 | Only one person on the deal, or no decision maker. | Add suggested people from the target company, with how the viewer knows them. | Partial: company people reads exist. |
+| AI-08 | Act on a timing signal | Later | The target raised, hired, changed jobs or was in the news. | Review a drafted, timely note. | Not yet. |
+| AI-09 | Revisit a parked deal | v1 | A parked deal's date arrives, or a signal appears. | Reopen it and review a drafted note. | Partial: check-in reminders exist. |
+| AI-10 | Plan my day | v1 | Any open deals. | A short ranked list across flows: overdue, stale, meeting soon and closing soon. | Partial: digest reminders exist. |
+| AI-11 | Fill missing fields | Later | Value, close date or owner is missing, and an email or note mentions it. | Accept a proposed value. | Not yet. |
+| AI-12 | Find new deals | v1 | Leverage Loop suggestions or thesis matches that are not yet in the flow. | Add them to the first stage, with a duplicate check. | Partial: see RS-06. |
+| AI-13 | Close out a dead deal | Later | Long past its close date with no progress. | Close it with a proposed reason, or send a last note. | Not yet. |
+| AI-14 | Update several deals at once | Later | Momentum worth sharing, such as a lead investor committing. | Review one update sent individually to many deals. | Not yet. |
+| AI-15 | Ask about a flow | Later | A typed question, such as "Who haven't I followed up with in two weeks?" | Get the matching deals, linked. | Not yet. |
+| AI-24 | Send a considered pass | v1 | A deal is closed as passed or lost. | Review a short, honest note to the other side, sent only if the person chooses. | Partial: drafts and sends exist. |
+| AI-25 | Follow a champion who moved | Later | A person on the deal changes company. | Flag the deal, and add a new deal at their new company. | Not yet. |
+
+#### AI controls and context
+
+| ID | Requirement | Proposed | API today |
+| --- | --- | --- | --- |
+| AI-16 | The review sees, for each viewer: last email and meeting dates with the target and its people, stored relationship paths, enrichment facts, checklist status and stage age. | v1 | Not yet. |
+| AI-17 | On every suggestion: accept as a task, do it, snooze, or dismiss with an optional reason. | v1 | Built: adopt and personal-state routes. |
+| AI-18 | "Review now" per flow, the last review time, and the owner's background switch with its daily budget. | v1 | Built: agent runs and agent settings. |
+| AI-19 | An opt-in daily digest of the top suggestions. | v1 | Built: digest reminders. |
+| AI-20 | At-risk flags on cards, each with its reason: single-threaded, close date pushed back, activity dropped, no next step, past the close date, or a person on the deal changed jobs. Reasons are shown rather than a single score. | v1 | Not yet. |
+| AI-21 | A log for each review: what it looked at, what it proposed and what it spent. | v1 | Partial: a run reports its limits, spend and summary; what it read is not exposed. |
+| AI-22 | More qualification presets, such as BANT or SPICED, for custom sales flows. Enterprise Sale already builds MEDDPICC into its requirements. | Later | Partial: stage requirements support items a person confirms. |
+| AI-23 | Nudges arrive as in-context cards plus an opt-in digest, with a per-person daily cap. A suggestion type that keeps being dismissed goes quiet. | v1 | Partial: at most five open per deal, and dismissals are remembered per idea; no per-person cap. |
+
+### 13. Quality bar
+
+| ID | Requirement | API today |
+| --- | --- | --- |
+| NF-01 | The board opens quickly with thousands of deals; columns load in pages. | Built: column paging; a full-size board is timed in backend tests. |
+| NF-02 | Keyboard and screen reader access throughout. | UI only. |
+| NF-03 | Honest "unavailable" states when the model or email provider is not configured. | Built. |
+| NF-04 | Moves feel instant and roll back safely on a conflict. | Built: version conflicts return 409. |
+| NF-05 | Every change is attributed to a person or an agent run. | Built. |
+| NF-06 | A solo founder or angel gets from nothing to a working flow with their first deals in a few minutes, with no setup screens. | UI only. |
+
+### Walkthroughs
+
+Three end-to-end scenarios test the requirements above. Each step lists the requirements it relies on. The gaps each one found are already added to the tables and the open questions.
+
+#### A founder raises a seed round
+
+Maya is a solo founder raising a $2M seed round from about 60 investors.
+
+| # | What happens | Requirements |
+| --- | --- | --- |
+| 1 | Maya opens the Deal Flow tab for the first time, chooses to raise a round, and gets a "Seed round" project with a Funding Round Raise flow and a $2M target. | NF-06, TP-01, TP-03, RP-02 |
+| 2 | Maya adds investors three ways: thesis matches from Find investors, contacts from the contacts table, and an old spreadsheet. They land in Targeted, and duplicates are flagged. | RS-06, IN-01, IN-02, DL-04 |
+| 3 | Maya tiers them A, B and C, and starts outreach with the C tier to practise. | DL-07, VW-06 |
+| 4 | Leaving Targeted needs a fit check, a named decision maker and a chosen path in. For an A-tier fund with no direct relationship, the card shows two people who can introduce Maya, and Maya asks the stronger connector through the Warm Intro workspace. | FL-16, DL-13, RS-01, RS-02, RS-03, RS-07 |
+| 5 | After seven days in Intro requested without a reply, the deal shows as stale, and the AI drafts a nudge to the connector. | AC-06, AI-01 |
+| 6 | The fund replies and a meeting is booked, so the deal moves to First meeting. The day before, Maya reads the meeting brief, which includes what earlier stages recorded. | FL-17, AI-03 |
+| 7 | After the meeting, Maya records the next step, the partner's asks and the fund's decision process in one step. The AI drafts the First meeting summary, which Maya edits. | AI-04, TK-01, FL-18 |
+| 8 | An angel says yes if Maya finds a lead. The deal records soft interest with that condition, and the round tracker shows it apart from committed money. | DL-12, RP-02 |
+| 9 | After Diligence, the Partner meeting ends with an explicit yes. The AI proposes moving the deal to Committed, and Maya confirms. Both sides then sign the term sheet, which Committed needs before Documents. | AI-06, FL-16 |
+| 10 | The angel finds conviction once the lead signs and jumps from Diligence to Committed. The move also checks Partner meeting's requirement: an explicit yes from the angel. | FL-19 |
+| 11 | Documents and Signed follow. The round tracker shows committed, signed and wired money against the $2M target, and the lead's share. | RP-02 |
+| 12 | A fund passes as "not now", names the revenue it wants to see, and gets a revisit date. | FL-08, TK-05 |
+| 13 | The money arrives, and each deal moves to Wired, the outcome. | TP-02 |
+
+Gaps found:
+
+- **Role labels read as sales terms.** A VC partner appeared as a "decision maker". Added DL-13; labels per template are now decided.
+- **"Won" was ambiguous in fundraising.** Wired is now the won stage (decision 40).
+- **Momentum updates go out one by one in v1.** Sending one update to many investors is AI-14, proposed for Later.
+
+#### An investor triages inbound deals
+
+Dev is an associate at a seed fund with four partners.
+
+| # | What happens | Requirements |
+| --- | --- | --- |
+| 1 | No Investing template ships, so Dev builds a custom flow for the "Fund III" project: Sourced, Screening, First meeting, Partner meeting, Diligence, Investment committee, then Invested or Passed. Dev saves it as a template shared with the fund's organization, and shares the project with the partners' team. | TP-04, TP-05, TP-07, CO-01 |
+| 2 | A founder emails a deck. The company is not in Orbiter yet, so Dev adds it from its website, and enrichment fills in the profile. The deal's source is inbound. | DL-14, DP-03, DL-06 |
+| 3 | Dev screens the company against the Screening checklist. | FL-05, FL-14 |
+| 4 | Dev checks who on the team knows the founders. | RS-04 |
+| 5 | After a first meeting and a partner meeting, the memo goes on the deal as a note, and the deal moves to Investment committee. | DP-05, VW-03 |
+| 6 | Diligence tasks include reference calls. | TK-03 |
+| 7 | The partners pass for now. Dev records "not now" with the reason and a revisit date, and the AI drafts a short, honest note to the founder. | FL-08, TK-05, AI-24 |
+| 8 | Monday's partner meeting runs from the weekly review. | RP-06 |
+
+Gaps found:
+
+- **No Investing template ships.** A custom flow saved as a template covers it (TP-04, TP-05). A shipped Investing template stays proposed for Later (FL-10).
+- **The company was not in Orbiter.** Added DL-14.
+- **Passes rarely get a considered reply.** Added AI-24.
+- **Team coverage matters most to investor teams**, but RS-04 is proposed for Later. Added Q27.
+- **Screening scores need custom fields.** A 1 to 4 score per dimension needs DL-08, proposed for Later. In v1 the checklist holds yes-or-no items only.
+
+#### A founder sells to enterprise customers
+
+Sam runs a B2B startup and wants its first five enterprise customers from about 20 target accounts.
+
+| # | What happens | Requirements |
+| --- | --- | --- |
+| 1 | Sam creates a "First enterprise customers" project from the Enterprise Sale template. | TP-01, TP-03 |
+| 2 | Accounts come from a Prospect customers Outcome and land in Target account in one step. | RS-09, AI-12 |
+| 3 | For each account, Sam finds a warm path in and books a first meeting, which moves the deal to Discovery. | RS-01, FL-16 |
+| 4 | Leaving Discovery needs a recap the buyer confirmed, a critical event, and the economic buyer named or a path to them. The AI drafts the recap from the meeting. | FL-16, AI-04 |
+| 5 | In Qualification, Sam adds a champion and a decision maker, and the AI suggests two more people at the company. | DL-03, AI-07 |
+| 6 | One buyer waives the proof of concept in writing. The deal jumps from Solution fit to Business case and proposal, and the move still checks Technical validation's requirements, such as the technical owner's sign-off and the contracting steps mapped. | FL-19 |
+| 7 | The champion at another company changes jobs. The deal is flagged at risk and moves back to Qualification with the reason "champion lost", and a new deal at the champion's new company is suggested. | AI-20, AI-25, FL-20 |
+| 8 | A buyer goes quiet for seven days in Business case and proposal, and the AI drafts a follow-up. | AC-06, AI-01 |
+| 9 | In Security, legal and procurement, the deal tracks each review until the signatory and signature date are confirmed. | FL-16 |
+| 10 | A lost deal records its reasons from the Enterprise Sale list, such as no decision or competitor, plus free text. | FL-08 |
+| 11 | Each morning, Plan my day ranks work across Seed round and First enterprise customers. | AI-10 |
+
+Gaps found:
+
+- **Starting a flow from an Outcome.** Added RS-09.
+- **A champion who changes jobs.** Added AI-25, and a job-change reason in AI-20.
+- **Moving a deal back needs a reason.** Added FL-20.
+- **Several reviews run in one stage.** Security, legal and procurement tracks an owner, status and date per review. In v1 its requirements are yes-or-no items; per-review fields need custom fields (DL-08), proposed for Later.
+
+### Suggestions
+
+1. **Build on the Projects backend.** Its pipelines, checklists, board, suggestions and actions already cover most rows above. [Deal Flow Tables](/guides/open-work/deal-flow-v1/deal-flow-tables) should then record only additions.
+2. **Open the tab on a flow, not on projects.** Every deal belongs to a project, and the backend rules out a hidden automatic project. A first run can ask what the user is working on, then create the project and a flow from a template together, such as "Seed round" from Funding Round Raise.
+3. **Make a dated next step the habit that holds the product together.** Show it on every card, flag deals without one, and make keeping it current the AI's first job.
+4. **Give the review each viewer's own context, privately.** Email, calendar and relationship context produce the most useful suggestions. They stay visible only to the person whose data they came from.
+5. **Let the AI propose stage moves.** A one-click confirmation runs the same checklist as a drag. Nothing moves on its own.
+6. **Reuse existing surfaces.** The person and company side panels, the [Contacts Table View](/guides/open-work/contacts-table-view) pattern for the table view, the [Warm Intro](/guides/open-work/warm-intro-feature) workspace for introductions, and the Hot Keys registry. The existing Deal Flow tab and command palette entry become the entry points.
+7. **Add source and tier to deals from the start.** Later reporting on what works depends on them.
+8. **Let rules pick the deals and the model write.** Plain triggers choose what needs attention: stale, close date pushed, single-threaded, unanswered message. The model drafts and explains. Suggestions stay predictable and within budget, and this matches how the backend already selects deals for review.
+9. **Use the approval screen other tools have converged on** for every AI-proposed field change: current value, proposed value, source, approve per field.
+10. **Lead with relationships.** Warm paths and How I Know on every card are what investor CRMs sell and sales CRMs lack.
+11. **Capture activity instead of asking for it.** Email and calendar fill the timeline, the last contact and the next meeting, with controls to leave personal mail out (AC-02, AC-07). Hand entry is the top complaint in all three workflows.
+12. **Define stale as silence from the other side** (AC-06), tuned per stage. Editing the deal should not reset the clock.
+13. **Treat a pass as a state with a future.** "Not now" carries a revisit date and can join an update list; "no" closes the deal.
+14. **Keep fundraising honest.** Committed, Signed and Wired are separate stages and soft interest is recorded apart (DL-12), so the round tracker never counts a maybe (RP-02).
+15. **Build the weekly review in** (RP-06). Sales and investor teams already hold one, usually from a spreadsheet.
+16. **Dogfood both templates on Orbiter's own work.** Run Orbiter's next raise in Funding Round Raise and its enterprise deals in Enterprise Sale. Real deals test the stage requirements, the stage context and the AI suggestions before customers rely on them.
+
+### Open questions
+
+None open. Every question raised so far is answered in the Decided table below. New questions are added here, each with a recommendation, as the workshop continues.
+
+### Decided
+
+| # | Area | Decision | Decided |
+| --- | --- | --- | --- |
+| 1 | Terminology | **A Flow is a set of Stages.** | Mark, 2026-09-26 |
+| 2 | Stages | **Every stage has a description and the minimum requirements to move to the next stage.** | Mark, 2026-09-26 |
+| 3 | Stages | **Every stage knows the context of the stages before it and what the next stage is.** | Mark, 2026-09-26 |
+| 4 | Templates | **A Deal Flow Template is a defined set of stages to an outcome.** | Mark, 2026-09-26 |
+| 5 | Templates | **Two templates ship included: Funding Round Raise and Enterprise Sale.** They are the dogfood templates for testing and building. This answers Q3. | Mark, 2026-09-26 |
+| 6 | Templates | **Users can create custom stages and custom flows, and save them as templates.** | Mark, 2026-09-26 |
+| 7 | Scope | **Deal Flow v1 is the interface for the Projects backend that is already built.** The Tables page records only additions. Answers Q1. | Mark, 2026-09-26 |
+| 8 | Projects | **Flow-first.** A project picker in the header, and a first run that creates the project and a flow from a template together. Answers Q2. | Mark, 2026-09-26 |
+| 9 | AI | **The AI may read each person's own email, calendar and relationships, for suggestions shown only to that person.** Shared suggestions keep using shared project data. Answers Q5. | Mark, 2026-09-26 |
+| 10 | AI | **The AI may propose stage moves, confirmed in one click.** The same checks run as for a drag. Answers Q6. | Mark, 2026-09-26 |
+| 11 | Introductions | **A deal's introductions use the Warm Intro workspace,** and the outcome is recorded on the deal. Answers Q7. | Mark, 2026-09-26 |
+| 12 | Stages | **Requirements to advance appear on the current stage,** as what it takes to move to the next one. Storage is settled in the table review. Answers Q29. | Mark, 2026-09-26 |
+| 13 | Stages | **Requirements accumulate.** A deal that jumps ahead must meet the requirements of every stage it passes. Answers Q30. | Mark, 2026-09-26 |
+| 14 | Stages | **The AI drafts each stage summary from the stage's activity, and the person can edit it.** Answers Q32. | Mark, 2026-09-26 |
+| 15 | Fields | **A fixed set of fields in v1:** source and tier on every deal, plus commitment details on Funding Round Raise deals (DL-12). Custom fields later. Answers Q8. | Mark, 2026-09-26 |
+| 16 | Reporting | **A simple round tracker ships in v1 for Funding Round Raise flows:** target amount; committed, signed and wired totals; soft interest shown apart; and the lead's share. Answers Q9. | Mark, 2026-09-26 |
+| 17 | Deals | **"Not now" closes the deal as Passed,** with the metric or date that would reopen it and a revisit reminder. No new deal state. Answers Q10. | Mark, 2026-09-26 |
+| 18 | Stale deals | **Stale is measured in fixed days per stage from their last reply or meeting,** once email capture exists; until then, from the last recorded progress. Answers Q13. | Mark, 2026-09-26 |
+| 19 | Organizations | **The tab follows the active mode.** Company mode lists projects owned by or shared with that organization; personal mode lists the user's own projects. Answers Q11. | Mark, 2026-09-26 |
+| 20 | Views | **An "all my deals" list across projects and flows ships in v1** (VW-09). Answers Q12. | Mark, 2026-09-26 |
+| 21 | AI | **No autonomous AI actions in v1.** Every change and send needs a click. Answers Q14. | Mark, 2026-09-26 |
+| 22 | AI | **At-risk flags show their reasons, never a single health score.** Answers Q15. | Mark, 2026-09-26 |
+| 23 | Access | **Confidential deals inside a shared project ship in v1** (CO-06). Answers Q16. | Mark, 2026-09-26 |
+| 24 | Platform | **An MCP server for outside AI assistants is a later decision for all of Orbiter.** Answers Q17. | Mark, 2026-09-26 |
+| 25 | Deals | **Tiers are a manual A, B or C, and the AI may propose a tier with its reasons.** Answers Q18. | Mark, 2026-09-26 |
+| 26 | Fundraising | **Soft interest never counts toward the round total.** It is shown apart, with its conditions. Answers Q19. | Mark, 2026-09-26 |
+| 27 | Deals | **One deal per opportunity about one person or company.** A returning investor gets a new deal for a later round. Answers Q20. | Mark, 2026-09-26 |
+| 28 | Sharing | **Teammates see that contact happened, not what was said.** Message content stays with the mailbox owner unless shared. Answers Q21. | Mark, 2026-09-26 |
+| 29 | AI | **Nudges arrive as in-context cards plus an opt-in digest,** with a per-person daily cap and a mute after repeated dismissals of one type. Answers Q22. | Mark, 2026-09-26 |
+| 30 | Model | **One general flow in v1,** with Funding Round Raise's commitment details and round tracker as a light layer. Answers Q23. | Mark, 2026-09-26 |
+| 31 | Files | **Deck and data room links only, later.** View data is a hint when it arrives. Answers Q24. | Mark, 2026-09-26 |
+| 32 | Reasons | **One short list of lost and passed reasons per template,** editable per flow. Answers Q25. | Mark, 2026-09-26 |
+| 33 | Relationships | **Team coverage comes later, with the Org Graph Scope work.** In v1 each viewer sees their own paths. Answers Q27. | Mark, 2026-09-26 |
+| 34 | Deals | **Role labels are set per template, over the five built roles.** Answers Q28. | Mark, 2026-09-26 |
+| 35 | Flows | **A flow starts from scratch or from a template.** | Mark, 2026-09-26 |
+| 36 | Flows | **A flow started from a template is fully editable:** users can add, edit, remove or redefine any stage. | Mark, 2026-09-26 |
+| 37 | Stages | **Custom stages are reusable: other flows can use a user's custom stages** (TP-10). | Mark, 2026-09-26 |
+| 38 | Templates | **Any flow can be saved as a template** (TP-05). | Mark, 2026-09-26 |
+| 39 | Templates | **Both shipped templates are approved as written** under Shipped templates, and they replace the built Investors and Sales starters. Answers Q4. | Mark, 2026-09-26 |
+| 40 | Fundraising | **A Funding Round Raise deal is won when the money arrives.** Wired is the won stage; Committed and Signed are their own stages. Answers Q26. | Mark, 2026-09-26 |
+| 41 | Sharing | **A saved template or library stage is private to its creator, or shared with their organization.** Only the shipped templates are visible to everyone. Answers Q31. | Mark, 2026-09-26 |
+| 42 | Stage library | **Adding a library stage copies it into the flow.** Later edits to the library stage do not change flows already using it. Answers Q33. | Mark, 2026-09-26 |
+| 43 | Deals | **A deal's target can be a person or a company, and one flow can mix both.** Other people and companies join a deal as deal people, each with a role. | Mark, 2026-09-26 |
+
+## UI design
+
+<Note>
+**Plan only · September 26, 2026.** The views, modals and components to design, each with the requirements it serves and the existing frontend piece to start from, on `orbiter-frontend` `dev` on GitHub. Screens and mockups come next. IDs such as V3 or M5 are for design review notes. T numbers refer to decisions on [Deal Flow Tables](/guides/open-work/deal-flow-v1/deal-flow-tables#decided).
+</Note>
+
+### Views
+
+| # | View | What it shows | Requirements | Start from |
+| --- | --- | --- | --- | --- |
+| V1 | Deal Flow tab | The tab's frame: project and flow pickers in the header, the board or table switch, search, filters, and entry points to Plan my day and All my deals. Replaces today's "in development" dialog. | Decision 8, CO-08, VW-07 | `workspace-view-switcher` |
+| V2 | First run | For someone with no flows: choose a goal and a template, name it, and optionally set a round target. Creates the project and the flow together. | NF-06, TP-01, TP-03, RP-02 | None |
+| V3 | Board | Stages as columns, with counts, value totals and collapsed won and lost columns. Cards can be dragged between stages, and confidential deals appear masked. | VW-01 to VW-04, VW-06, CO-06 | None |
+| V4 | Table | Deals as rows, with sorting, inline edits, a column picker, filters and bulk actions. | VW-05, VW-06 | `contacts-table`, `contacts-toolbar`, `contacts-column-picker` |
+| V5 | All my deals | Every deal the user owns across projects and flows, grouped by flow. | VW-09 | The table view (V4) |
+| V6 | Plan my day | A ranked list across flows: overdue next steps, stale deals, meetings soon, deals closing soon and the top suggestions. | AI-10 | `suggestions-list` |
+| V7 | Deal panel | The side panel for one deal. Its sections are components C4 to C13. | DP-01 to DP-05, AC-01, AC-02 | `person-sheet` and `company-sheet` |
+| V8 | Flow summary | Count and value per stage, conversion between stages, days in stage and win rate. | RP-01 | None |
+| V9 | Round tracker | Funding Round Raise only: target, committed, signed and wired money, soft interest shown apart, the lead's share and investors by stage. A compact version sits above the board. | RP-02 | None |
+| V10 | Weekly review | What changed this week, close dates that slipped, deals missing a next step, and new deals. | RP-06 | None |
+| V11 | Template library | Shipped and saved templates, each previewing its outcome, stages and requirements. A flow starts from here. | TP-01, TP-06, TP-07 | None |
+| V12 | Flow settings | Edit a flow's outcome, target, role labels and reasons. Add, edit, remove, reorder or redefine its stages, including each stage's description, requirements, suggested actions and stale threshold. Save it as a template. | FL-03, FL-08, FL-14 to FL-16, TP-04, TP-05, DL-13 | None |
+| V13 | Stage library | Saved custom stages, private or shared with the organization, ready to add to any flow. | TP-10 | None |
+
+### Modals and panels
+
+| # | Modal or panel | What it does | Requirements | Start from |
+| --- | --- | --- | --- | --- |
+| M1 | New flow | Start a flow from a template or from scratch, choosing or creating its project, with a name, outcome and target. | TP-03, TP-04, decisions 8 and 35 | `dialog` |
+| M2 | Add deal | Find a person or company, or add one that is not in Orbiter yet. Set the flow and stage, owner, value, close date, source, tier and round role. Warns about duplicates. | DL-01 to DL-07, DL-14 | `add-contact-dialog`, `person-picker` |
+| M3 | Add many deals | Add a selection from the contacts table, Discover, thesis matches or suggestions to a flow's first stage, with a duplicate warning per row. | IN-01, RS-06, RS-09, AI-12 | `selection-fab`, `selection-preview-dialog` |
+| M4 | Import deals | Upload a spreadsheet, map its columns, match rows to people and companies, and review the results. | IN-02 | `import-contacts-page`, `import-detail-view` |
+| M5 | Move with requirements | Opens when a move has unmet requirements, including those of skipped stages. Shows each gap and its prepared fix, and lets the user confirm an item or mark it not applicable. | FL-05, FL-16, FL-19 | None |
+| M6 | Move back | Asks for the reason when a deal moves to an earlier stage. | FL-20 | `dialog` |
+| M7 | Close deal | Won, lost or passed. Takes reasons from the flow's list plus free text, and whether a pass is "not now" or "no". A "not now" also takes a revisit date and what would reopen it. Offers the considered pass note. | FL-08, TK-05, AI-24 | `alert-dialog` |
+| M8 | Stage summary | When a deal leaves a stage, shows the AI's draft summary to edit and save. | FL-18 | None |
+| M9 | Record progress | One step after a meeting or call: what happened, the next step and its date, the asks, and any field updates. | AC-04, AI-04, TK-01 | None |
+| M10 | Soft interest | Amount, conditions and round role on a Funding Round Raise deal. | DL-12 | None |
+| M11 | Suggestion detail | The why, the evidence and the actions: accept as a task, do it, snooze, or dismiss with a reason. A proposed field change shows the current and proposed values. | AI-17, AI-06 | `suggestion-card-frame`, `suggestion-why`, `suggestion-action-bar` |
+| M12 | Authorize action | Review the exact email or message before it sends from the user's own mailbox, then follow its status. | AI-01, AI-24 | The email-composer feature |
+| M13 | Warm paths | The user's paths to the target, with relationship signals. Starts a Warm Intro from the chosen connector. | RS-01 to RS-03, RS-07 | `paths-dialog`, the planned Warm Intro workspace |
+| M14 | Meeting brief | Before a meeting: the people, their history with the user, open requirements and suggested asks. | AI-03 | `meeting-prep-context-panel` |
+| M15 | Deal notes | Write and edit notes on a deal. | DP-05 | `notes-modal` |
+| M16 | Confidential members | Make a deal restricted and choose who can see it. | CO-06, T3 | `dialog` |
+| M17 | Share project | Share a project with a team or another organization, as viewer or editor. | CO-01 | None |
+| M18 | Save as template | Save a flow as a template, or a stage to the library, as private or shared with the organization. | TP-05, TP-07, TP-10 | `dialog` |
+| M19 | Requirement editor | Build a stage's requirements: checks, either-or groups, not-applicable items and labels. | FL-14, FL-16 | None |
+| M20 | AI and reminder settings | The background review switch and daily budget, Review now and the review log, the digest, the daily nudge cap and quiet hours. | AI-18, AI-19, AI-21, AI-23, TK-04 | `switch` |
+| M21 | Capture exclusions | Domains, people and threads never linked to deals. | AC-07 | None |
+| M22 | Keyboard shortcuts | Board and panel shortcuts, registered on [Hot Keys](/guides/hot-keys). | VW-10 | `kbd`, the command-palette feature |
+
+### Components
+
+| # | Component | What it is | Requirements | Start from |
+| --- | --- | --- | --- | --- |
+| C1 | Deal card | Target photo and name, owner, value, close date, days in stage, next step, blocker, and one or two ready next steps. States: default, stale, at risk, won, lost and masked. | VW-02, AC-06, AI-20, CO-06 | `person-card`, `company-card` |
+| C2 | Column header | Stage name and meaning, count, value totals by currency, stale count and collapse. | VW-01, VW-04 | None |
+| C3 | Target chip | A person or a company with its photo or logo; one flow can mix both. | DL-01, decision 43 | `person-badge`, `company-badge`, `avatar` |
+| C4 | Stage progress | The deal's path through the flow: past, current and next stages, with the time spent in each. | DP-02, FL-17 | None |
+| C5 | Requirements checklist | What it takes to move to the next stage. Each item shows met, unmet, unknown or not applicable, with its evidence and the confirm and not-applicable actions. | FL-16, FL-19, T2 | `checkbox` |
+| C6 | Stage context | Summaries of earlier stages, and what the next stage still needs. | FL-17, FL-18 | None |
+| C7 | Next step | The next step with its date, including overdue and missing states. | TK-01 | `calendar` |
+| C8 | At-risk flags | One chip per reason: single-threaded, close date pushed back, no next step, past the close date, activity dropped. | AI-20 | `badge` |
+| C9 | Relationship signals | Last contact, meetings, two-way threads and momentum for one person. | RS-03, T11 | None |
+| C10 | Deal people | The people and companies on a deal, with role labels from the template. | DL-03, DL-13 | `avatar-group` |
+| C11 | Suggestion card | An AI next step with its why and actions: compact on a board card, full in the panel. | AI-01 to AI-15, AI-17 | The Leverage Loop `suggestion-board` components |
+| C12 | Action status | Prepared, queued, running, sent, failed or unknown. | AI-17 | `badge` |
+| C13 | Timeline entry | One event: a stage move, edit, task, suggestion, action, progress note, deal note or contact date. | AC-01, AC-02 | The activities feature |
+| C14 | Money field | A decimal amount with a currency; totals kept per currency. | DL-02, RP-02 | `input-group`, `select` |
+| C15 | Tier and source pickers | An A, B or C tier; a source, with the referring person for referrals. | DL-06, DL-07 | `select`, `person-picker` |
+| C16 | Filter bar | Owner, tier, stale, overdue, close date window and search. | VW-06, VW-07 | `contacts-toolbar` |
+| C17 | Bulk action bar | Move, assign or archive the selected deals. | VW-05 | `selection-fab` |
+| C18 | Round progress bar | The target against committed, signed and wired money, with soft interest shown apart. | RP-02 | None |
+| C19 | Template card | A template's name, outcome and stage list. | TP-06 | None |
+| C20 | Stage editor row | One stage's name, meaning, description and stale threshold, with a reorder handle. | FL-03, FL-14, FL-15 | None |
+| C21 | Masked card | A confidential deal's placeholder, showing its stage only. | CO-06, T3 | None |
+| C22 | Empty, unavailable and conflict states | No flows, no deals or an empty column; AI or email not configured; a teammate changed this deal. | NF-03, NF-04 | `sidebar-empty-state`, `sonner` |
+
+### Notifications and email
+
+| # | Item | What it is | Requirements | Start from |
+| --- | --- | --- | --- | --- |
+| N1 | Reminders | Due soon, overdue, check in, revisit and blocked too long, in the app and by email. | TK-04, TK-05 | The notifications feature |
+| N2 | Daily digest | The top suggestions and the day's focus list, for people who opt in. | AI-19, AI-10 | None |
