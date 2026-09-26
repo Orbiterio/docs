@@ -6,18 +6,10 @@ description: "The source of truth for every keyboard shortcut in Orbiter.io, plu
 This page lists every hot key the Orbiter.io frontend assigns, grouped the way the Command Palette groups them, followed by the operating-system and browser shortcuts a new hot key must not collide with.
 
 <Info>
-Inventoried from `orbiter-frontend` on `thursday_dev` at `79928213` (2026-09-26). When you add, change or remove a hot key, update this page in the same change.
+Inventoried from `orbiter-frontend` on `thursday_dev` at `9b0ac5c3` (2026-09-26). When you add, change or remove a hot key, update this page in the same change.
 </Info>
 
-export const Tbd = () => (
-  <span style={{ color: "#ca8a04", fontWeight: 600 }}>TBD</span>
-);
-
-export const Suggest = ({ children }) => (
-  <span style={{ color: "#dc2626", fontWeight: 600 }}>{children}</span>
-);
-
-Every Command Palette command is listed below, including those with no hot key yet, marked <Tbd />. Each <Tbd /> has a <Suggest>suggested</Suggest> key, checked against every other table on this page; see [Suggested hot keys](#suggested-hot-keys).
+Every Command Palette command has a hot key, and the palette shows each one as a badge beside the command.
 
 **How to read the keys.** <kbd>⌘</kbd> is written `mod` in code: Command on a Mac, Ctrl on Windows and Linux. <kbd>⌥</kbd> is Option (Alt), <kbd>⇧</kbd> is Shift, <kbd>⌃</kbd> is Control.
 
@@ -26,12 +18,12 @@ Every Command Palette command is listed below, including those with no hot key y
 <Note>
 There is **no central hot key system**. Orbiter does not use a TanStack hotkeys package; four mechanisms each own a slice, and the Command Palette registry is the closest thing to a single list.
 
-1. **The Command Palette registry (`react-hotkeys-hook`).** Each command in `src/features/command-palette/constants/commands.tsx` may carry `hotkey` (the binding, e.g. `mod+alt+o`) and `shortcut` (the badge text, e.g. `⌘⌥O`). `useCommandHotkeys`, mounted once in `src/routes/_authed.tsx`, registers every command's `hotkey` with `useHotkeys`. Two fields means the badge and the binding can drift; keep them in step. `react-hotkeys-hook` skips text fields and contenteditable by default, so these never fire while typing, including in the notes editor. A few feature screens call `useHotkeys` directly too (Collections canvas, Email thread list).
+1. **The Command Palette registry (`react-hotkeys-hook`).** Each command in `src/features/command-palette/constants/commands.tsx` carries `hotkey` (the binding, e.g. `mod+alt+o`, or `g>i` for a sequence) and `shortcut` (the badge text, e.g. `⌘⌥O`, or `G I`, which the badge draws as "G then I"). `useCommandHotkeys`, mounted once in `src/routes/_authed.tsx`, registers every command's `hotkey` with `useHotkeys`. Two fields means the badge and the binding can drift; keep them in step. `react-hotkeys-hook` skips text fields and contenteditable by default, so these never fire while typing, including in the notes editor. A few feature screens call `useHotkeys` directly too (Collections canvas, Email thread list).
 2. **Hand-written `keydown` listeners.** <kbd>⌘</kbd> <kbd>K</kbd> is a window listener in the capture phase, so it wins over everything and works inside inputs. The Calendar <kbd>0</kbd> / <kbd>0</kbd> <kbd>0</kbd> controller, the Calendar view keys, the Activity arrows and the various <kbd>Esc</kbd>-to-close panels are plain `document`/`window` listeners that do their own "am I in a text field or dialog?" checks.
 3. **Tiptap (ProseMirror keymaps) in the notes editor.** Tiptap manages the formatting keys itself: StarterKit and each extension (bold, italic, headings, lists, blockquote, code block, text align, highlight, sub/superscript) binds its own keys, and only while the editor has focus. The toolbar's `*_SHORTCUT_KEY(S)` constants are just the tooltip text for those. The editor's non-formatting actions (emoji, mention, slash menu, Ask AI, image, duplicate, copy, delete) are bound with `useHotkeys` in each button's hook, enabled on contenteditable.
 4. **Component-local handlers.** `onKeyDown` on a single input (<kbd>Enter</kbd> to send, <kbd>⇧</kbd> <kbd>Enter</kbd> for a new line, <kbd>⌘</kbd> <kbd>Enter</kbd> in the suggestion composer), the palette's own list keys (built into `cmdk`), and `is-hotkey` in the editor's AI menu input.
 
-**Spell punctuation by key name.** `react-hotkeys-hook` matches the physical key code, so bind `mod+slash`, `mod+shift+period`, `mod+backslash`, `mod+shift+semicolon`, never `mod+/` or `mod+shift+.`, which silently never fire. Tests in `commands.test.tsx` and `tiptap-editor/lib/hotkey-bindings.test.ts` enforce this.
+**Spell punctuation by key name.** `react-hotkeys-hook` matches the physical key code, so bind `mod+slash`, `mod+shift+period`, `mod+backslash`, `mod+shift+semicolon`, never `mod+/` or `mod+shift+.`, which silently never fire. Tests in `commands.test.tsx` and `tiptap-editor/lib/hotkey-bindings.test.ts` enforce this, and `commands.test.tsx` also fails if any palette command is left without a hot key.
 
 **Adding a global hot key:** add `hotkey` and `shortcut` to its command in `commands.tsx`, check it against every table on this page (including [System OS Hotkeys](#system-os-hotkeys)), then list it here.
 </Note>
@@ -53,22 +45,22 @@ Defined in `src/features/command-palette/hooks/use-command-palette.ts` (the <kbd
 
 ## Navigation
 
-The palette's **Navigation** commands, in palette order. Each opens a workspace view.
+The palette's **Navigation** commands, in palette order. Each opens a workspace view with <kbd>G</kbd> then a letter, Superhuman's "Go to" gesture; press the second key within a second. See [View sequences](#view-sequences) for how the letters were chosen.
 
-| Command | Mac | Windows | Suggested | Notes |
+| Command | Mac | Windows | Code | Notes |
 |---|---|---|---|---|
-| Discover | <Tbd /> | <Tbd /> | <Suggest>G then F</Suggest> | |
-| Outcomes | <Tbd /> | <Tbd /> | <Suggest>G then U</Suggest> | |
-| Leverage Loops | <Tbd /> | <Tbd /> | <Suggest>G then V</Suggest> | |
-| Collections | <Tbd /> | <Tbd /> | <Suggest>G then C</Suggest> | |
-| Serendipity | <Tbd /> | <Tbd /> | <Suggest>G then Y</Suggest> | |
-| Activity | <Tbd /> | <Tbd /> | <Suggest>G then G</Suggest> | |
-| Contacts | <Tbd /> | <Tbd /> | <Suggest>G then P</Suggest> | |
-| Calendar | <kbd>0</kbd> <kbd>0</kbd> | <kbd>0</kbd> <kbd>0</kbd> | — | Opens the Calendar view from anywhere; see [Calendar](#calendar). |
-| Email | <Tbd /> | <Tbd /> | <Suggest>G then I</Suggest> | |
-| Teams | <Tbd /> | <Tbd /> | <Suggest>G then K</Suggest> | |
-| Meeting Prep | <Tbd /> | <Tbd /> | <Suggest>G then B</Suggest> | |
-| Deal Flow | <Tbd /> | <Tbd /> | <Suggest>G then J</Suggest> | Shows "Deal Flow is in development." |
+| Discover | <kbd>G</kbd> then <kbd>F</kbd> | <kbd>G</kbd> then <kbd>F</kbd> | `g>f` |  |
+| Outcomes | <kbd>G</kbd> then <kbd>U</kbd> | <kbd>G</kbd> then <kbd>U</kbd> | `g>u` |  |
+| Leverage Loops | <kbd>G</kbd> then <kbd>V</kbd> | <kbd>G</kbd> then <kbd>V</kbd> | `g>v` |  |
+| Collections | <kbd>G</kbd> then <kbd>C</kbd> | <kbd>G</kbd> then <kbd>C</kbd> | `g>c` |  |
+| Serendipity | <kbd>G</kbd> then <kbd>Y</kbd> | <kbd>G</kbd> then <kbd>Y</kbd> | `g>y` |  |
+| Activity | <kbd>G</kbd> then <kbd>G</kbd> | <kbd>G</kbd> then <kbd>G</kbd> | `g>g` | Home. |
+| Contacts | <kbd>G</kbd> then <kbd>P</kbd> | <kbd>G</kbd> then <kbd>P</kbd> | `g>p` |  |
+| Calendar | <kbd>0</kbd> <kbd>0</kbd> | <kbd>0</kbd> <kbd>0</kbd> | `calendar/shortcuts.ts` | Opens the Calendar view from anywhere; see [Calendar](#calendar). |
+| Email | <kbd>G</kbd> then <kbd>I</kbd> | <kbd>G</kbd> then <kbd>I</kbd> | `g>i` | Superhuman's own Go to Inbox. |
+| Teams | <kbd>G</kbd> then <kbd>K</kbd> | <kbd>G</kbd> then <kbd>K</kbd> | `g>k` |  |
+| Meeting Prep | <kbd>G</kbd> then <kbd>B</kbd> | <kbd>G</kbd> then <kbd>B</kbd> | `g>b` |  |
+| Deal Flow | <kbd>G</kbd> then <kbd>J</kbd> | <kbd>G</kbd> then <kbd>J</kbd> | `g>j` | Shows "Deal Flow is in development." |
 
 The palette's **People**, **Companies** and **Collections** tabs are search results, not commands, so they take no hot keys.
 
@@ -103,24 +95,24 @@ Defined in `src/features/email-inbox/components/thread-list/thread-list.tsx`.
 
 The palette's **Quick Actions**, in palette order. These work anywhere signed in, except inside text fields. Akira also appears in this group; it is listed under [Tools](#tools).
 
-| Action | Mac | Windows | Code | Suggested |
-|---|---|---|---|---|
-| New Contact | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>C</kbd> | `alt+shift+c` | — |
-| New Company | <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Shift</kbd> <kbd>C</kbd> | `shift+c` | — |
-| Email Outreach Composer | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> | `mod+shift+e` | — |
-| Email Composer | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>E</kbd> | `mod+alt+e` | — |
-| Profile (your own person sheet) | <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Alt</kbd> <kbd>P</kbd> | `alt+p` | — |
-| Me (your own person sheet) | <kbd>⌥</kbd> <kbd>M</kbd> | <kbd>Alt</kbd> <kbd>M</kbd> | `alt+m` | — |
-| Note | <kbd>⇧</kbd> <kbd>N</kbd> | <kbd>Shift</kbd> <kbd>N</kbd> | `shift+n` | — |
-| Refresh Activities | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>R</kbd> | `mod+alt+r` | — |
-| X Followers & DMs | <Tbd /> | <Tbd /> | — | <Suggest>⌥ ⇧ X</Suggest> (Windows: <Suggest>Alt Shift X</Suggest>) |
-| Merge Contacts | <kbd>⇧</kbd> <kbd>M</kbd> | <kbd>Shift</kbd> <kbd>M</kbd> | `shift+m` | — |
-| Collections Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> | `mod+alt+c` | — |
-| Projects & Tasks | <Tbd /> | <Tbd /> | — | <Suggest>⌘ ⌥ P</Suggest> (Windows: <Suggest>Ctrl Alt P</Suggest>) |
-| Create Project | <Tbd /> | <Tbd /> | — | <Suggest>⇧ P</Suggest> (Windows: <Suggest>Shift P</Suggest>) |
-| Create Task | <Tbd /> | <Tbd /> | — | <Suggest>⇧ T</Suggest> (Windows: <Suggest>Shift T</Suggest>) |
-| Teams Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>T</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> | `mod+alt+t` | — |
-| New Collection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>.</kbd> | `mod+shift+period` | — |
+| Action | Mac | Windows | Code |
+|---|---|---|---|
+| New Contact | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>C</kbd> | `alt+shift+c` |
+| New Company | <kbd>⇧</kbd> <kbd>C</kbd> | <kbd>Shift</kbd> <kbd>C</kbd> | `shift+c` |
+| Email Outreach Composer | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> | `mod+shift+e` |
+| Email Composer | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>E</kbd> | `mod+alt+e` |
+| Profile (your own person sheet) | <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Alt</kbd> <kbd>P</kbd> | `alt+p` |
+| Me (your own person sheet) | <kbd>⌥</kbd> <kbd>M</kbd> | <kbd>Alt</kbd> <kbd>M</kbd> | `alt+m` |
+| Note | <kbd>⇧</kbd> <kbd>N</kbd> | <kbd>Shift</kbd> <kbd>N</kbd> | `shift+n` |
+| Refresh Activities | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>R</kbd> | `mod+alt+r` |
+| X Followers & DMs | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>X</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>X</kbd> | `alt+shift+x` |
+| Merge Contacts | <kbd>⇧</kbd> <kbd>M</kbd> | <kbd>Shift</kbd> <kbd>M</kbd> | `shift+m` |
+| Collections Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>C</kbd> | `mod+alt+c` |
+| Projects & Tasks | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>P</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>P</kbd> | `mod+alt+p` |
+| Create Project | <kbd>⇧</kbd> <kbd>P</kbd> | <kbd>Shift</kbd> <kbd>P</kbd> | `shift+p` |
+| Create Task | <kbd>⇧</kbd> <kbd>T</kbd> | <kbd>Shift</kbd> <kbd>T</kbd> | `shift+t` |
+| Teams Manager | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>T</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>T</kbd> | `mod+alt+t` |
+| New Collection | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>.</kbd> | `mod+shift+period` |
 
 - **Email Outreach Composer** starts from the selected nodes when any are selected.
 - **New Collection** opens the selection preview when nodes are selected, otherwise the Collections Manager.
@@ -134,28 +126,18 @@ The palette's **Quick Actions**, in palette order. These work anywhere signed in
 
 Only registered when the user has Copilot enabled (`copilot_enabled`).
 
-## Suggested hot keys
+## View sequences
 
-<Suggest>Red</Suggest> keys are proposals for every palette command that has none. None is implemented yet.
+The navigation keys follow Superhuman's "Go to" pattern (also used by Linear), so a Superhuman user already knows the gesture.
 
-**Views use "G then a letter"**, Superhuman's and Linear's "Go to" pattern, so a Superhuman user already knows the gesture.
-
-- **Email is <Suggest>G then I</Suggest>**, Superhuman's own "Go to Inbox".
+- **Email is <kbd>G</kbd> then <kbd>I</kbd>**, Superhuman's own "Go to Inbox".
 - **Every other letter is one Superhuman does not use after <kbd>G</kbd>.** Its email folders take I, O, S, D, T, E, H, M, `;`, `!`, `#`, A and L, so an Email view that later adopts them never collides.
-- **No letter is a Calendar view key** (<kbd>T</kbd>, <kbd>D</kbd>, <kbd>W</kbd>, <kbd>M</kbd>, <kbd>A</kbd>, <kbd>N</kbd>), since those fire on the Calendar route.
-- Mnemonics where the letter is free: <Suggest>G then F</Suggest> find (Discover), <Suggest>G then P</Suggest> people (Contacts), <Suggest>G then C</Suggest> Collections, <Suggest>G then B</Suggest> briefing (Meeting Prep), <Suggest>G then G</Suggest> home (Activity).
+- **No letter is a Calendar view key** (<kbd>T</kbd>, <kbd>D</kbd>, <kbd>W</kbd>, <kbd>M</kbd>, <kbd>A</kbd>, <kbd>N</kbd>), so the second key never also switches the calendar. A test pins this.
+- Mnemonics where the letter was free: <kbd>F</kbd> find (Discover), <kbd>P</kbd> people (Contacts), <kbd>C</kbd> Collections, <kbd>B</kbd> briefing (Meeting Prep), <kbd>G</kbd> home (Activity).
 
-**Actions follow the palette's existing patterns.**
+The four actions that had none follow the palette's existing patterns: <kbd>⇧</kbd> plus a letter creates (Create Project <kbd>⇧</kbd> <kbd>P</kbd>, Create Task <kbd>⇧</kbd> <kbd>T</kbd>), <kbd>⌘</kbd> <kbd>⌥</kbd> plus a letter opens a manager (Projects & Tasks <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>P</kbd>), and X Followers & DMs takes <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>X</kbd> like New Contact.
 
-- <kbd>⇧</kbd> plus a letter creates something, like New Company and Note: <Suggest>⇧ P</Suggest> Create Project, <Suggest>⇧ T</Suggest> Create Task.
-- <kbd>⌘</kbd> <kbd>⌥</kbd> plus a letter opens a manager, like Collections and Teams: <Suggest>⌘ ⌥ P</Suggest> Projects & Tasks.
-- <kbd>⌥</kbd> <kbd>⇧</kbd> plus a letter, like New Contact: <Suggest>⌥ ⇧ X</Suggest> X Followers & DMs.
-
-**Checked against:** every Orbiter key on this page (global, Calendar, Collections, the notes editor), [SuperHuman Hotkeys](#superhuman-hotkeys) and [System OS Hotkeys](#system-os-hotkeys). None of the suggestions is taken.
-
-<Warning>
-**G sequences need a controller.** They need the same handling as the Calendar <kbd>0</kbd> <kbd>0</kbd> keys (`src/features/calendar/shortcuts.ts`): after <kbd>G</kbd>, the next key belongs to the sequence and must not also reach the Calendar view keys. Letter keys still never fire inside text fields.
-</Warning>
+**How it works:** sequences are `react-hotkeys-hook` bindings written `g>i`, registered by the same `useCommandHotkeys` as every other palette key. A sequence resets after a second or on a wrong key, and never fires while typing in a text field. The view letters live in `VIEW_SEQUENCE_KEYS` in `commands.tsx`.
 
 ## Calendar View
 
@@ -334,7 +316,7 @@ Superhuman is a desktop app; Orbiter runs in the browser. Keys the browser owns 
 
 | Superhuman action | Keys | Orbiter today |
 |---|---|---|
-| Go to Inbox / Important | <kbd>G</kbd> then <kbd>I</kbd> | — |
+| <Same>✓ Go to Inbox / Important</Same> | <kbd>G</kbd> then <kbd>I</kbd> | <Same>Opens Email</Same> |
 | Go to Other | <kbd>G</kbd> then <kbd>O</kbd> | — |
 | Go to Starred | <kbd>G</kbd> then <kbd>S</kbd> | — |
 | Go to Drafts | <kbd>G</kbd> then <kbd>D</kbd> | — |
@@ -440,7 +422,7 @@ Superhuman is a desktop app; Orbiter runs in the browser. Keys the browser owns 
 ### Reuse notes
 
 - **Calendar is nearly there.** <kbd>0</kbd>, <kbd>0</kbd> <kbd>0</kbd> and <kbd>T</kbd> already match. To finish: make <kbd>B</kbd> create an event and <kbd>P</kbd> / <kbd>N</kbd> (or <kbd>-</kbd> / <kbd>=</kbd>) move back and forward, which means moving "new event" off <kbd>N</kbd>.
-- **Email has no letter keys yet.** Superhuman's single-letter set (<kbd>E</kbd>, <kbd>H</kbd>, <kbd>R</kbd>, <kbd>F</kbd>, <kbd>C</kbd>, <kbd>J</kbd> / <kbd>K</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>#</kbd>, <kbd>L</kbd>, <kbd>/</kbd>) is free inside Orbiter and can be scoped to the Email view.
+- **Email has only <kbd>G</kbd> then <kbd>I</kbd> so far.** Superhuman's single-letter set (<kbd>E</kbd>, <kbd>H</kbd>, <kbd>R</kbd>, <kbd>F</kbd>, <kbd>C</kbd>, <kbd>J</kbd> / <kbd>K</kbd>, <kbd>U</kbd>, <kbd>S</kbd>, <kbd>#</kbd>, <kbd>L</kbd>, <kbd>/</kbd>) is free inside Orbiter and can be scoped to the Email view.
 - **Four global palette keys block a straight copy:** <kbd>⇧</kbd> <kbd>C</kbd> (New Company), <kbd>⇧</kbd> <kbd>M</kbd> (Merge Contacts), <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>A</kbd> (Collections clear selection) and <kbd>⌘</kbd> <kbd>K</kbd> (palette, so no hyperlink key in editors). Either scope Superhuman keys to the Email view so they win there, or move the palette keys.
 
 ## System OS Hotkeys
