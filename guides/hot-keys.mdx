@@ -6,7 +6,7 @@ description: "The source of truth for every keyboard shortcut in Orbiter.io, plu
 This page lists every hot key the Orbiter.io frontend assigns, grouped the way the Command Palette groups them, followed by the operating-system and browser shortcuts a new hot key must not collide with.
 
 <Info>
-Inventoried from `orbiter-frontend` on `thursday_dev` at `27c13374` (2026-09-25). When you add, change or remove a hot key, update this page in the same change.
+Inventoried from `orbiter-frontend` on `thursday_dev` at `79928213` (2026-09-26). When you add, change or remove a hot key, update this page in the same change.
 </Info>
 
 **How to read the keys.** <kbd>⌘</kbd> is written `mod` in code: Command on a Mac, Ctrl on Windows and Linux. <kbd>⌥</kbd> is Option (Alt), <kbd>⇧</kbd> is Shift, <kbd>⌃</kbd> is Control.
@@ -20,6 +20,8 @@ There is **no central hot key system**. Orbiter does not use a TanStack hotkeys 
 2. **Hand-written `keydown` listeners.** <kbd>⌘</kbd> <kbd>K</kbd> is a window listener in the capture phase, so it wins over everything and works inside inputs. The Calendar <kbd>0</kbd> / <kbd>0</kbd> <kbd>0</kbd> controller, the Calendar view keys, the Activity arrows and the various <kbd>Esc</kbd>-to-close panels are plain `document`/`window` listeners that do their own "am I in a text field or dialog?" checks.
 3. **Tiptap (ProseMirror keymaps) in the notes editor.** Tiptap manages the formatting keys itself: StarterKit and each extension (bold, italic, headings, lists, blockquote, code block, text align, highlight, sub/superscript) binds its own keys, and only while the editor has focus. The toolbar's `*_SHORTCUT_KEY(S)` constants are just the tooltip text for those. The editor's non-formatting actions (emoji, mention, slash menu, Ask AI, image, duplicate, copy, delete) are bound with `useHotkeys` in each button's hook, enabled on contenteditable.
 4. **Component-local handlers.** `onKeyDown` on a single input (<kbd>Enter</kbd> to send, <kbd>⇧</kbd> <kbd>Enter</kbd> for a new line, <kbd>⌘</kbd> <kbd>Enter</kbd> in the suggestion composer), the palette's own list keys (built into `cmdk`), and `is-hotkey` in the editor's AI menu input.
+
+**Spell punctuation by key name.** `react-hotkeys-hook` matches the physical key code, so bind `mod+slash`, `mod+shift+period`, `mod+backslash`, `mod+shift+semicolon`, never `mod+/` or `mod+shift+.`, which silently never fire. Tests in `commands.test.tsx` and `tiptap-editor/lib/hotkey-bindings.test.ts` enforce this.
 
 **Adding a global hot key:** add `hotkey` and `shortcut` to its command in `commands.tsx`, check it against every table on this page (including [System OS Hotkeys](#system-os-hotkeys)), then list it here.
 </Note>
@@ -158,37 +160,42 @@ The rich-text editor (Tiptap) used for notes. These only fire with the cursor in
 | Align left / center / right / justify | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> / <kbd>J</kbd> |
 | Image align left / center / right | <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>L</kbd> / <kbd>E</kbd> / <kbd>R</kbd> |
 | Text color / highlight | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>T</kbd> / <kbd>H</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>T</kbd> / <kbd>H</kbd> |
-| Clear all formatting | <kbd>⌘</kbd> <kbd>R</kbd> | <kbd>Ctrl</kbd> <kbd>R</kbd> |
+| Clear all formatting | <kbd>⌘</kbd> <kbd>\\</kbd> | <kbd>Ctrl</kbd> <kbd>\\</kbd> |
 | Slash commands | <kbd>⌘</kbd> <kbd>/</kbd> | <kbd>Ctrl</kbd> <kbd>/</kbd> |
 | Mention someone | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>2</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>2</kbd> |
-| Emoji picker | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>E</kbd> |
+| Emoji picker (same as typing <kbd>:</kbd>) | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>;</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>;</kbd> |
 | Ask AI | <kbd>⌘</kbd> <kbd>J</kbd> | <kbd>Ctrl</kbd> <kbd>J</kbd> |
 | Upload image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>I</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>I</kbd> |
 | Download image | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>D</kbd> |
 | Duplicate block | <kbd>⌘</kbd> <kbd>D</kbd> | <kbd>Ctrl</kbd> <kbd>D</kbd> |
 | Copy block | <kbd>⌘</kbd> <kbd>C</kbd> | <kbd>Ctrl</kbd> <kbd>C</kbd> |
-| Copy link to block | <kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>L</kbd> |
+| Copy link to block | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>L</kbd> | <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>L</kbd> |
 | Delete block | <kbd>Backspace</kbd> | <kbd>Backspace</kbd> |
 
 Defined as `*_SHORTCUT_KEY(S)` constants under `src/features/tiptap-editor/components/tiptap-ui/`.
 
-## Known conflicts
+## Conflict history
 
-<Warning>
-These clash today. Fix them before adding anything near them.
-</Warning>
+Fixed in `79928213` (2026-09-26):
 
-| Keys | Claimed by | Problem |
+| Was | Problem | Now |
 |---|---|---|
-| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | Email Outreach Composer (global), editor emoji picker, editor align center | Three actions on one combo. In the notes editor the emoji picker and align center both fire; everywhere else it opens Outreach. |
-| <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | Collections Manager (global), editor code block | Means code block in the notes editor and Collections Manager everywhere else. It is also Chrome's "Inspect element" shortcut, which Chrome may take first. |
-| <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | Editor headings | The toolbar tooltip says <kbd>⌃</kbd> <kbd>⌥</kbd>, but Tiptap binds <kbd>⌘</kbd> <kbd>⌥</kbd> on a Mac. `HEADING_SHORTCUT_KEYS` should say `mod+alt`. |
-| <kbd>Ctrl</kbd> <kbd>L</kbd> (Windows) | Editor "copy link to block" | `mod+ctrl+l` collapses to <kbd>Ctrl</kbd> <kbd>L</kbd> off a Mac, which is the browser's address bar. |
-| <kbd>⌘</kbd> <kbd>R</kbd> | Editor "clear all formatting" | Replaces browser reload while the cursor is in the editor. |
-| <kbd>⌘</kbd> <kbd>D</kbd> | Editor "duplicate block" | Replaces the browser's bookmark shortcut while the cursor is in the editor. |
-| <kbd>⌘</kbd> <kbd>A</kbd> | Collections "select every node" | Replaces select-all on the Collections canvas (intended). |
-| <kbd>⌥</kbd> <kbd>P</kbd>, <kbd>⌥</kbd> <kbd>M</kbd> | Profile, Me | Two hot keys for the same action. |
-| <kbd>⌥</kbd>-letter combos | New Contact, Profile, Me | On a Mac, <kbd>⌥</kbd> plus a letter types a special character (<kbd>⌥</kbd> <kbd>P</kbd> is π). They are safe only because hot keys are skipped inside text fields. |
+| New Collection `mod+shift+.` | Never fired: punctuation must be spelled by key name. | `mod+shift+period` (<kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>.</kbd>) |
+| Editor slash menu `mod+/` | Never fired, same reason. | `mod+slash` (<kbd>⌘</kbd> <kbd>/</kbd>) |
+| Editor emoji picker <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | Fired together with Tiptap's align center. | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>;</kbd> (the <kbd>:</kbd> key) |
+| Editor clear formatting <kbd>⌘</kbd> <kbd>R</kbd> | Replaced browser reload in the editor. | <kbd>⌘</kbd> <kbd>\\</kbd>, as in Google Docs |
+| Editor copy link to block `mod+ctrl+l` | Off a Mac it became <kbd>Ctrl</kbd> <kbd>L</kbd>, the address bar. | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>L</kbd> |
+| Heading tooltips <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> | Tiptap binds <kbd>⌘</kbd> <kbd>⌥</kbd>. | Tooltips show <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>1</kbd>–<kbd>6</kbd> |
+| Editor tooltips off a Mac | Showed "Mod" for the modifier. | Show "Ctrl" |
+
+Kept on purpose:
+
+| Keys | Why it stays |
+|---|---|
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd>, <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>C</kbd> | Contextual: in the notes editor they are align center and code block; everywhere else Email Outreach and the Collections Manager. Palette hot keys never fire inside the editor, so the two never both run. |
+| <kbd>⌘</kbd> <kbd>D</kbd> in the editor | Duplicate block, the Notion convention; bookmarking still works outside the editor. |
+| <kbd>⌘</kbd> <kbd>A</kbd> on the Collections canvas | Selecting every node is the canvas's select-all. |
+| <kbd>⌥</kbd> <kbd>P</kbd> and <kbd>⌥</kbd> <kbd>M</kbd> | Two palette commands (Profile, Me) that both open your own person sheet; a product call, not a clash. |
 
 ## System OS Hotkeys
 
